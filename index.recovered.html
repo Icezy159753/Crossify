@@ -1,4 +1,4 @@
-﻿<!doctype html>
+<!doctype html>
 <!--
   !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
   DO NOT CHANGE THIS FILE โ€” bundle เธ—เธตเนเนเธเนเธเธฒเธเธเธฃเธดเธเธเธทเธญ index-DsrIxxwV.js เน€เธ—เนเธฒเธเธฑเนเธ
@@ -1323,7 +1323,7 @@
         var style = document.createElement('style');
         style.id = 'cx-derived-scrollbar-style';
         style.textContent = ''
-          + '#cx-var-list{overflow-y:scroll!important;max-height:calc(min(80vh,660px) - 295px)!important;min-height:60px;}'
+          + '#cx-var-list{overflow-y:scroll!important;max-height:calc(min(80vh,660px) - 295px)!important;min-height:60px;padding-bottom:22px!important;box-sizing:border-box;}'
           + '#cx-rules-body{overflow-y:scroll!important;max-height:calc(min(80vh,660px) - 255px)!important;min-height:60px;}'
           + '#cx-var-list,#cx-rules-body{scrollbar-width:thin;scrollbar-color:#94a3b8 #e2e8f0;overscroll-behavior:contain;}'
           + '#cx-var-list::-webkit-scrollbar,#cx-rules-body::-webkit-scrollbar{width:8px;}'
@@ -1452,7 +1452,7 @@
         srch.addEventListener('blur',  function(){ srch.style.borderColor='#e2e8f0'; });
         srch.addEventListener('input', function(){ _filterQ=srch.value.toLowerCase(); renderVarList(listEl); });
         lpTop.appendChild(lpTitle); lpTop.appendChild(srch);
-        var listEl = document.createElement('div'); listEl.id='cx-var-list'; listEl.style.cssText='flex:1 1 0%;min-height:0;overflow-y:auto;overflow-x:hidden;padding:6px';
+        var listEl = document.createElement('div'); listEl.id='cx-var-list'; listEl.style.cssText='flex:1 1 0%;min-height:0;overflow-y:auto;overflow-x:hidden;padding:6px 6px 4px 6px';
         renderVarList(listEl);
         lp.appendChild(lpTop); lp.appendChild(listEl); return lp;
       }
