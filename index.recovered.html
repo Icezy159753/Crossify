@@ -662,12 +662,19 @@
         return null;
       }
 
+      function rowLooksSelectedMD(cls) {
+        if (!cls || typeof cls !== 'string') return false;
+        /* Selected variable row: bg-blue-50/70 ring-1 ring-blue-100 (bundle nx).
+           Never match bare bg-blue-50 — unselected rows use hover:bg-blue-50, which contains that substring. */
+        return cls.includes('bg-blue-50/70') && cls.includes('ring-blue-100');
+      }
+
       function getSelectedVarNamesMD() {
         var selected = [];
         var allRows = document.querySelectorAll('[draggable="true"]');
         allRows.forEach(function (row) {
           var cls = typeof row.className === 'string' ? row.className : '';
-          if (!cls.includes('cursor-grab') || !cls.includes('ring-blue-100')) return;
+          if (!cls.includes('cursor-grab') || !rowLooksSelectedMD(cls)) return;
           var f = fiberOfMD(row);
           if (!f) return;
           var info = varInfoMD(f);
@@ -722,20 +729,23 @@
         }
       }, true);
 
+      /* capture: true — React onDrop calls stopPropagation(), so bubble listeners on document never run */
       document.addEventListener('drop', function (e) {
         if (_multiDragNames.length <= 1) return;
         var zone = getDropZoneType(e.target);
         if (!zone) { _multiDragNames = []; return; }
         var extraNames = _multiDragNames.filter(function (n) { return n !== _draggedVarName; });
+        var namesCopy = extraNames.slice();
+        var z = zone;
         _multiDragNames = [];
         _draggedVarName = '';
-        if (extraNames.length === 0) return;
+        if (namesCopy.length === 0) return;
         requestAnimationFrame(function () {
           var onQA = getOnQuickActionMD();
           if (!onQA) return;
-          extraNames.forEach(function (name) { onQA(name, zone); });
+          namesCopy.forEach(function (name) { onQA(name, z); });
         });
-      }, false);
+      }, true);
 
       document.addEventListener('dragend', function () {
         _multiDragNames = [];
