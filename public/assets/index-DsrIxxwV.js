@@ -13130,20 +13130,28 @@ function ux() {
       Ge.forEach(nt => {
         const Ve = xe.get(nt.key);
         Ve !== void 0 && !it.has(Ve) && (ve[Ve] += 1, it.add(Ve));
-      }), Fe && Ue.forEach(nt => {
-        const Ve = nt.path[0];
-        if (!Ve) return;
-        const Et = Le.get(Ve) ?? {
-          totalN: 0,
-          colTotalsN: T.map(() => 0)
-        };
-        Le.set(Ve, Et), Et.totalN += 1, Ge.forEach(Ft => {
-          const Ht = xe.get(Ft.key);
-          if (Ht === void 0) return;
-          const Xn = Me.get(Ve);
-          Xn && (Xn.has(Ht) || (Et.colTotalsN[Ht] += 1, Xn.add(Ht)));
+      }), Fe && (() => {
+        const _cxSecOnce = new Set();
+        Ue.forEach(nt => {
+          const Ve = nt.path[0];
+          if (!Ve) return;
+          const Et = Le.get(Ve) ?? {
+            totalN: 0,
+            colTotalsN: T.map(() => 0)
+          };
+          Le.set(Ve, Et);
+          if (!_cxSecOnce.has(Ve)) {
+            _cxSecOnce.add(Ve);
+            Et.totalN += 1;
+          }
+          Ge.forEach(Ft => {
+            const Ht = xe.get(Ft.key);
+            if (Ht === void 0) return;
+            const Xn = Me.get(Ve);
+            Xn && (Xn.has(Ht) || (Et.colTotalsN[Ht] += 1, Xn.add(Ht)));
+          });
         });
-      }), Ue.forEach(nt => {
+      })(), Ue.forEach(nt => {
         const Ve = X.get(nt.key);
         Ve !== void 0 && Ge.forEach(Et => {
           const Ft = xe.get(Et.key);
@@ -13278,20 +13286,28 @@ function ux() {
       Ge.forEach(nt => {
         const Ve = xe.get(nt.key);
         Ve !== void 0 && !it.has(Ve) && (ve[Ve] += 1, it.add(Ve));
-      }), Fe && Ue.forEach(nt => {
-        const Ve = nt.path[0];
-        if (!Ve) return;
-        const Et = Le.get(Ve) ?? {
-          totalN: 0,
-          colTotalsN: T.map(() => 0)
-        };
-        Le.set(Ve, Et), Et.totalN += 1, Ge.forEach(Ft => {
-          const Ht = xe.get(Ft.key);
-          if (Ht === void 0) return;
-          const Xn = Me.get(Ve);
-          Xn && (Xn.has(Ht) || (Et.colTotalsN[Ht] += 1, Xn.add(Ht)));
+      }), Fe && (() => {
+        const _cxSecOnce = new Set();
+        Ue.forEach(nt => {
+          const Ve = nt.path[0];
+          if (!Ve) return;
+          const Et = Le.get(Ve) ?? {
+            totalN: 0,
+            colTotalsN: T.map(() => 0)
+          };
+          Le.set(Ve, Et);
+          if (!_cxSecOnce.has(Ve)) {
+            _cxSecOnce.add(Ve);
+            Et.totalN += 1;
+          }
+          Ge.forEach(Ft => {
+            const Ht = xe.get(Ft.key);
+            if (Ht === void 0) return;
+            const Xn = Me.get(Ve);
+            Xn && (Xn.has(Ht) || (Et.colTotalsN[Ht] += 1, Xn.add(Ht)));
+          });
         });
-      }), Ue.forEach(nt => {
+      })(), Ue.forEach(nt => {
         const Ve = X.get(nt.key);
         Ve !== void 0 && Ge.forEach(Et => {
           const Ft = xe.get(Et.key);
