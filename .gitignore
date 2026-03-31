@@ -1,0 +1,18 @@
+.vercel
+
+# Dependencies & build output
+node_modules/
+dist/
+.npm-cache/
+
+# Local tooling (may contain secrets)
+.claude/
+
+# Logs & local env
+*.log
+.env
+.env.*
+
+# OS / editor
+.DS_Store
+Thumbs.db

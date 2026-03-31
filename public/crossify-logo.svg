@@ -1,0 +1,20 @@
+<svg width="128" height="128" viewBox="0 0 128 128" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="crossifyOuter" x1="20" y1="16" x2="106" y2="112" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#8CC8FF"/>
+      <stop offset="0.52" stop-color="#3B82F6"/>
+      <stop offset="1" stop-color="#163E73"/>
+    </linearGradient>
+    <linearGradient id="crossifyInner" x1="34" y1="28" x2="96" y2="98" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#1F4E78"/>
+      <stop offset="1" stop-color="#0F2D4A"/>
+    </linearGradient>
+  </defs>
+  <rect width="128" height="128" rx="28" fill="#F7FBFF"/>
+  <circle cx="64" cy="64" r="42" stroke="#D7E9FF" stroke-width="8"/>
+  <path d="M32 64C32 46.3269 46.3269 32 64 32C74.4777 32 83.7793 37.0368 89.6145 44.8207" stroke="url(#crossifyOuter)" stroke-width="8" stroke-linecap="round"/>
+  <path d="M96 64C96 81.6731 81.6731 96 64 96C54.5635 96 46.0817 91.9166 40.2229 85.4187" stroke="url(#crossifyInner)" stroke-width="8" stroke-linecap="round"/>
+  <circle cx="64" cy="64" r="26" fill="white" stroke="url(#crossifyInner)" stroke-width="6"/>
+  <path d="M51 56.5H62.5L56 64L62.5 71.5H51L44.5 64L51 56.5Z" fill="#2F6FE4"/>
+  <path d="M77 56.5H65.5L72 64L65.5 71.5H77L83.5 64L77 56.5Z" fill="#1F4E78"/>
+</svg>

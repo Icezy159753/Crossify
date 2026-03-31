@@ -1,0 +1,988 @@
+import { useState, useCallback, useRef, useMemo, useEffect } from 'react'
+import { useDropzone } from 'react-dropzone'
+import { parseSav, applyValueLabels } from './lib/savParser'
+import type { SavDataset } from './lib/savParser'
+import { computeCrosstab, computeCrosstabAsync, filterZeroRows } from './lib/crosstabEngine'
+import type { CrosstabResult, CrosstabConfig, CrosstabRowType } from './lib/crosstabEngine'
+import type {
+  AllSettings,
+  OutputSettings,
+  SettingsLockInfo,
+  SourceDatasetSetting,
+  SourceMappingEntry,
+} from './lib/settingsIO'
+import { formatBatchDuration, formatLiveBatchDuration } from './lib/timeFormatUtils'
+import { evaluateFilterSpec } from './lib/filterEngine'
+import {
+  pickSettingsFileViaSystem,
+  pickSavFileViaSystem,
+  rememberSavFileHandle,
+  restoreSavFileFromSource,
+  saveSettingsToFileHandle,
+  supportsFileSystemAccess,
+} from './lib/fileAccess'
+import {
+  buildVariableCatalog,
+  computeGroupedCrosstab,
+  computeGroupedCrosstabAsync,
+  getGroupedBaseCount,
+  getGroupedSelections,
+} from './lib/variableGrouping'
+import type { GroupedVariableDef, MrsetDefinition } from './lib/variableGrouping'
+import {
+  ADD_JOIN,
+  type AxisSpec,
+  flattenAxisSpec,
+  getAxisDisplayLevels,
+  insertTopLevelBranchAt,
+  insertVarByMode,
+  joinAxisSpec,
+  moveAxisOccurrenceToTarget,
+  moveSelectedRows,
+  moveVarInAxis,
+  normalizeCode,
+  parseAxisSpec,
+  removeVarFromAxis,
+} from './lib/appStateUtils'
+import {
+  buildScaleSummaryPreset,
+  buildVariableEditorRowsWithSummaries,
+  getGroupDepth,
+  getNetPrefix,
+  type ScaleSummaryPresetType,
+  } from './lib/variableEditorUtils'
+import type {
+  VariableEditorRow,
+  VariableNetGroup,
+  VariableSummaryRow,
+} from './lib/variableEditorUtils'
+import { useBatchExportFlow } from './hooks/useBatchExportFlow'
+import { CrossifyLogo } from './components/CrossifyLogo'
+import { DesignCanvas } from './components/DesignCanvas'
+import { FilterCanvas } from './components/FilterCanvas'
+import { PreviewTable } from './components/PreviewTable'
+import { TableRow } from './components/TableRow'
+import { VirtualVarList } from './components/VirtualVarList'
+import type {
+  FilterJoin,
+  FolderDef,
+  GlobalSettings,
+  PercentType,
+  TableDef,
+  TableFilterCondition,
+  TableFilterGroup,
+  TableFilterSpec,
+} from './types/workspace'
+import {
+  Plus, Trash2, Download, RefreshCw,
+  ChevronRight, Database, X, Upload, Settings2, Copy,
+  FolderOpen, Folder, ChevronDown, Play, Save, FolderInput,
+  ArrowUp, ArrowDown, ArrowRight, ClipboardPaste, Sparkles,
+} from 'lucide-react'
+
+// โ”€โ”€ Types โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€
+
+interface VariableOverride {
+  order: string[]
+  weights: Record<string, string>
+  labels?: Record<string, string>
+  numericStats?: Array<'mean' | 'min' | 'max' | 'stddev'>
+  groups?: VariableNetGroup[]
+  summaries?: VariableSummaryRow[]
+  summaryPreset?: ScaleSummaryPresetType
+}
+
+type NumericStat = 'mean' | 'min' | 'max' | 'stddev'
+type QuickAddTarget = 'top' | 'side' | 'filter'
+
+const SETTINGS_LOCK_DURATION_MS = 1000 * 60 * 3
+const SETTINGS_LOCK_HEARTBEAT_MS = 1000 * 30
+const LIGHT_LOAD_THRESHOLD_BYTES = 150 * 1024 * 1024
+
+interface EditorIdentity {
+  ownerLabel: string
+  machineLabel: string
+}
+
+function getSettingsSessionId(): string {
+  if (typeof window === 'undefined') return crypto.randomUUID()
+  const storageKey = 'crossify-settings-session-id'
+  try {
+    const existing = window.sessionStorage.getItem(storageKey)?.trim()
+    if (existing) return existing
+  } catch {
+    // ignore unavailable session storage
+  }
+
+  const sessionId = crypto.randomUUID()
+  try {
+    window.sessionStorage.setItem(storageKey, sessionId)
+  } catch {
+    // ignore unavailable session storage
+  }
+  return sessionId
+}
+
+function getEditorIdentity(): EditorIdentity {
+  if (typeof window === 'undefined') return { ownerLabel: 'Crossify User', machineLabel: 'Browser Session' }
+  const storageKey = 'crossify-editor-identity'
+  try {
+    const raw = window.localStorage.getItem(storageKey)
+    if (raw) {
+      const parsed = JSON.parse(raw) as Partial<EditorIdentity>
+      if (parsed.ownerLabel && parsed.machineLabel) {
+        return { ownerLabel: parsed.ownerLabel, machineLabel: parsed.machineLabel }
+      }
+    }
+  } catch {
+    // ignore invalid local storage payload
+  }
+
+  const language = typeof navigator !== 'undefined' ? navigator.language.toUpperCase() : 'LOCAL'
+  const identity = {
+    ownerLabel: `Crossify User ${Math.random().toString(36).slice(2, 6).toUpperCase()}`,
+    machineLabel: `${language} Browser`,
+  }
+  try {
+    window.localStorage.setItem(storageKey, JSON.stringify(identity))
+  } catch {
+    // ignore storage failures
+  }
+  return identity
+}
+
+function getScalePresetLabel(preset: ScaleSummaryPresetType) {
+  switch (preset) {
+    case 'tb_low_good':
+      return 'สร้างTB(Scale น้อยดี)'
+    case 'tb_high_good':
+      return 'สร้างTB(Scale มากดี)'
+    case 't2b_low_good':
+      return 'สร้างT2B(Scale น้อยดี)'
+    case 't2b_high_good':
+      return 'สร้างT2B(Scale มากดี)'
+    case 't3b_low_good':
+      return 'สร้างT3B(Scale น้อยดี)'
+    case 't3b_high_good':
+      return 'สร้างT3B(Scale มากดี)'
+    case 'justright_code':
+      return 'Justright(ตาม Code)'
+    case 'justright_centered':
+      return 'Justright(-2 -1 0 1 2)'
+    default:
+      return 'สร้าง TB/T2B'
+  }
+}
+
+function getScalePresetDisplayLabel(preset: ScaleSummaryPresetType) {
+  switch (preset) {
+    case 'tb_low_good':
+      return 'Create TB (Low scale = good)'
+    case 'tb_high_good':
+      return 'Create TB (High scale = good)'
+    case 't2b_low_good':
+      return 'Create T2B (Low scale = good)'
+    case 't2b_high_good':
+      return 'Create T2B (High scale = good)'
+    case 't3b_low_good':
+      return 'Create T3B (Low scale = good)'
+    case 't3b_high_good':
+      return 'Create T3B (High scale = good)'
+    case 'justright_code':
+      return 'Justright (By code)'
+    case 'justright_centered':
+      return 'Justright (-2 -1 0 1 2)'
+    default:
+      return getScalePresetLabel(preset)
+  }
+}
+
+const SCALE_PRESET_OPTIONS: Array<{
+  preset: ScaleSummaryPresetType
+  title: string
+  description: string
+  tone: string
+}> = [
+  {
+    preset: 'tb_low_good',
+    title: 'TB',
+    description: 'Low scale is positive. Auto-fill factors 5 to 1 and create TB / BB rows.',
+    tone: 'border-emerald-200 bg-emerald-50/80 hover:border-emerald-300 hover:bg-emerald-50',
+  },
+  {
+    preset: 'tb_high_good',
+    title: 'TB',
+    description: 'High scale is positive. Auto-fill factors 1 to 5 and create TB / BB rows.',
+    tone: 'border-teal-200 bg-teal-50/80 hover:border-teal-300 hover:bg-teal-50',
+  },
+  {
+    preset: 't2b_low_good',
+    title: 'T2B',
+    description: 'Low scale is positive. Create TB / T2B / BB / B2B summary rows.',
+    tone: 'border-amber-200 bg-amber-50/80 hover:border-amber-300 hover:bg-amber-50',
+  },
+  {
+    preset: 't2b_high_good',
+    title: 'T2B',
+    description: 'High scale is positive. Create TB / T2B / BB / B2B summary rows.',
+    tone: 'border-orange-200 bg-orange-50/80 hover:border-orange-300 hover:bg-orange-50',
+  },
+  {
+    preset: 't3b_low_good',
+    title: 'T3B',
+    description: 'Low scale is positive. Create TB / T2B / T3B / BB / B2B / B3B rows.',
+    tone: 'border-fuchsia-200 bg-fuchsia-50/80 hover:border-fuchsia-300 hover:bg-fuchsia-50',
+  },
+  {
+    preset: 't3b_high_good',
+    title: 'T3B',
+    description: 'High scale is positive. Create TB / T2B / T3B / BB / B2B / B3B rows.',
+    tone: 'border-violet-200 bg-violet-50/80 hover:border-violet-300 hover:bg-violet-50',
+  },
+  {
+    preset: 'justright_code',
+    title: 'JUSTRIGHT',
+    description: 'Apply factors by code order only. No TB/T2B summary rows are added.',
+    tone: 'border-sky-200 bg-sky-50/80 hover:border-sky-300 hover:bg-sky-50',
+  },
+  {
+    preset: 'justright_centered',
+    title: 'JUSTRIGHT',
+    description: 'Apply centered factors -2, -1, 0, 1, 2 in code order. No summary rows.',
+    tone: 'border-indigo-200 bg-indigo-50/80 hover:border-indigo-300 hover:bg-indigo-50',
+  },
+]
+
+interface FilterOptionItem {
+  key: string
+  label: string
+}
+
+interface FilterFieldMeta {
+  kind: 'options' | 'numeric' | 'text'
+  options: FilterOptionItem[]
+  operators: TableFilterCondition['operator'][]
+}
+
+const BATCH_YIELD_EVERY = 250
+
+async function loadExcelExportModule() {
+  return import('./lib/excelExport')
+}
+
+async function loadSettingsIOModule() {
+  return import('./lib/settingsIO')
+}
+
+function yieldToBrowser() {
+  return new Promise<void>(resolve => {
+    if (typeof window.requestAnimationFrame === 'function') {
+      window.requestAnimationFrame(() => resolve())
+      return
+    }
+    window.setTimeout(() => resolve(), 0)
+  })
+}
+
+function newTable(idx: number, folderId: string | null = null): TableDef {
+  return {
+    id: crypto.randomUUID(),
+    name: `Table${idx}`,
+    rowVar: null,
+    colVar: null,
+    result: null,
+    folderId,
+    filter: emptyTableFilter(),
+  }
+}
+
+function emptyTableFilter(): TableFilterSpec {
+  return {
+    description: '',
+    rootJoin: 'all',
+    groups: [],
+  }
+}
+
+function hasActiveFilter(filter: TableFilterSpec | null | undefined): boolean {
+  if (!filter) return false
+  return filter.groups.some(group => group.conditions.length > 0)
+}
+
+const FILTER_JOIN_LABEL: Record<FilterJoin, string> = {
+  all: 'AND',
+  any: 'OR',
+}
+
+// โ”€โ”€ Drop Zone Target โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€
+
+function SettingsBar({
+  settings, onChange,
+}: {
+  settings: GlobalSettings
+  onChange: (patch: Partial<GlobalSettings>) => void
+}) {
+  const [open, setOpen] = useState(false)
+
+  return (
+    <div className="relative">
+      <button
+        onClick={() => setOpen(o => !o)}
+        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors border
+          ${open ? 'bg-[#1F4E78] text-white border-[#1F4E78]' : 'bg-white text-gray-600 border-gray-200 hover:border-blue-300 hover:text-blue-700'}`}
+      >
+        <Settings2 className="w-3.5 h-3.5" />
+        Output Options
+      </button>
+
+      {open && (
+        <>
+          <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} />
+          <div className="absolute right-0 top-full mt-2 z-20 bg-white border border-gray-200 rounded-xl shadow-lg p-4 w-72">
+            <p className="text-xs font-bold text-gray-600 uppercase tracking-wide mb-3">
+              Output Options <span className="text-blue-500 font-normal normal-case">(ใช้กับทุก Table)</span>
+            </p>
+
+            <div className="flex gap-5 mb-3">
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input type="checkbox" checked={settings.showCount}
+                  onChange={e => onChange({ showCount: e.target.checked })}
+                  className="w-4 h-4 accent-[#1F4E78]" />
+                <span className="text-sm text-gray-700">Count (N)</span>
+              </label>
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input type="checkbox" checked={settings.showPercent}
+                  onChange={e => onChange({ showPercent: e.target.checked })}
+                  className="w-4 h-4 accent-[#1F4E78]" />
+                <span className="text-sm text-gray-700">Percentage (%)</span>
+              </label>
+            </div>
+
+            <label className="flex items-center gap-2 cursor-pointer mb-3">
+              <input
+                type="checkbox"
+                checked={settings.hideZeroRows}
+                onChange={e => onChange({ hideZeroRows: e.target.checked })}
+                className="w-4 h-4 accent-[#1F4E78]"
+              />
+              <span className="text-sm text-gray-700">Hide zero rows</span>
+            </label>
+
+            {settings.showPercent && (
+              <div className="flex gap-3 flex-wrap">
+                {(['row', 'column', 'total'] as PercentType[]).map(pt => (
+                  <label key={pt} className="flex items-center gap-1.5 cursor-pointer">
+                    <input type="radio" name="global-pct"
+                      checked={settings.percentType === pt}
+                      onChange={() => onChange({ percentType: pt })}
+                      className="w-4 h-4 accent-[#1F4E78]" />
+                    <span className="text-sm text-gray-700">
+                      {pt === 'row' ? 'Row %' : pt === 'column' ? 'Column %' : 'Total %'}
+                    </span>
+                  </label>
+                ))}
+              </div>
+            )}
+
+            <div className="mt-3 pt-3 border-t border-gray-100">
+              <p className="text-[10px] text-gray-400">การเปลี่ยน settings จะมีผลกับ Table ที่ Run ใหม่เท่านั้น</p>
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
+
+// โ”€โ”€ Main App โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€
+
+export default function App() {
+  const [showLanding, setShowLanding] = useState(true)
+  const [landingLang, setLandingLang] = useState<'th' | 'en'>('th')
+  const [dataset, setDataset] = useState<SavDataset | null>(null)
+  const [lightLoadMode, setLightLoadMode] = useState(false)
+  const [customMrsets, setCustomMrsets] = useState<MrsetDefinition[]>([])
+  const [loading, setLoading] = useState(false)
+  const [loadPhase, setLoadPhase] = useState<'variables' | 'cases' | null>(null)
+  const [loadPct, setLoadPct] = useState(0)
+  const [error, setError] = useState<string | null>(null)
+  const [toast, setToast] = useState<string | null>(null)
+
+  // Global settings
+  const [settings, setSettings] = useState<GlobalSettings>({
+    showCount: true, showPercent: true, percentType: 'column', hideZeroRows: false,
+  })
+
+  const [tables, setTables] = useState<TableDef[]>([newTable(1)])
+  const [activeTableId, setActiveTableId] = useState<string>('')
+  const [activeTab, setActiveTab] = useState<'design' | 'filter' | 'results'>('design')
+  const [exporting, setExporting] = useState(false)
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+  const [lastSelectedTableId, setLastSelectedTableId] = useState<string | null>(null)
+  const [quickAddTarget, setQuickAddTarget] = useState<QuickAddTarget>('side')
+  const [runningAll, setRunningAll] = useState(false)
+  const [sidebarWidth, setSidebarWidth] = useState(236)
+  const [sidebarResizing, setSidebarResizing] = useState(false)
+  const [variableOverrides, setVariableOverrides] = useState<Record<string, VariableOverride>>({})
+  const [editingVariableName, setEditingVariableName] = useState<string | null>(null)
+  const [variableEditorRows, setVariableEditorRows] = useState<VariableEditorRow[]>([])
+  const [selectedVariableRowKeys, setSelectedVariableRowKeys] = useState<string[]>([])
+  const [lastSelectedVariableIndex, setLastSelectedVariableIndex] = useState<number | null>(null)
+  const [selectedVariableNames, setSelectedVariableNames] = useState<Set<string>>(new Set())
+  const [lastSelectedVariableName, setLastSelectedVariableName] = useState<string | null>(null)
+  const [tableContextMenu, setTableContextMenu] = useState<{ x: number; y: number; targetId: string } | null>(null)
+  const [copiedTablesBuffer, setCopiedTablesBuffer] = useState<TableDef[]>([])
+  const [codeSortDirection, setCodeSortDirection] = useState<'asc' | 'desc'>('asc')
+  const [editingVariableLabelKey, setEditingVariableLabelKey] = useState<string | null>(null)
+  const [selectedNumericStats, setSelectedNumericStats] = useState<NumericStat[]>(['mean'])
+  const [variableGroups, setVariableGroups] = useState<VariableNetGroup[]>([])
+  const [variableContextMenu, setVariableContextMenu] = useState<{ x: number; y: number } | null>(null)
+  const [showScalePresetDialog, setShowScalePresetDialog] = useState(false)
+  const [selectedScalePreset, setSelectedScalePreset] = useState<ScaleSummaryPresetType | null>(null)
+  const [showNetNameDialog, setShowNetNameDialog] = useState(false)
+  const [pendingNetName, setPendingNetName] = useState('UPC')
+  const [openHeaderMenu, setOpenHeaderMenu] = useState<'workspace' | 'tables' | 'batch' | null>(null)
+  const [pendingSourceDataset, setPendingSourceDataset] = useState<SourceDatasetSetting | null>(null)
+  const [pendingSourceIntent, setPendingSourceIntent] = useState<'match' | 'rebind'>('match')
+  const [currentSettingsHandle, setCurrentSettingsHandle] = useState<FileSystemFileHandle | null>(null)
+  const [currentSourceMappings, setCurrentSourceMappings] = useState<SourceMappingEntry[]>([])
+  const [settingsReadonly, setSettingsReadonly] = useState(false)
+  const [settingsReadonlyLock, setSettingsReadonlyLock] = useState<SettingsLockInfo | null>(null)
+  const [loadedSettingsName, setLoadedSettingsName] = useState<string | null>(null)
+  const [settingsLockReleased, setSettingsLockReleased] = useState(false)
+
+  // Folders
+  const [folders, setFolders] = useState<FolderDef[]>([])
+
+  const dragVar = useRef<string | null>(null)
+  const dragTableRef = useRef<string | null>(null)
+  const loadSettingsInputRef = useRef<HTMLInputElement>(null)
+  const batchSettingsInputRef = useRef<HTMLInputElement>(null)
+  const pendingSettingsRestoreRef = useRef<AllSettings | null>(null)
+
+  // NOTE: The return statement and hooks were removed due to file corruption.
+  // The application currently runs from the pre-built dist/ files.
+  // TODO: Restore the full component implementation including useEffect, useCallback, and return statement.
+
+  return null as unknown as JSX.Element
+
+}
+
+// ─── Table Row in sidebar ────────────────────────────────────────────────────
+// NOTE: The full App component implementation (hooks, callbacks, return statement)
+// was lost due to file corruption. The app runs from pre-built dist/ files.
+// The placeholder return below prevents TypeScript errors.
+function _unused_suppress_lint() {
+  return (
+    <div className="mt-5 rounded-2xl border border-blue-100 bg-blue-50/70 px-4 py-3">
+              <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-blue-500">Expected File</div>
+              <div className="mt-2 break-all text-base font-semibold text-slate-800">{pendingSourceDataset.fileName}</div>
+              {pendingSourceDataset.filePath && (
+                <div className="mt-2 break-all text-xs text-slate-500">{pendingSourceDataset.filePath}</div>
+              )}
+            </div>
+
+            <div className="mt-4 rounded-2xl border border-amber-100 bg-amber-50/70 px-4 py-3 text-sm text-amber-900">
+              ถ้าเครื่องนี้เก็บไฟล์ไว้คนละ path หรือชื่อไฟล์ต่างจากเดิม ให้ใช้ `Rebind SPSS File` แล้วระบบจะผูก settings นี้กับไฟล์ใหม่ให้ต่อจากนี้
+            </div>
+
+            <div className="mt-6 flex items-center justify-end gap-3">
+              <button
+                onClick={() => {
+                  pendingSettingsRestoreRef.current = null
+                  setPendingSourceDataset(null)
+                  setPendingSourceIntent('match')
+                }}
+                className="rounded-xl border border-gray-200 px-4 py-2 text-sm font-medium text-gray-600 hover:bg-gray-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => {
+                  setPendingSourceDataset(null)
+                  setPendingSourceIntent('match')
+                  openSavFile()
+                }}
+                className="inline-flex items-center gap-2 rounded-xl border border-blue-200 bg-blue-50 px-4 py-2 text-sm font-semibold text-blue-700 hover:bg-blue-100"
+              >
+                <Upload className="h-4 w-4" />
+                Choose Matching File
+              </button>
+              <button
+                onClick={() => {
+                  setPendingSourceDataset(null)
+                  setPendingSourceIntent('rebind')
+                  openSavFile()
+                }}
+                className="inline-flex items-center gap-2 rounded-xl bg-[#1F4E78] px-4 py-2 text-sm font-semibold text-white hover:bg-[#173b5c]"
+              >
+                <Upload className="h-4 w-4" />
+                Rebind SPSS File
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {loading && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/18 p-6 backdrop-blur-[2px]">
+          <div className="w-full max-w-lg rounded-[28px] border border-dashed border-blue-300 bg-white px-10 py-12 text-center shadow-2xl shadow-blue-100">
+            <div className="mx-auto flex max-w-xs flex-col items-center gap-4">
+              <RefreshCw className="h-12 w-12 animate-spin text-blue-500" />
+              <div className="space-y-1">
+                <p className="text-xl font-bold text-blue-700">Loading SPSS file...</p>
+                <p className="text-xs text-slate-400">
+                  {loadPhase === 'variables'
+                    ? 'Reading variable metadata...'
+                    : loadPhase === 'cases'
+                      ? `Loading case data${loadPct > 0 ? ` ${loadPct}%` : ''}...`
+                      : 'Preparing file...'}
+                </p>
+              </div>
+              <div className="w-full overflow-hidden rounded-full bg-slate-200 h-1.5">
+                <div
+                  className="h-full rounded-full bg-blue-500 transition-all duration-150"
+                  style={{
+                    width: loadPhase === 'cases' && loadPct > 0 ? `${loadPct}%` : '100%',
+                    animation: loadPhase !== 'cases' || loadPct === 0 ? 'indeterminate 1.5s ease-in-out infinite' : 'none',
+                  }}
+                />
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {editingVariableName && editingVariableItem && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/35 p-4">
+          <div className="w-full max-w-4xl max-h-[85vh] overflow-hidden rounded-2xl bg-white shadow-2xl border border-gray-200">
+            <div className="flex items-center justify-between px-5 py-3 border-b border-gray-200 bg-gray-50">
+              <div>
+                <h3 className="text-sm font-bold text-gray-800">Edit Variable - {editingVariableName}</h3>
+                <p className="text-xs text-gray-500">{editingVariableItem.label || editingVariableItem.longName || editingVariableItem.name}</p>
+              </div>
+              <button
+                onClick={() => setEditingVariableName(null)}
+                className="p-1 rounded hover:bg-gray-200 text-gray-500"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="px-5 py-4 overflow-auto max-h-[calc(85vh-64px)] space-y-4">
+              <div className="grid grid-cols-[1fr_auto] gap-4 items-start">
+                <div className="border border-gray-200 rounded-xl overflow-auto max-h-[62vh]">
+                  <table className="w-full text-xs select-none">
+                    <thead className="bg-[#2E75B6] text-white sticky top-0 z-10">
+                      <tr>
+                        <th
+                          onClick={toggleCodeSort}
+                          className="px-2 py-2 text-left w-[72px] cursor-pointer select-none"
+                          title="Click to sort code"
+                        >
+                          Code {codeSortDirection === 'asc' ? 'โ‘' : 'โ“'}
+                        </th>
+                        <th className="px-2 py-2 text-left">Label</th>
+                        <th className="px-2 py-2 text-right w-[90px]">Count</th>
+                        <th className="px-2 py-2 text-right w-[80px]">Percent</th>
+                        <th className="px-2 py-2 text-center w-[100px]">Factor</th>
+                        <th className="px-2 py-2 text-center w-[88px]">Select</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr className="bg-[#D9E1F2] font-semibold text-gray-800">
+                        <td className="px-2 py-2 border-t border-[#BDD7EE]">Base</td>
+                        <td className="px-2 py-2 border-t border-[#BDD7EE]">All valid answers</td>
+                        <td className="px-2 py-2 border-t border-[#BDD7EE] text-right tabular-nums">{editingVariableBase}</td>
+                        <td className="px-2 py-2 border-t border-[#BDD7EE] text-right">100.0</td>
+                        <td className="px-2 py-2 border-t border-[#BDD7EE]" />
+                        <td className="px-2 py-2 border-t border-[#BDD7EE]" />
+                      </tr>
+                      {variableEditorRows.map((row, index) => {
+                        const selected = selectedVariableRowKeys.includes(row.key)
+                        const isNetRow = row.rowKind === 'net'
+                        const isSummaryRow = row.rowKind === 'summary'
+                        return (
+                        <tr key={row.key} className={isNetRow ? 'bg-emerald-50' : isSummaryRow ? 'bg-amber-50' : selected ? 'bg-blue-100' : index % 2 === 0 ? 'bg-white' : 'bg-[#EBF3FB]'}>
+                          <td
+                            className={`px-2 py-2 border-t border-[#BDD7EE] text-gray-700 ${isNetRow ? 'font-semibold text-emerald-800' : isSummaryRow ? 'font-semibold text-amber-800' : 'cursor-pointer'} ${selected ? 'font-semibold' : ''}`}
+                            onMouseDown={e => e.preventDefault()}
+                            onClick={e => { if (!isNetRow && !isSummaryRow) handleVariableRowClick(row.key, e.shiftKey) }}
+                            onContextMenu={e => {
+                              if (isNetRow || isSummaryRow) return
+                              e.preventDefault()
+                              if (!selected) {
+                                setSelectedVariableRowKeys([row.key])
+                                setLastSelectedVariableIndex(codeEditorRows.findIndex(item => item.key === row.key))
+                              }
+                              setVariableContextMenu({ x: e.clientX, y: e.clientY })
+                            }}
+                          >
+                            {row.code}
+                          </td>
+                          <td
+                            className={`px-2 py-2 border-t border-[#BDD7EE] text-gray-800 ${isNetRow ? 'font-semibold text-emerald-800' : isSummaryRow ? 'font-semibold text-amber-800' : 'cursor-pointer'} ${selected ? 'font-semibold' : ''}`}
+                            onMouseDown={e => e.preventDefault()}
+                            onClick={e => { if (!isNetRow && !isSummaryRow) handleVariableRowClick(row.key, e.shiftKey) }}
+                            onContextMenu={e => {
+                              if (isNetRow || isSummaryRow) return
+                              e.preventDefault()
+                              if (!selected) {
+                                setSelectedVariableRowKeys([row.key])
+                                setLastSelectedVariableIndex(codeEditorRows.findIndex(item => item.key === row.key))
+                              }
+                              setVariableContextMenu({ x: e.clientX, y: e.clientY })
+                            }}
+                            onDoubleClick={e => { e.stopPropagation(); setEditingVariableLabelKey(row.key) }}
+                          >
+                            {editingVariableLabelKey === row.key ? (
+                              <input
+                                autoFocus
+                                value={row.label}
+                                onClick={e => e.stopPropagation()}
+                                onChange={e => {
+                                  const nextValue = e.target.value
+                                  if (isNetRow && row.groupId) {
+                                    setVariableGroups(prev => prev.map(group => group.id === row.groupId
+                                      ? { ...group, name: nextValue.replace(/^(?:Sub)*net\s*:\s*/i, '').trimStart() }
+                                      : group))
+                                  }
+                                  setVariableEditorRows(prev => prev.map(item => item.key === row.key ? { ...item, label: nextValue } : item))
+                                }}
+                                onBlur={() => setEditingVariableLabelKey(null)}
+                                onKeyDown={e => {
+                                  if (e.key === 'Enter' || e.key === 'Escape') setEditingVariableLabelKey(null)
+                                }}
+                                className="w-full bg-white border border-blue-200 rounded px-1.5 py-0.5 text-xs outline-none focus:ring-1 focus:ring-blue-300"
+                              />
+                            ) : (
+                              <span
+                                className={isNetRow ? 'text-emerald-800 font-semibold' : ''}
+                                style={{ paddingLeft: `${(row.indentLevel ?? 0) * 14}px`, display: 'inline-block' }}
+                              >
+                                {row.label}
+                              </span>
+                            )}
+                          </td>
+                          <td className={`px-2 py-2 border-t border-[#BDD7EE] text-right tabular-nums ${isNetRow ? 'font-semibold text-emerald-800' : ''}`}>{row.count}</td>
+                          <td className={`px-2 py-2 border-t border-[#BDD7EE] text-right ${isNetRow ? 'font-semibold text-emerald-800' : ''}`}>{row.percent.toFixed(1)}%</td>
+                          <td className="px-2 py-2 border-t border-[#BDD7EE]">
+                            {isNetRow ? (
+                              <div className="text-center text-[11px] text-emerald-700">-</div>
+                            ) : isSummaryRow ? (
+                              <div className="text-center text-[11px] text-amber-700">-</div>
+                            ) : (
+                              <input
+                                value={row.factor}
+                                onChange={e => setVariableEditorRows(prev => prev.map((item, itemIndex) => itemIndex === index ? { ...item, factor: e.target.value } : item))}
+                                className="w-full border border-gray-200 rounded px-2 py-1 text-xs text-center outline-none focus:ring-1 focus:ring-blue-300"
+                                placeholder={row.autoFactor ? row.code : '-'}
+                              />
+                            )}
+                          </td>
+                          <td className="px-2 py-2 border-t border-[#BDD7EE] text-center">
+                            {isNetRow ? (
+                              <span className="text-[10px] font-semibold text-emerald-700">NET</span>
+                            ) : isSummaryRow ? (
+                              <span className="text-[10px] font-semibold text-amber-700">TB/T2B</span>
+                            ) : (
+                              <span className={`inline-flex h-4 w-4 rounded-full border ${selected ? 'bg-blue-600 border-blue-600' : 'bg-white border-gray-300'}`} />
+                            )}
+                          </td>
+                        </tr>
+                      )})}
+                    </tbody>
+                  </table>
+                </div>
+
+                <div className="w-[220px] rounded-xl border border-gray-200 bg-gray-50 p-4 space-y-3">
+                  <div>
+                    <div className="text-xs font-semibold text-gray-700">Calculation</div>
+                    <p className="mt-1 text-[11px] text-gray-500">ใส่ค่า factor ตาม code เพื่อให้เวลานำตัวแปรนี้ไปไว้ที่ SIDE แบบข้อเดี่ยว ระบบเพิ่มแถว Mean ให้ในตาราง</p>
+                  </div>
+                  <div>
+                    <div className="text-xs font-semibold text-gray-700">Display</div>
+                    <p className="mt-1 text-[11px] text-gray-500">ดับเบิลคลิกที่ตัวแปรใน VariableFolders เพื่อกลับมาแก้ order และ factor ได้ทุกเมื่อ</p>
+                  </div>
+                  <div className="text-[11px] text-gray-500">
+                    Tip: ถ้าไม่ใส่ factor ระบบจะยังใช้ลำดับ code ใหม่ได้ แต่จะไม่สร้าง Mean</div>
+                  <div className="pt-2">
+                    {variableGroups.length > 0 && (
+                      <div className="mb-3">
+                        <div className="text-xs font-semibold text-gray-700 mb-2">Net Groups</div>
+                        <div className="space-y-2">
+                          {variableGroups.map(group => (
+                            <div key={group.id} className="rounded-lg border border-emerald-200 bg-emerald-50 px-2 py-1.5">
+                              <div className="flex items-center justify-between gap-2">
+                                <span className="text-[11px] font-semibold text-emerald-800">{getNetPrefix(getGroupDepth(group, variableGroups))}{group.name}</span>
+                                <button
+                                  onClick={() => removeVariableNetGroup(group.id)}
+                                  className="text-[10px] text-emerald-700 hover:text-red-600"
+                                >
+                                  Remove
+                                </button>
+                              </div>
+                              <div className="mt-1 text-[10px] text-emerald-700">
+                                {group.members.join(', ')}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    {isNumericVariable(editingVariableName) && (
+                      <div className="mb-3">
+                        <div className="text-xs font-semibold text-gray-700 mb-2">Statistics</div>
+                        <div className="grid grid-cols-2 gap-2 text-[11px] text-gray-600">
+                          {(['mean', 'min', 'max', 'stddev'] as NumericStat[]).map(stat => (
+                            <label key={stat} className="flex items-center gap-1.5 cursor-pointer">
+                              <input
+                                type="checkbox"
+                                checked={selectedNumericStats.includes(stat)}
+                                onChange={e => {
+                                  setSelectedNumericStats(prev => e.target.checked
+                                    ? [...new Set([...prev, stat])]
+                                    : prev.filter(item => item !== stat))
+                                }}
+                                className="accent-[#1F4E78]"
+                              />
+                              <span>{stat === 'stddev' ? 'StdDev' : stat[0].toUpperCase() + stat.slice(1)}</span>
+                            </label>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    <div className="text-xs font-semibold text-gray-700 mb-2">Order Controls</div>
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => setVariableEditorRows(prev => rebuildVariableEditorRows(moveSelectedRows(prev.filter(row => row.rowKind === 'code'), selectedVariableRowKeys, -1), variableGroups))}
+                        disabled={selectedVariableRowKeys.length === 0 || firstSelectedVariableIndex === 0}
+                        className="inline-flex items-center justify-center rounded-2xl bg-emerald-600 text-white p-2 shadow-sm hover:bg-emerald-500 disabled:opacity-30"
+                        title="Move selected up"
+                      >
+                        <ArrowUp className="w-4 h-4" />
+                      </button>
+                      <button
+                        onClick={() => setVariableEditorRows(prev => rebuildVariableEditorRows(moveSelectedRows(prev.filter(row => row.rowKind === 'code'), selectedVariableRowKeys, 1), variableGroups))}
+                        disabled={selectedVariableRowKeys.length === 0 || lastSelectedVariableRowIndex === codeEditorRows.length - 1}
+                        className="inline-flex items-center justify-center rounded-2xl bg-emerald-600 text-white p-2 shadow-sm hover:bg-emerald-500 disabled:opacity-30"
+                        title="Move selected down"
+                      >
+                        <ArrowDown className="w-4 h-4" />
+                      </button>
+                      {selectedScalePreset && (
+                        <div className="mt-2 rounded-xl border border-blue-100 bg-blue-50/70 px-3 py-2 text-[11px] font-medium text-blue-800">
+                          Current preset: {getScalePresetDisplayLabel(selectedScalePreset)}
+                        </div>
+                      )}
+                    </div>
+                    <div className="mt-3">
+                      <div className="mb-2 text-xs font-semibold text-gray-700">Scale Presets</div>
+                      <button
+                        onClick={() => setShowScalePresetDialog(true)}
+                        className="relative inline-flex w-full items-center justify-center gap-2 rounded-2xl border border-blue-200 bg-gradient-to-r from-[#1F4E78] to-[#2E75B6] px-3 py-2.5 text-xs font-semibold text-transparent shadow-sm transition hover:from-[#24598b] hover:to-[#377fc1]"
+                      >
+                        <Sparkles className="h-3.5 w-3.5" />
+                        <span className="pointer-events-none absolute inset-0 flex items-center justify-center gap-2 text-white">
+                          <Sparkles className="h-3.5 w-3.5" />
+                          Create T2B
+                        </span>
+                        {selectedScalePreset ? getScalePresetLabel(selectedScalePreset) : 'สร้าง TB/T2B'}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex items-center justify-end gap-2">
+                <button
+                  onClick={() => setEditingVariableName(null)}
+                  className="px-3 py-1.5 rounded-lg border border-gray-200 text-sm text-gray-600 hover:bg-gray-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={() => saveVariableEditor(editingVariableName, variableEditorRows)}
+                  className="px-3 py-1.5 rounded-lg bg-[#1F4E78] text-white text-sm font-semibold hover:bg-[#173b5c]"
+                >
+                  Save Variable
+                </button>
+              </div>
+            </div>
+            {variableContextMenu && (
+              <div
+                className="fixed z-[60] min-w-[140px] rounded-lg border border-gray-200 bg-white py-1 shadow-xl"
+                style={{ left: variableContextMenu.x, top: variableContextMenu.y }}
+                onClick={e => e.stopPropagation()}
+              >
+                <button
+                  onClick={createVariableNetGroup}
+                  disabled={selectedVariableRowKeys.length === 0}
+                  className="block w-full px-3 py-1.5 text-left text-xs text-gray-700 hover:bg-emerald-50 disabled:opacity-40"
+                >
+                  Group Net
+                </button>
+                <button
+                  onClick={removeSelectedCodesFromGroups}
+                  disabled={!selectedRowsInGroups}
+                  className="block w-full px-3 py-1.5 text-left text-xs text-gray-700 hover:bg-red-50 disabled:opacity-40"
+                >
+                  Remove Selected From Net
+                </button>
+              </div>
+            )}
+            {showNetNameDialog && (
+              <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/40 p-4">
+                <div className="w-full max-w-md rounded-2xl border border-gray-200 bg-white shadow-2xl">
+                  <div className="border-b border-gray-100 px-5 py-4">
+                    <h4 className="text-base font-bold text-gray-800">Create Net Group</h4>
+                    <p className="mt-1 text-sm text-gray-500">
+                      Set a name for the selected net group.
+                    </p>
+                  </div>
+                  <div className="px-5 py-4">
+                    <label className="mb-2 block text-sm font-medium text-gray-700">Net name</label>
+                    <input
+                      autoFocus
+                      value={pendingNetName}
+                      onChange={e => setPendingNetName(e.target.value)}
+                      onKeyDown={e => {
+                        if (e.key === 'Enter' && pendingNetName.trim()) confirmVariableNetGroup()
+                        if (e.key === 'Escape') {
+                          setShowNetNameDialog(false)
+                          setPendingNetName('UPC')
+                        }
+                      }}
+                      className="w-full rounded-xl border border-blue-200 bg-blue-50/30 px-3 py-2.5 text-sm text-gray-800 outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
+                      placeholder="e.g. UPC"
+                    />
+                  </div>
+                  <div className="flex items-center justify-end gap-2 px-5 py-4">
+                    <button
+                      onClick={() => {
+                        setShowNetNameDialog(false)
+                        setPendingNetName('UPC')
+                      }}
+                      className="rounded-xl border border-gray-200 px-4 py-2 text-sm text-gray-600 hover:bg-gray-50"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      onClick={confirmVariableNetGroup}
+                      disabled={!pendingNetName.trim()}
+                      className="rounded-xl bg-[#1F4E78] px-4 py-2 text-sm font-semibold text-white hover:bg-[#173b5c] disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      Create Net
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+            {showScalePresetDialog && (
+              <div className="fixed inset-0 z-[75] flex items-center justify-center bg-black/45 p-4">
+                <div className="w-full max-w-[380px] rounded-3xl border border-blue-100 bg-white shadow-2xl">
+                  <div className="border-b border-blue-100 px-5 py-4">
+                    <h4 className="text-base font-bold text-gray-800">Create T2B</h4>
+                    <p className="mt-1 text-sm text-gray-500">
+                      Pick a preset to auto-fill factors and build summary rows for this scale.
+                    </p>
+                  </div>
+                  <div className="grid gap-2 px-4 py-3">
+                    {SCALE_PRESET_OPTIONS.map(({ preset, title, description, tone }) => (
+                      <button
+                        key={preset}
+                        onClick={() => applyScaleSummaryPreset(preset)}
+                        className={`rounded-xl border px-3 py-2.5 text-left transition ${
+                          selectedScalePreset === preset
+                            ? `${tone} ring-2 ring-blue-200 shadow-sm`
+                            : `${tone}`
+                        }`}
+                      >
+                        <div className="flex items-start justify-between gap-3">
+                          <div>
+                            <div className="text-[13px] font-semibold leading-5 text-gray-800">{getScalePresetDisplayLabel(preset)}</div>
+                            <div className="mt-0.5 text-[11px] leading-4 text-gray-500">{description}</div>
+                          </div>
+                          <span className="rounded-full bg-white/85 px-2 py-0.5 text-[9px] font-bold tracking-[0.16em] text-gray-600">
+                            {title}
+                          </span>
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                  <div className="flex items-center justify-end gap-2 px-5 py-4">
+                    <button
+                      onClick={() => setShowScalePresetDialog(false)}
+                      className="rounded-xl border border-gray-200 px-4 py-2 text-sm text-gray-600 hover:bg-gray-50"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+      {batchExporting && (
+        <div className="fixed inset-0 z-[90] flex items-center justify-center bg-slate-950/45 backdrop-blur-sm p-4">
+          <div className="w-full max-w-md rounded-3xl border border-blue-100 bg-white shadow-2xl">
+            <div className="flex flex-col items-center px-6 py-8 text-center">
+              <div className="relative flex h-28 w-28 items-center justify-center">
+                <div className="absolute inset-0 rounded-full border-4 border-blue-100" />
+                <div className="absolute inset-1 rounded-full border-4 border-transparent border-t-[#1F4E78] border-r-blue-400 animate-spin" />
+                <CrossifyLogo size="lg" className="relative" />
+              </div>
+              <h3 className="mt-5 text-lg font-bold text-gray-800">กำลังประมวลผล Batch Export</h3>
+              <p className="mt-2 text-sm text-gray-500">กรุณารอสักครู่ ระบบกำลังรันทุก setting และ export ไฟล์ให้อัตโนมัติ</p>
+              <div className="mt-5 rounded-2xl bg-blue-50 px-5 py-3 text-center">
+                <div className="text-xs font-semibold uppercase tracking-[0.18em] text-blue-500">Elapsed Time</div>
+                <div className="mt-1 text-2xl font-bold tabular-nums text-[#1F4E78]">{formatLiveBatchDuration(batchElapsedMs)}</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+      {batchExportSummary && !batchExporting && (
+        <div className="fixed inset-0 z-[95] flex items-center justify-center bg-black/45 p-4">
+          <div className="w-full max-w-md rounded-3xl border border-gray-200 bg-white shadow-2xl">
+            <div className="border-b border-gray-100 px-6 py-5">
+              <h3 className="text-lg font-bold text-gray-800">Batch Export Complete</h3>
+              <p className="mt-1 text-sm text-gray-500">สรุปผลการ export ของชุดไฟล์ settings รอบล่าสุด</p>
+            </div>
+            <div className="space-y-4 px-6 py-5">
+              <div className="grid grid-cols-2 gap-3">
+                <div className="rounded-2xl bg-emerald-50 px-4 py-3">
+                  <div className="text-xs font-semibold uppercase tracking-[0.16em] text-emerald-600">Success</div>
+                  <div className="mt-1 text-2xl font-bold text-emerald-700">{batchExportSummary.successCount}</div>
+                  <div className="text-xs text-emerald-700/80">files exported</div>
+                </div>
+                <div className="rounded-2xl bg-blue-50 px-4 py-3">
+                  <div className="text-xs font-semibold uppercase tracking-[0.16em] text-blue-600">Time Used</div>
+                  <div className="mt-1 text-2xl font-bold text-[#1F4E78]">{formatBatchDuration(batchExportSummary.elapsedMs)}</div>
+                  <div className="text-xs text-blue-700/80">total runtime</div>
+                </div>
+              </div>
+              {batchExportSummary.skippedCount > 0 && (
+                <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">มีไฟล์ถูกข้าม {batchExportSummary.skippedCount} ไฟล์ กรุณาดูรายละเอียดในแถบแจ้งเตือนด้านบน</div>
+              )}
+            </div>
+            <div className="flex justify-end px-6 py-5">
+              <button
+                onClick={dismissBatchExportSummary}
+                className="rounded-xl bg-[#1F4E78] px-5 py-2.5 text-sm font-semibold text-white hover:bg-[#173b5c]"
+              >
+                OK
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// โ”€โ”€ Table Row in sidebar โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€
+
+
+

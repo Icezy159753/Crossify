@@ -1,0 +1,1372 @@
+<!doctype html>
+<!--
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  DO NOT CHANGE THIS FILE � bundle ??�����?��??��?? index-DsrIxxwV.js ??�?�?��
+  DO NOT switch to src/main.tsx or any other bundle � �?�?�
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+-->
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/crossify-logo.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Crossify</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=Noto+Sans+Thai:wght@400;500;600;700;800;900&family=Plus+Jakarta+Sans:wght@700;800;900&display=swap" rel="stylesheet" />
+    <script type="module" crossorigin src="/assets/index-DsrIxxwV.js?restore=20260328c"></script>
+    <link rel="modulepreload" crossorigin href="/assets/exceljs-BMcsBZ_F.js?restore=20260328c">
+    <link rel="modulepreload" crossorigin href="/assets/arquero-6vuVcGup.js?restore=20260328c">
+    <link rel="stylesheet" crossorigin href="/assets/index-DN00P1lj.css?restore=20260328c">
+    <script type="module" crossorigin src="/assets/index-B5Qt9EMX.js"></script>
+  </head>
+  <body>
+    <div id="root"></div>
+
+    <!-- Right-click Copy/Paste/Delete for Tables List � injected without touching the bundle -->
+    <script>
+    (function () {
+      'use strict';
+
+      var COPY_KEY = '__cx_tbl_copy__';
+      var menuEl = null;
+      var lastRowFiber = null; // captured at right-click time
+
+      /* ?? React fiber helpers ?? */
+      function fiberOf(el) {
+        var k = Object.keys(el).find(function (k) { return k.startsWith('__reactFiber'); });
+        return k ? el[k] : null;
+      }
+
+      // Walk up fiber tree until we find a node whose memoizedProps has a
+      // `table` object with id + colVar (that's the TableRow component fiber)
+      function tablePropsFromFiber(fiber) {
+        var f = fiber;
+        for (var i = 0; i < 8 && f; i++) {
+          var p = f.memoizedProps;
+          if (p && p.table && typeof p.table.id === 'string' && 'colVar' in p.table) {
+            return p.table;
+          }
+          f = f.return;
+        }
+        return null;
+      }
+
+      // Walk UP the fiber tree from startFiber, searching every component's
+      // hook chain for an array-of-tables hook {id, colVar, rowVar}.
+      // This is more reliable than going from #root down.
+      function dispatchTables(startFiber, updaterFn) {
+        var f = startFiber;
+        while (f) {
+          var s = f.memoizedState;
+          while (s) {
+            var v = s.memoizedState;
+            if (Array.isArray(v) && v.length > 0 && v[0] &&
+                typeof v[0].id === 'string' && 'colVar' in v[0] && 'rowVar' in v[0]) {
+              s.queue.dispatch(updaterFn);
+              return true;
+            }
+            s = s.next;
+          }
+          f = f.return;
+        }
+        return false;
+      }
+
+      /* ?? DOM helpers ?? */
+      function findTableRow(el) {
+        var e = el;
+        while (e && e !== document.body) {
+          if (e.draggable &&
+              typeof e.className === 'string' &&
+              e.className.includes('border-l-2') &&
+              e.className.includes('cursor-pointer')) {
+            return e;
+          }
+          e = e.parentElement;
+        }
+        return null;
+      }
+
+      // Returns all checked/selected table rows' data.
+      // "selected" rows have bg-blue-50/70 (checked checkbox), active has bg-blue-50 border-[#1F4E78].
+      function getAllCheckedTables() {
+        var result = [];
+        var allRows = document.querySelectorAll('[draggable="true"]');
+        allRows.forEach(function (row) {
+          var cls = typeof row.className === 'string' ? row.className : '';
+          if (!cls.includes('border-l-2') || !cls.includes('cursor-pointer')) return;
+          // Only selected (checkbox) rows � has bg-blue-50/70 which means it contains 'bg-blue-50'
+          // but we distinguish from active (border-[#1F4E78]) by checking for 'border-blue-200'
+          if (!cls.includes('bg-blue-50')) return;
+          var f = fiberOf(row);
+          if (!f) return;
+          var t = tablePropsFromFiber(f);
+          if (t) result.push(t);
+        });
+        return result;
+      }
+
+      // Returns active table (dark blue border) fiber and data, for paste anchor.
+      function getActiveTableRow() {
+        var allRows = document.querySelectorAll('[draggable="true"]');
+        for (var i = 0; i < allRows.length; i++) {
+          var row = allRows[i];
+          var cls = typeof row.className === 'string' ? row.className : '';
+          if (cls.includes('border-[#1F4E78]') && cls.includes('border-l-2')) {
+            var f = fiberOf(row);
+            var t = f ? tablePropsFromFiber(f) : null;
+            if (t) return { fiber: f, table: t };
+          }
+        }
+        return null;
+      }
+
+      // Collect tables to copy: all selected rows if right-clicked table is among them.
+      function getSelectedForCopy(rightClickedTable) {
+        var checked = getAllCheckedTables();
+        var inSel = checked.some(function (t) { return t.id === rightClickedTable.id; });
+        return (inSel && checked.length > 1) ? checked : [rightClickedTable];
+      }
+
+      // Collect IDs to delete: all selected if right-clicked table is among them.
+      function getSelectedIdsForDelete(rightClickedId) {
+        var checked = getAllCheckedTables();
+        var inSel = checked.some(function (t) { return t.id === rightClickedId; });
+        return (inSel && checked.length > 1)
+          ? checked.map(function (t) { return t.id; })
+          : [rightClickedId];
+      }
+
+      /* ?? Context menu ?? */
+      function removeMenu() {
+        if (menuEl) { menuEl.remove(); menuEl = null; }
+      }
+
+      var SVG_COPY  = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>';
+      var SVG_PASTE = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect x="8" y="2" width="8" height="4" rx="1"/></svg>';
+      var SVG_DEL   = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4h6v2"/></svg>';
+
+      function makeBtn(label, svgIcon, danger, onClick) {
+        var b = document.createElement('button');
+        b.style.cssText = [
+          'display:flex', 'align-items:center', 'gap:8px', 'width:100%',
+          'padding:7px 12px', 'border:none', 'background:none', 'cursor:pointer',
+          'font-size:12px', 'font-family:inherit', 'text-align:left',
+          'color:' + (danger ? '#dc2626' : '#374151')
+        ].join(';');
+        b.innerHTML = svgIcon + '<span>' + label + '</span>';
+        b.addEventListener('mouseover', function () { b.style.background = danger ? '#fef2f2' : '#f9fafb'; });
+        b.addEventListener('mouseout',  function () { b.style.background = ''; });
+        b.addEventListener('click', function (e) { e.stopPropagation(); onClick(); });
+        return b;
+      }
+
+      function showMenu(x, y, table) {
+        removeMenu();
+
+        var selectedForCopy = getSelectedForCopy(table);
+        var copied = [];
+        try { copied = JSON.parse(localStorage.getItem(COPY_KEY) || '[]'); } catch (e) {}
+
+        menuEl = document.createElement('div');
+        menuEl.style.cssText = [
+          'position:fixed', 'z-index:2147483647',
+          'background:#fff', 'border:1px solid #e5e7eb',
+          'border-radius:12px', 'padding:4px 0',
+          'box-shadow:0 8px 24px rgba(0,0,0,0.13)',
+          'min-width:164px', 'font-family:inherit'
+        ].join(';');
+
+        // Copy � copies all selected tables if right-clicked table is in the selection
+        menuEl.appendChild(makeBtn('Copy' + (selectedForCopy.length > 1 ? ' (' + selectedForCopy.length + ')' : ''), SVG_COPY, false, function () {
+          try { localStorage.setItem(COPY_KEY, JSON.stringify(selectedForCopy)); } catch (e) {}
+          removeMenu();
+        }));
+
+        // Paste (only shown when buffer has data)
+        if (copied.length > 0) {
+          menuEl.appendChild(makeBtn('Paste (' + copied.length + ')', SVG_PASTE, false, function () {
+            var tid = table.id;
+            var capFiber = lastRowFiber;
+            var ok = dispatchTables(capFiber, function (prev) {
+              var idx = prev.findIndex(function (t) { return t.id === tid; });
+              var ins = copied.map(function (t) {
+                return Object.assign({}, t, { id: crypto.randomUUID(), result: null });
+              });
+              return idx >= 0
+                ? prev.slice(0, idx + 1).concat(ins, prev.slice(idx + 1))
+                : prev.concat(ins);
+            });
+            if (!ok) alert('Paste failed � could not reach React state.');
+            removeMenu();
+          }));
+        }
+
+        // Separator
+        var sep = document.createElement('div');
+        sep.style.cssText = 'height:1px;background:#f3f4f6;margin:4px 0';
+        menuEl.appendChild(sep);
+
+        // Delete � deletes all selected tables if right-clicked one is among them
+        var delIds = getSelectedIdsForDelete(table.id);
+        var delLabel = delIds.length > 1 ? 'Delete (' + delIds.length + ')' : 'Delete';
+        menuEl.appendChild(makeBtn(delLabel, SVG_DEL, true, function () {
+          var ids = delIds;
+          var capFiber = lastRowFiber;
+          var ok = dispatchTables(capFiber, function (prev) {
+            return prev.filter(function (t) { return ids.indexOf(t.id) === -1; });
+          });
+          if (!ok) alert('Delete failed � could not reach React state.');
+          removeMenu();
+        }));
+
+        document.body.appendChild(menuEl);
+
+        // Position � prevent overflow
+        menuEl.style.left = x + 'px';
+        menuEl.style.top  = y + 'px';
+        var r = menuEl.getBoundingClientRect();
+        if (r.right  > window.innerWidth)  menuEl.style.left = (x - r.width)  + 'px';
+        if (r.bottom > window.innerHeight) menuEl.style.top  = (y - r.height) + 'px';
+      }
+
+      /* ?? Event listeners ?? */
+      document.addEventListener('contextmenu', function (e) {
+        var row = findTableRow(e.target);
+        if (!row) { removeMenu(); return; }
+        var fiber = fiberOf(row);
+        if (!fiber) return;
+        var table = tablePropsFromFiber(fiber);
+        if (!table) return;
+        e.preventDefault();
+        lastRowFiber = fiber; // capture fiber at right-click time
+        showMenu(e.clientX, e.clientY, table);
+      });
+
+      document.addEventListener('click', removeMenu);
+
+      // Keyboard shortcuts � only when focus is NOT inside an input/textarea/contenteditable
+      document.addEventListener('keydown', function (e) {
+        if (e.key === 'Escape') { removeMenu(); return; }
+
+        var tag = document.activeElement && document.activeElement.tagName;
+        var inInput = tag === 'INPUT' || tag === 'TEXTAREA' ||
+                      (document.activeElement && document.activeElement.isContentEditable);
+        if (inInput) return;
+
+        // Ctrl+C � copy selected tables
+        if ((e.ctrlKey || e.metaKey) && e.key === 'c') {
+          var active = getActiveTableRow();
+          if (!active) return;
+          var tocopy = getSelectedForCopy(active.table);
+          try { localStorage.setItem(COPY_KEY, JSON.stringify(tocopy)); } catch (ex) {}
+          showToast('Copied ' + tocopy.length + ' table' + (tocopy.length > 1 ? 's' : ''));
+          e.preventDefault();
+        }
+
+        // Ctrl+V � paste after active table
+        if ((e.ctrlKey || e.metaKey) && e.key === 'v') {
+          var copied = [];
+          try { copied = JSON.parse(localStorage.getItem(COPY_KEY) || '[]'); } catch (ex) {}
+          if (copied.length === 0) return;
+          var active = getActiveTableRow();
+          if (!active) return;
+          var tid = active.table.id;
+          dispatchTables(active.fiber, function (prev) {
+            var idx = prev.findIndex(function (t) { return t.id === tid; });
+            var ins = copied.map(function (t) {
+              return Object.assign({}, t, { id: crypto.randomUUID(), result: null });
+            });
+            return idx >= 0
+              ? prev.slice(0, idx + 1).concat(ins, prev.slice(idx + 1))
+              : prev.concat(ins);
+          });
+          showToast('Pasted ' + copied.length + ' table' + (copied.length > 1 ? 's' : ''));
+          e.preventDefault();
+        }
+
+        // Delete key � delete selected tables
+        if (e.key === 'Delete') {
+          var checked = getAllCheckedTables();
+          if (checked.length === 0) return;
+          var active = getActiveTableRow();
+          var startFiber = (active && active.fiber) || lastRowFiber;
+          if (!startFiber) return;
+          var ids = checked.map(function (t) { return t.id; });
+          dispatchTables(startFiber, function (prev) {
+            return prev.filter(function (t) { return ids.indexOf(t.id) === -1; });
+          });
+          showToast('Deleted ' + ids.length + ' table' + (ids.length > 1 ? 's' : ''));
+        }
+      });
+
+      // Simple toast notification
+      function showToast(msg) {
+        var t = document.createElement('div');
+        t.style.cssText = 'position:fixed;bottom:24px;left:50%;transform:translateX(-50%);z-index:2147483647;background:#1F4E78;color:#fff;padding:8px 18px;border-radius:20px;font-size:12px;font-family:inherit;box-shadow:0 4px 16px rgba(0,0,0,0.18);pointer-events:none';
+        t.textContent = msg;
+        document.body.appendChild(t);
+        setTimeout(function () { t.remove(); }, 1800);
+      }
+
+    })();
+    </script>
+
+    <!-- Variable Folders right-click context menu � replaces per-variable action buttons -->
+    <script>
+    (function () {
+      'use strict';
+
+      /* ?? Hide the per-variable "Add"/"Tbl" hover buttons AND the bottom Quick-add bar ?? */
+      var styleEl = document.createElement('style');
+      styleEl.textContent = [
+        '.cursor-grab .opacity-0.transition-opacity { display: none !important; }',
+        '.flex-shrink-0.space-y-2 { display: none !important; }'
+      ].join('\n');
+      document.head.appendChild(styleEl);
+
+      var varMenuEl = null;
+
+      /* ?? Fiber helpers ?? */
+      function fiberOf2(el) {
+        var k = Object.keys(el).find(function (k) { return k.startsWith('__reactFiber'); });
+        return k ? el[k] : null;
+      }
+
+      function varInfoFromFiber(fiber) {
+        var f = fiber;
+        for (var i = 0; i < 12 && f; i++) {
+          var p = f.memoizedProps;
+          if (p && p.v && typeof p.v.name === 'string' && typeof p.onQuickAction === 'function') {
+            return {
+              varName: p.v.name,
+              onQuickAction: p.onQuickAction,
+              activeTarget: p.activeTarget || 'side'
+            };
+          }
+          f = f.return;
+        }
+        return null;
+      }
+
+      /* ?? DOM helpers ?? */
+      function findVarRow(el) {
+        var e = el;
+        while (e && e !== document.body) {
+          if (e.draggable &&
+              typeof e.className === 'string' &&
+              e.className.includes('cursor-grab')) {
+            return e;
+          }
+          e = e.parentElement;
+        }
+        return null;
+      }
+
+      // �?� list ???��???��? apply action: ?�? right-click �� selected � ??��?????�????�, �?���� � ���???�?��
+      function getTargetVarNames(rightClickedVarName) {
+        var selected = [];
+        var allRows = document.querySelectorAll('[draggable="true"]');
+        allRows.forEach(function (row) {
+          var cls = typeof row.className === 'string' ? row.className : '';
+          // ring-blue-100 ???��????� selected = true ??�?�?�� (�?�?? hover variant)
+          if (!cls.includes('cursor-grab') || !cls.includes('ring-blue-100')) return;
+          var f = fiberOf2(row);
+          if (!f) return;
+          var info = varInfoFromFiber(f);
+          if (info) selected.push(info.varName);
+        });
+        var inSel = selected.indexOf(rightClickedVarName) !== -1;
+        return (inSel && selected.length > 1) ? selected : [rightClickedVarName];
+      }
+
+      /* ?? Menu helpers ?? */
+      function removeVarMenu() {
+        if (varMenuEl) { varMenuEl.remove(); varMenuEl = null; }
+      }
+
+      var SVG_TOP    = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="18 15 12 9 6 15"/></svg>';
+      var SVG_SIDE   = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>';
+      var SVG_FILTER = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></svg>';
+      var SVG_TABLE  = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/><line x1="9" y1="3" x2="9" y2="21"/></svg>';
+
+      function makeVarBtn(label, svgIcon, color, isBold, onClick) {
+        var b = document.createElement('button');
+        b.style.cssText = [
+          'display:flex', 'align-items:center', 'gap:8px', 'width:100%',
+          'padding:7px 12px', 'border:none', 'background:none', 'cursor:pointer',
+          'font-size:12px', 'font-family:inherit', 'text-align:left',
+          'color:' + color,
+          isBold ? 'font-weight:700' : ''
+        ].join(';');
+        b.innerHTML = svgIcon + '<span>' + label + '</span>';
+        b.addEventListener('mouseover', function () { b.style.background = '#f9fafb'; });
+        b.addEventListener('mouseout',  function () { b.style.background = ''; });
+        b.addEventListener('click', function (e) { e.stopPropagation(); onClick(); });
+        return b;
+      }
+
+      function showVarMenu(x, y, varName, onQuickAction, activeTarget) {
+        removeVarMenu();
+
+        var targets = getTargetVarNames(varName);
+        var multi = targets.length > 1;
+
+        varMenuEl = document.createElement('div');
+        varMenuEl.style.cssText = [
+          'position:fixed', 'z-index:2147483647',
+          'background:#fff', 'border:1px solid #e5e7eb',
+          'border-radius:12px', 'padding:4px 0',
+          'box-shadow:0 8px 24px rgba(0,0,0,0.13)',
+          'min-width:160px', 'font-family:inherit'
+        ].join(';');
+
+        // Header
+        var hdr = document.createElement('div');
+        hdr.style.cssText = 'padding:5px 12px 5px;font-size:11px;color:#6b7280;font-weight:600;border-bottom:1px solid #f3f4f6;margin-bottom:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:200px';
+        hdr.textContent = multi ? targets.length + ' variables selected' : varName;
+        varMenuEl.appendChild(hdr);
+
+        var items = [
+          { label: 'Add to Top',    key: 'top',    icon: SVG_TOP,    color: '#1d4ed8' },
+          { label: 'Add to Side',   key: 'side',   icon: SVG_SIDE,   color: '#1d4ed8' },
+          { label: 'Add to Filter', key: 'filter', icon: SVG_FILTER, color: '#7c3aed' }
+        ];
+
+        items.forEach(function (t) {
+          var lbl = t.label + (multi ? ' (' + targets.length + ')' : '');
+          varMenuEl.appendChild(makeVarBtn(lbl, t.icon, t.color, t.key === activeTarget, function () {
+            targets.forEach(function (n) { onQuickAction(n, t.key); });
+            removeVarMenu();
+          }));
+        });
+
+        // Separator
+        var sep = document.createElement('div');
+        sep.style.cssText = 'height:1px;background:#f3f4f6;margin:4px 0';
+        varMenuEl.appendChild(sep);
+
+        // Create Table(s)
+        var tblLbl = multi ? 'Create Tables (' + targets.length + ')' : 'Create Table';
+        varMenuEl.appendChild(makeVarBtn(tblLbl, SVG_TABLE, '#059669', false, function () {
+          // handleVarQuickAction "table" case �??�?? multi-select ?�?���???��?�?
+          // �?�?�?�?�?��??��?????��???????�?�?? varName ???�?� (bundle �??�?� selectedVariableNames ??�)
+          onQuickAction(targets[0], 'table');
+          removeVarMenu();
+        }));
+
+        document.body.appendChild(varMenuEl);
+
+        // Clamp to viewport
+        varMenuEl.style.left = x + 'px';
+        varMenuEl.style.top  = y + 'px';
+        var r = varMenuEl.getBoundingClientRect();
+        if (r.right  > window.innerWidth)  varMenuEl.style.left = (x - r.width)  + 'px';
+        if (r.bottom > window.innerHeight) varMenuEl.style.top  = (y - r.height) + 'px';
+      }
+
+      /* ?? Event listeners ?? */
+      document.addEventListener('contextmenu', function (e) {
+        removeVarMenu();
+        var row = findVarRow(e.target);
+        if (!row) return;
+        var fiber = fiberOf2(row);
+        if (!fiber) return;
+        var info = varInfoFromFiber(fiber);
+        if (!info) return;
+        e.preventDefault();
+        showVarMenu(e.clientX, e.clientY, info.varName, info.onQuickAction, info.activeTarget);
+      });
+
+      document.addEventListener('click', removeVarMenu);
+
+    })();
+    </script>
+
+    <!-- Create Derived Variable v2 � drag&drop, multi-code conditions -->
+    <script>
+    (function () {
+      'use strict';
+
+      function fiberOf3(el) {
+        var k = Object.keys(el).find(function (k) { return k.startsWith('__reactFiber'); });
+        return k ? el[k] : null;
+      }
+
+      function getDatasetHook() {
+        var rows = document.querySelectorAll('[draggable="true"]');
+        for (var i = 0; i < rows.length; i++) {
+          var row = rows[i];
+          if (!(row.className || '').includes('cursor-grab')) continue;
+          var f = fiberOf3(row);
+          while (f) {
+            var s = f.memoizedState;
+            while (s) {
+              var v = s.memoizedState;
+              if (v && typeof v === 'object' && !Array.isArray(v) &&
+                  Array.isArray(v.variables) && Array.isArray(v.cases) &&
+                  v.variables.length > 0) {
+                return { data: v, dispatch: s.queue.dispatch };
+              }
+              s = s.next;
+            }
+            f = f.return;
+          }
+        }
+        return null;
+      }
+      function varNameFromFiber3(fiber) {
+        var f = fiber;
+        for (var i = 0; i < 12 && f; i++) {
+          var p = f.memoizedProps;
+          if (p && p.v && typeof p.v.name === 'string') return p.v.name;
+          f = f.return;
+        }
+        return null;
+      }
+      function scoreVarLikeArray(arr) {
+        if (!Array.isArray(arr) || arr.length === 0) return 0;
+        var hit = 0;
+        for (var i = 0; i < arr.length; i++) {
+          var it = arr[i];
+          if (!it || typeof it !== 'object') continue;
+          if (typeof it.name === 'string') hit++;
+        }
+        return hit;
+      }
+      function collectVarObjectsFromPropBag(bag, out, seen) {
+        if (!bag || typeof bag !== 'object') return;
+        var keys = Object.keys(bag);
+        for (var i = 0; i < keys.length; i++) {
+          var val = bag[keys[i]];
+          if (Array.isArray(val)) {
+            for (var j = 0; j < val.length; j++) {
+              var it = val[j];
+              if (!it || typeof it !== 'object' || typeof it.name !== 'string') continue;
+              if (seen[it.name]) continue;
+              seen[it.name] = true;
+              out.push(it);
+            }
+          } else if (val && typeof val === 'object' && keys[i] !== 'children') {
+            collectVarObjectsFromPropBag(val, out, seen);
+          }
+        }
+      }
+      function getVarObjectsFromFolderFiberProps() {
+        var rows = document.querySelectorAll('[draggable="true"]');
+        var out = [];
+        var seen = Object.create(null);
+        for (var i = 0; i < rows.length; i++) {
+          var row = rows[i];
+          var cls = String(row.className || '');
+          if (!cls.includes('cursor-grab')) continue;
+          var f = fiberOf3(row);
+          for (var up = 0; up < 14 && f; up++) {
+            collectVarObjectsFromPropBag(f.memoizedProps, out, seen);
+            f = f.return;
+          }
+        }
+        return out;
+      }
+      function getVarNamesFromFolderFiberProps() {
+        var rows = document.querySelectorAll('[draggable="true"]');
+        var best = [];
+        var bestScore = 0;
+        for (var i = 0; i < rows.length; i++) {
+          var row = rows[i];
+          var cls = String(row.className || '');
+          if (!cls.includes('cursor-grab')) continue;
+          var f = fiberOf3(row);
+          for (var up = 0; up < 14 && f; up++) {
+            var p = f.memoizedProps;
+            if (p && typeof p === 'object') {
+              var keys = Object.keys(p);
+              for (var k = 0; k < keys.length; k++) {
+                var val = p[keys[k]];
+                if (Array.isArray(val)) {
+                  var sc = scoreVarLikeArray(val);
+                  if (sc > bestScore) {
+                    bestScore = sc;
+                    best = val;
+                  }
+                } else if (val && typeof val === 'object') {
+                  var subKeys = Object.keys(val);
+                  for (var sk = 0; sk < subKeys.length; sk++) {
+                    var sub = val[subKeys[sk]];
+                    if (!Array.isArray(sub)) continue;
+                    var sc2 = scoreVarLikeArray(sub);
+                    if (sc2 > bestScore) {
+                      bestScore = sc2;
+                      best = sub;
+                    }
+                  }
+                }
+              }
+            }
+            f = f.return;
+          }
+          if (bestScore > 0) break;
+        }
+        if (!best || best.length === 0) return [];
+        var out = [];
+        var seen = Object.create(null);
+        for (var n = 0; n < best.length; n++) {
+          var nm = best[n] && best[n].name;
+          if (typeof nm !== 'string' || seen[nm]) continue;
+          seen[nm] = true;
+          out.push(nm);
+        }
+        return out;
+      }
+      function getVisibleFolderVarNames() {
+        var rows = document.querySelectorAll('[draggable="true"]');
+        var names = [];
+        var seen = Object.create(null);
+        for (var i = 0; i < rows.length; i++) {
+          var row = rows[i];
+          var cls = String(row.className || '');
+          if (!cls.includes('cursor-grab')) continue;
+          var f = fiberOf3(row);
+          if (!f) continue;
+          var nm = varNameFromFiber3(f);
+          if (!nm || seen[nm]) continue;
+          seen[nm] = true;
+          names.push(nm);
+        }
+        return names;
+      }
+      function isMAType(v) {
+        if (!v || typeof v !== 'object') return false;
+        if (v.isGroupedMA === true || v.isGroupedMa === true || v.isMA === true || v.ma === true) return true;
+        var t = String(v.type || v.varType || v.groupType || v.kind || v.variableType || '').toLowerCase();
+        if (t === 'ma' || t === 'groupedma' || t === 'mrset' || t === 'multiple') return true;
+        var badge = String(v.badge || v.badgeType || '').toUpperCase();
+        if (badge === 'MA') return true;
+        return false;
+      }
+
+      function varBadge(v) {
+        if (isMAType(v)) return { label:'MA', bg:'#d1fae5', color:'#065f46', border:'#6ee7b7' };
+        if (v.isString)    return { label:'A',  bg:'#fef3c7', color:'#92400e', border:'#fcd34d' };
+        if (!v.valueLabels || Object.keys(v.valueLabels).length === 0)
+                           return { label:'#',  bg:'#f3f4f6', color:'#6b7280', border:'#d1d5db' };
+        return               { label:'SA', bg:'#dbeafe', color:'#1e40af', border:'#93c5fd' };
+      }
+      function badgeStyle(v) {
+        var b = varBadge(v);
+        return 'display:inline-flex;align-items:center;justify-content:center;min-width:22px;height:16px;padding:0 3px;border-radius:3px;font-size:8px;font-weight:700;flex-shrink:0;background:'+b.bg+';color:'+b.color+';border:1px solid '+b.border;
+      }
+
+      /* ?? Inject + button ?? */
+      function injectPlusBtn() {
+        var spans = document.querySelectorAll('span');
+        for (var i = 0; i < spans.length; i++) {
+          if (spans[i].textContent.trim() !== 'VariableFolders') continue;
+          var hdr = spans[i].parentElement;
+          if (!hdr || hdr.querySelector('[data-cx-newvar]')) return;
+          var btn = document.createElement('button');
+          btn.setAttribute('data-cx-newvar', '1');
+          btn.title = '??�?�???��?�??�';
+          btn.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>';
+          btn.style.cssText = 'display:flex;align-items:center;justify-content:center;width:22px;height:22px;border-radius:6px;border:1px solid #d1d5db;background:#fff;cursor:pointer;color:#374151;padding:0;flex-shrink:0';
+          btn.addEventListener('mouseover', function(){ btn.style.background='#eff6ff';btn.style.borderColor='#93c5fd';btn.style.color='#1d4ed8'; });
+          btn.addEventListener('mouseout',  function(){ btn.style.background='#fff';btn.style.borderColor='#d1d5db';btn.style.color='#374151'; });
+          btn.addEventListener('click', function(e){ e.stopPropagation(); openModal(); });
+          hdr.appendChild(btn); return;
+        }
+      }
+      var _obs3 = new MutationObserver(injectPlusBtn);
+      _obs3.observe(document.body, { childList: true, subtree: true });
+      setTimeout(injectPlusBtn, 800);
+
+      /* ��� State ��� */
+      var _modal   = null;
+      var _hook    = null;
+      var _allVars = [];
+      var _filterQ = '';
+      var _rules   = [];
+      var _dragVar = null;
+      var _popover = null;
+      var _varCtxMenu = null;
+      var _activeExpr = { ruleId: null, textarea: null };
+      var _rulesPanelContainer = null;
+      var _exprTokenToVar = Object.create(null);
+      function uid() { return Math.random().toString(36).slice(2); }
+      function resolveVarDisplayName(v) {
+        if (!v) return '';
+        var pre = String(v.displayName || '').trim();
+        if (pre && !/^V\d+(?:[_A-Z0-9$]*)$/i.test(pre)) return pre;
+        var base = String(v.name || '').trim();
+        if (base && !/^V\d+(?:[_A-Z0-9$]*)$/i.test(base)) return base;
+        var text = String(v.longName || v.label || '').trim();
+        var m = text.match(/\b([A-Z]{1,8}\d+[A-Z0-9$]*)\b/i);
+        if (m && m[1]) return m[1].toUpperCase();
+        return text || base || pre || '';
+      }
+      function isUsableExprToken(s) {
+        if (!s) return false;
+        var u = String(s).trim().toUpperCase();
+        if (!/^[A-Z_][A-Z0-9_]*$/.test(u)) return false;
+        return u !== 'AND' && u !== 'OR' && u !== 'NOT';
+      }
+      function resolveVarExprToken(v, used) {
+        var candidates = [v.displayName, v.name];
+        for (var i = 0; i < candidates.length; i++) {
+          var c = String(candidates[i] || '').trim().toUpperCase();
+          if (!isUsableExprToken(c)) continue;
+          if (!used[c]) {
+            used[c] = true;
+            return c;
+          }
+        }
+        var fallback = String(v.name || 'VAR').trim().toUpperCase();
+        var idx = 2;
+        while (used[fallback]) { fallback = String(v.name || 'VAR').trim().toUpperCase() + '_' + idx; idx++; }
+        used[fallback] = true;
+        return fallback;
+      }
+      function toExprVarName(raw) {
+        var key = String(raw || '').trim().toUpperCase();
+        return _exprTokenToVar[key] || null;
+      }
+      function normalizeExprAst(node) {
+        if (!node || typeof node !== 'object') return node;
+        if (node.k === 'var') return { k: 'var', n: toExprVarName(node.n) || node.n };
+        if (node.k === 'cmp') return { k: 'cmp', o: node.o, l: normalizeExprAst(node.l), r: normalizeExprAst(node.r) };
+        if (node.k === 'not') return { k: 'not', e: normalizeExprAst(node.e) };
+        if (node.k === 'and' || node.k === 'or') return { k: node.k, l: normalizeExprAst(node.l), r: normalizeExprAst(node.r) };
+        return node;
+      }
+
+      function openModal() {
+        if (_modal) return;
+        _hook = getDatasetHook();
+        if (!_hook) { alert('��?���?��� SPSS ��?'); return; }
+        var allDatasetVars = _hook.data.variables || [];
+        var byName = Object.create(null);
+        allDatasetVars.forEach(function(v){ byName[v.name] = v; });
+        var folderVarObjs = getVarObjectsFromFolderFiberProps();
+        var folderNames = folderVarObjs.map(function(v){ return v && v.name; }).filter(Boolean);
+        if (folderNames.length === 0) folderNames = getVarNamesFromFolderFiberProps();
+        if (folderNames.length === 0) folderNames = getVisibleFolderVarNames();
+        var picked = [];
+        var pickedNameSet = Object.create(null);
+        folderVarObjs.forEach(function(fv){
+          if (!fv || !fv.name || pickedNameSet[fv.name]) return;
+          var merged = Object.assign({}, fv, byName[fv.name] || {});
+          picked.push(merged);
+          pickedNameSet[fv.name] = true;
+        });
+        folderNames.forEach(function(n){
+          if (!n || pickedNameSet[n] || !byName[n]) return;
+          picked.push(byName[n]);
+          pickedNameSet[n] = true;
+        });
+        if (picked.length === 0) {
+          picked = allDatasetVars.slice();
+        }
+        _allVars = picked.map(function(v){
+            var next = Object.assign({}, v);
+            next.displayName = resolveVarDisplayName(v);
+            return next;
+          });
+        var usedExprTokens = Object.create(null);
+        _exprTokenToVar = Object.create(null);
+        _allVars.forEach(function(v) {
+          v.exprToken = resolveVarExprToken(v, usedExprTokens);
+          _exprTokenToVar[String(v.name || '').trim().toUpperCase()] = v.name;
+          _exprTokenToVar[String(v.exprToken || '').trim().toUpperCase()] = v.name;
+          if (v.displayName && isUsableExprToken(v.displayName)) {
+            _exprTokenToVar[String(v.displayName).trim().toUpperCase()] = v.name;
+          }
+        });
+        if (_allVars.length === 0) { alert('��?������ Variable Folders'); return; }
+        _filterQ = '';
+        _rules = [{ id: uid(), conditions: [], expression: '', newCode: '1', newLabel: '' }];
+        buildModal();
+      }
+      function closeModal() {
+        closePopover();
+        closeVarCtxMenu();
+        if (_modal) { _modal.remove(); _modal = null; }
+        _rules = []; _hook = null; _allVars = []; _dragVar = null;
+        _activeExpr = { ruleId: null, textarea: null };
+        _rulesPanelContainer = null;
+        _exprTokenToVar = Object.create(null);
+      }
+      function closePopover() {
+        if (_popover) { _popover.remove(); _popover = null; }
+      }
+      function closeVarCtxMenu() {
+        if (_varCtxMenu) { _varCtxMenu.remove(); _varCtxMenu = null; }
+      }
+
+      function mkInput(ph, type) {
+        var el = document.createElement('input');
+        el.type = type||'text'; el.placeholder = ph;
+        el.style.cssText = 'padding:7px 11px;border:1.5px solid #e5e7eb;border-radius:10px;font-size:13px;font-family:inherit;width:100%;box-sizing:border-box;outline:none;color:#111827;background:#fff';
+        el.addEventListener('focus', function(){ el.style.borderColor='#3b82f6'; el.style.boxShadow='0 0 0 3px rgba(59,130,246,0.1)'; });
+        el.addEventListener('blur',  function(){ el.style.borderColor='#e5e7eb'; el.style.boxShadow='none'; });
+        return el;
+      }
+      function mkBtn(txt, bg, fg, bdr) {
+        var b = document.createElement('button');
+        b.textContent = txt;
+        b.style.cssText = 'padding:9px 20px;border:'+bdr+';background:'+bg+';color:'+fg+';border-radius:10px;cursor:pointer;font-size:13px;font-family:inherit';
+        return b;
+      }
+      function fieldWrap(lbl) {
+        var w = document.createElement('div'); w.style.cssText='display:flex;flex-direction:column;gap:5px;flex:1';
+        var l = document.createElement('div'); l.style.cssText='font-size:10px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:0.08em';
+        l.textContent=lbl; w.appendChild(l); return w;
+      }
+
+      /* �� Build Modal �� */
+      function buildModal() {
+        var bd = document.createElement('div');
+        bd.style.cssText = 'position:fixed;inset:0;z-index:2147483646;background:rgba(15,23,42,0.5);display:flex;align-items:center;justify-content:center;font-family:inherit';
+        bd.addEventListener('click', function(e){ e.stopPropagation(); });
+
+        var box = document.createElement('div');
+        box.style.cssText = 'background:#fff;border-radius:20px;width:900px;max-width:96vw;height:80vh;max-height:660px;display:flex;flex-direction:column;box-shadow:0 32px 80px rgba(0,0,0,0.3);overflow:hidden';
+
+        /* topbar */
+        var tb = document.createElement('div');
+        tb.style.cssText = 'padding:16px 22px;display:flex;align-items:center;justify-content:space-between;flex-shrink:0;background:linear-gradient(135deg,#1e40af 0%,#2563eb 100%)';
+        var tbLeft = document.createElement('div'); tbLeft.style.cssText='display:flex;align-items:center;gap:10px';
+        tbLeft.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round"><rect x="3" y="3" width="18" height="18" rx="3"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="9" y1="3" x2="9" y2="21"/></svg>'
+          +'<span style="font-size:15px;font-weight:700;color:#fff">���?���������</span>'
+          +'<span style="font-size:11px;color:#93c5fd;background:rgba(255,255,255,0.12);padding:2px 8px;border-radius:20px">Recode / Derive</span>';
+        var tbClose = document.createElement('button');
+        tbClose.innerHTML = '&times;'; tbClose.style.cssText='border:none;background:rgba(255,255,255,0.15);cursor:pointer;font-size:18px;color:#fff;width:30px;height:30px;border-radius:8px;line-height:1';
+        tbClose.addEventListener('click', closeModal);
+        tb.appendChild(tbLeft); tb.appendChild(tbClose);
+
+        /* meta row */
+        var meta = document.createElement('div');
+        meta.style.cssText = 'padding:14px 22px;border-bottom:1px solid #f1f5f9;display:flex;gap:14px;flex-shrink:0;background:#fafafa';
+        var nw = fieldWrap('���?���� (NAME)');
+        var ni = mkInput('NEWVAR','text'); ni.id='cx-dv-name'; ni.style.fontWeight='700'; ni.style.letterSpacing='0.04em';
+        nw.appendChild(ni);
+        var lw = fieldWrap('��??�� (LABEL)'); lw.style.flex='2';
+        var li = mkInput('��??����������...','text'); li.id='cx-dv-label';
+        lw.appendChild(li);
+        meta.appendChild(nw); meta.appendChild(lw);
+
+        /* panels */
+        var panels = document.createElement('div'); panels.style.cssText='display:flex;flex:1;overflow:hidden';
+        var leftP = buildLeftPanel();
+        var div = document.createElement('div'); div.style.cssText='width:1px;background:#e2e8f0;flex-shrink:0';
+        var rightP = document.createElement('div'); rightP.id='cx-rules-panel'; rightP.style.cssText='flex:1;display:flex;flex-direction:column;overflow:hidden;min-height:0';
+        buildRulesPanel(rightP);
+        panels.appendChild(leftP); panels.appendChild(div); panels.appendChild(rightP);
+
+        /* footer */
+        var footer = document.createElement('div');
+        footer.style.cssText = 'padding:13px 22px;border-top:1px solid #f1f5f9;display:flex;justify-content:space-between;align-items:center;flex-shrink:0;background:#fafafa';
+        var fn = document.createElement('div'); fn.style.cssText='font-size:11px;color:#94a3b8';
+        fn.innerHTML = '�?�����? Variable Folders ������?�??: �?���?�?������ ��?�?��� Open ���?� Code/Label';
+        var fb = document.createElement('div'); fb.style.cssText='display:flex;gap:10px';
+        var cancelB = mkBtn('���?','#fff','#374151','1.5px solid #e2e8f0');
+        cancelB.addEventListener('click', closeModal);
+        var createB = mkBtn('���?�����','#1d4ed8','#fff','none'); createB.style.fontWeight='700';
+        createB.addEventListener('mouseover', function(){ createB.style.background='#1e40af'; });
+        createB.addEventListener('mouseout',  function(){ createB.style.background='#1d4ed8'; });
+        createB.addEventListener('click', doCreate);
+        fb.appendChild(cancelB); fb.appendChild(createB);
+        footer.appendChild(fn); footer.appendChild(fb);
+
+        box.appendChild(tb); box.appendChild(meta); box.appendChild(panels); box.appendChild(footer);
+        bd.appendChild(box); document.body.appendChild(bd);
+        _modal = bd; ni.focus();
+      }
+
+      /* �� Left Panel �� */
+      function buildLeftPanel() {
+        var lp = document.createElement('div');
+        lp.style.cssText = 'width:240px;flex-shrink:0;display:flex;flex-direction:column;background:#f8fafc;overflow:hidden;min-height:0';
+        var lpTop = document.createElement('div'); lpTop.style.cssText='padding:10px 12px 8px;border-bottom:1px solid #e2e8f0;flex-shrink:0';
+        var lpTitle = document.createElement('div'); lpTitle.style.cssText='font-size:10px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:8px';
+        lpTitle.textContent = '�����? Variable Folders (�?���?�?�� / ��?��� Open)';
+        var srch = document.createElement('input'); srch.type='text'; srch.placeholder='����...';
+        srch.style.cssText = 'padding:6px 10px;border:1.5px solid #e2e8f0;border-radius:8px;font-size:12px;font-family:inherit;outline:none;background:#fff;width:100%;box-sizing:border-box';
+        srch.addEventListener('focus', function(){ srch.style.borderColor='#3b82f6'; });
+        srch.addEventListener('blur',  function(){ srch.style.borderColor='#e2e8f0'; });
+        srch.addEventListener('input', function(){ _filterQ=srch.value.toLowerCase(); renderVarList(listEl); });
+        lpTop.appendChild(lpTitle); lpTop.appendChild(srch);
+        var listEl = document.createElement('div'); listEl.id='cx-var-list'; listEl.style.cssText='flex:1 1 0%;min-height:0;overflow-y:auto;overflow-x:hidden;padding:6px;scrollbar-gutter:stable;-webkit-overflow-scrolling:touch';
+        renderVarList(listEl);
+        lp.appendChild(lpTop); lp.appendChild(listEl); return lp;
+      }
+
+      function renderVarList(container) {
+        container.innerHTML = '';
+        var filtered = _filterQ
+          ? _allVars.filter(function(v){ return v.name.toLowerCase().includes(_filterQ)||(v.displayName||'').toLowerCase().includes(_filterQ)||(v.label||'').toLowerCase().includes(_filterQ)||(v.longName||'').toLowerCase().includes(_filterQ); })
+          : _allVars;
+        filtered.forEach(function(v) {
+          var item = document.createElement('div');
+          item.draggable = true;
+          item.style.cssText = 'display:flex;align-items:flex-start;gap:7px;padding:7px 8px;border-radius:8px;cursor:grab;user-select:none;margin-bottom:2px;border:1.5px solid transparent;transition:all 0.1s';
+          item.addEventListener('mouseover', function(){ item.style.background='#fff'; item.style.borderColor='#bfdbfe'; item.style.boxShadow='0 1px 4px rgba(0,0,0,0.06)'; });
+          item.addEventListener('mouseout',  function(){ item.style.background=''; item.style.borderColor='transparent'; item.style.boxShadow='none'; });
+          var badge = document.createElement('span'); badge.style.cssText=badgeStyle(v)+';margin-top:2px'; badge.textContent=varBadge(v).label;
+          var txt = document.createElement('div'); txt.style.cssText='min-width:0;flex:1';
+          var nm = document.createElement('div'); nm.style.cssText='font-size:12px;font-weight:600;color:#1e293b;overflow:hidden;text-overflow:ellipsis;white-space:nowrap'; nm.textContent=v.displayName||v.exprToken||v.name;
+          var lb = document.createElement('div'); lb.style.cssText='font-size:10px;color:#94a3b8;overflow:hidden;text-overflow:ellipsis;white-space:nowrap'; lb.textContent=v.label||v.longName||'';
+          txt.appendChild(nm); txt.appendChild(lb);
+          item.appendChild(badge); item.appendChild(txt);
+          item.addEventListener('dragstart', function(e){ _dragVar=v; e.dataTransfer.effectAllowed='copy'; e.dataTransfer.setData('text/plain',v.name); item.style.opacity='0.45'; });
+          item.addEventListener('dragend',   function(){ _dragVar=null; item.style.opacity='1'; });
+          item.addEventListener('dblclick', function(e){
+            e.preventDefault();
+            e.stopPropagation();
+            if (!_activeExpr || !_activeExpr.textarea) return;
+            insertVarToken(_activeExpr.textarea, v.exprToken || v.displayName || v.name);
+            _activeExpr.textarea.dispatchEvent(new Event('input', { bubbles: true }));
+            _activeExpr.textarea.focus();
+          });
+          item.addEventListener('contextmenu', function(e){
+            e.preventDefault();
+            e.stopPropagation();
+            showVarContextMenu(v, e.clientX, e.clientY, item);
+          });
+          container.appendChild(item);
+        });
+        if (filtered.length===0) {
+          var em=document.createElement('div'); em.style.cssText='text-align:center;padding:24px;font-size:12px;color:#94a3b8'; em.textContent='��?�����'; container.appendChild(em);
+        }
+      }
+      function showVarContextMenu(v, x, y, anchorEl) {
+        closeVarCtxMenu();
+        closePopover();
+        var menu = document.createElement('div');
+        menu.style.cssText='position:fixed;z-index:2147483647;left:'+x+'px;top:'+y+'px;background:#fff;border:1px solid #e2e8f0;border-radius:10px;box-shadow:0 10px 30px rgba(0,0,0,0.16);padding:6px;min-width:180px;font-family:inherit';
+        var openBtn = document.createElement('button');
+        openBtn.type = 'button';
+        openBtn.textContent = 'Open ����� (�� Code/Label)';
+        openBtn.style.cssText='display:block;width:100%;text-align:left;border:none;background:transparent;padding:7px 10px;border-radius:8px;cursor:pointer;font-size:12px;color:#1e293b';
+        openBtn.addEventListener('mouseover', function(){ openBtn.style.background='#eff6ff'; openBtn.style.color='#1d4ed8'; });
+        openBtn.addEventListener('mouseout', function(){ openBtn.style.background='transparent'; openBtn.style.color='#1e293b'; });
+        openBtn.addEventListener('click', function(e){
+          e.preventDefault();
+          e.stopPropagation();
+          closeVarCtxMenu();
+          showVarCodesPopover(v, anchorEl, { x: x, y: y });
+        });
+        menu.appendChild(openBtn);
+        document.body.appendChild(menu);
+        _varCtxMenu = menu;
+        var mr = menu.getBoundingClientRect();
+        if (mr.right > window.innerWidth) menu.style.left = Math.max(8, window.innerWidth - mr.width - 8) + 'px';
+        if (mr.bottom > window.innerHeight) menu.style.top = Math.max(8, window.innerHeight - mr.height - 8) + 'px';
+        setTimeout(function(){ document.addEventListener('click', function h(){ closeVarCtxMenu(); document.removeEventListener('click',h); }); }, 0);
+      }
+
+      /* �� Rules Panel �� */
+      function insertVarToken(textarea, varName) {
+        var start = textarea.selectionStart || 0;
+        var end = textarea.selectionEnd || start;
+        var left = textarea.value.slice(0, start);
+        var right = textarea.value.slice(end);
+        var needLeft = left.length > 0 && !/\s|\(|&|\||!|=|<|>$/.test(left);
+        var needRight = right.length > 0 && !/^\s|\)|&|\||!|=|<|>/.test(right);
+        var token = (needLeft ? ' ' : '') + varName + (needRight ? ' ' : '');
+        textarea.value = left + token + right;
+        var caret = left.length + token.length;
+        textarea.selectionStart = textarea.selectionEnd = caret;
+      }
+
+      function tokenizeExpr(input) {
+        var src = String(input || '');
+        var i = 0;
+        var out = [];
+        while (i < src.length) {
+          var c = src[i];
+          if (/\s/.test(c)) { i++; continue; }
+          if (c === '(' || c === ')') { out.push({ t: c, v: c, p: i++ }); continue; }
+          if (c === '&' || c === '|') { out.push({ t: 'L', v: src[i + 1] === c ? (i++, c + c) : c, p: i++ }); continue; }
+          if (c === '!') { out.push({ t: src[i + 1] === '=' ? 'O' : 'N', v: src[i + 1] === '=' ? (i++, '!=') : '!', p: i++ }); continue; }
+          if (c === '<' || c === '>') {
+            if (src[i + 1] === '=') { out.push({ t: 'O', v: c + '=', p: i }); i += 2; continue; }
+            if (c === '<' && src[i + 1] === '>') { out.push({ t: 'O', v: '!=', p: i }); i += 2; continue; }
+            out.push({ t: 'O', v: c, p: i++ }); continue;
+          }
+          if (c === '=') { out.push({ t: 'O', v: src[i + 1] === '=' ? (i++, '==') : '=', p: i++ }); continue; }
+          if (c === '"' || c === "'") {
+            var q = c; var p = i++; var str = '';
+            while (i < src.length && src[i] !== q) str += src[i++];
+            if (i >= src.length) throw new Error('Unclosed string at ' + p);
+            i++;
+            out.push({ t: 'S', v: str, p: p });
+            continue;
+          }
+          if (/[0-9.]/.test(c)) {
+            var ns = i;
+            while (i < src.length && /[0-9.]/.test(src[i])) i++;
+            var raw = src.slice(ns, i);
+            if (!/^\d+(\.\d+)?$/.test(raw)) throw new Error('Invalid number "' + raw + '" at ' + ns);
+            out.push({ t: 'M', v: Number(raw), p: ns });
+            continue;
+          }
+          if (/[A-Za-z_$]/.test(c)) {
+            var ws = i;
+            while (i < src.length && /[A-Za-z0-9_$]/.test(src[i])) i++;
+            var w = src.slice(ws, i);
+            var u = w.toUpperCase();
+            if (u === 'AND' || u === 'OR') out.push({ t: 'L', v: u, p: ws });
+            else if (u === 'NOT') out.push({ t: 'N', v: 'NOT', p: ws });
+            else out.push({ t: 'I', v: w, p: ws });
+            continue;
+          }
+          throw new Error('Unexpected "' + c + '" at ' + i);
+        }
+        out.push({ t: 'E', v: '', p: src.length });
+        return out;
+      }
+
+      function parseExpr(tokens) {
+        var p = 0;
+        var used = new Set();
+        function cur() { return tokens[p]; }
+        function eat(t) { return cur().t === t ? tokens[p++] : null; }
+        function req(t, m) { if (!eat(t)) throw new Error(m + ' at ' + cur().p); }
+        function primary() {
+          var t = cur();
+          if (eat('(')) { var e = orExpr(); req(')', 'Expected )'); return e; }
+          if (eat('M')) return { k: 'lit', v: t.v };
+          if (eat('S')) return { k: 'lit', v: t.v };
+          if (eat('I')) { used.add(t.v); return { k: 'var', n: t.v }; }
+          throw new Error('Expected value at ' + t.p);
+        }
+        function cmpExpr() {
+          var l = primary();
+          var o = cur().t === 'O' ? tokens[p++] : null;
+          if (!o) return l;
+          return { k: 'cmp', o: o.v, l: l, r: primary() };
+        }
+        function unary() { return eat('N') ? { k: 'not', e: unary() } : cmpExpr(); }
+        function andExpr() { var n = unary(); while (cur().t === 'L' && (cur().v === '&' || cur().v === '&&' || cur().v === 'AND')) { p++; n = { k: 'and', l: n, r: unary() }; } return n; }
+        function orExpr() { var n = andExpr(); while (cur().t === 'L' && (cur().v === '|' || cur().v === '||' || cur().v === 'OR')) { p++; n = { k: 'or', l: n, r: andExpr() }; } return n; }
+        var ast = orExpr();
+        if (cur().t !== 'E') throw new Error('Unexpected token at ' + cur().p);
+        return { ast: ast, used: Array.from(used) };
+      }
+
+      function toNum(v) { var n = Number(v); return Number.isFinite(n) ? n : NaN; }
+      function cmpVals(a, b, op) {
+        var an = toNum(a), bn = toNum(b), both = Number.isFinite(an) && Number.isFinite(bn);
+        if (op === '=' || op === '==') return both ? an === bn : String(a) === String(b);
+        if (op === '!=') return both ? an !== bn : String(a) !== String(b);
+        if (!both) return false;
+        if (op === '>') return an > bn;
+        if (op === '>=') return an >= bn;
+        if (op === '<') return an < bn;
+        if (op === '<=') return an <= bn;
+        return false;
+      }
+
+      function evalExprAst(node, row) {
+        if (!node) return false;
+        if (node.k === 'lit') return node.v;
+        if (node.k === 'var') return row[node.n];
+        if (node.k === 'cmp') return cmpVals(evalExprAst(node.l, row), evalExprAst(node.r, row), node.o);
+        if (node.k === 'not') return !Boolean(evalExprAst(node.e, row));
+        if (node.k === 'and') return Boolean(evalExprAst(node.l, row)) && Boolean(evalExprAst(node.r, row));
+        if (node.k === 'or') return Boolean(evalExprAst(node.l, row)) || Boolean(evalExprAst(node.r, row));
+        return false;
+      }
+
+      function validateExpression(expr) {
+        var source = String(expr || '').trim();
+        if (!source) return { ok: false, error: 'Expression is required' };
+        try {
+          var parsed = parseExpr(tokenizeExpr(source));
+          var miss = parsed.used.filter(function (name) { return !toExprVarName(name); });
+          if (miss.length > 0) return { ok: false, error: 'Unknown variable: ' + miss.join(', ') };
+          return { ok: true, ast: normalizeExprAst(parsed.ast), used: parsed.used };
+        } catch (err) {
+          return { ok: false, error: err && err.message ? err.message : 'Invalid expression' };
+        }
+      }
+
+      function buildRulesPanel(container) {
+        container.innerHTML = '';
+        var rHdr = document.createElement('div'); rHdr.style.cssText='padding:10px 16px 8px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid #f1f5f9;flex-shrink:0';
+        var rTitle = document.createElement('div'); rTitle.style.cssText='font-size:10px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:0.08em'; rTitle.textContent='Output Codes';
+        var addBtn = document.createElement('button'); addBtn.style.cssText='padding:4px 12px;border:1.5px solid #e2e8f0;background:#fff;border-radius:8px;cursor:pointer;font-size:11px;font-weight:600;color:#475569;font-family:inherit'; addBtn.innerHTML='+ ���� Code';
+        addBtn.addEventListener('mouseover', function(){ addBtn.style.borderColor='#93c5fd'; addBtn.style.color='#1d4ed8'; });
+        addBtn.addEventListener('mouseout',  function(){ addBtn.style.borderColor='#e2e8f0'; addBtn.style.color='#475569'; });
+        addBtn.addEventListener('click', function(){ _rules.push({id:uid(),conditions:[],expression:'',newCode:String(_rules.length+1),newLabel:''}); buildRulesPanel(container); });
+        rHdr.appendChild(rTitle); rHdr.appendChild(addBtn);
+
+        var rBody = document.createElement('div'); rBody.id='cx-rules-body'; rBody.style.cssText='flex:1 1 0%;min-height:0;overflow-y:auto;overflow-x:hidden;scrollbar-gutter:stable;-webkit-overflow-scrolling:touch';
+        var rInner = document.createElement('div'); rInner.style.cssText='display:flex;flex-direction:column;gap:10px;padding:12px 16px;min-height:min-content';
+
+        _rules.forEach(function(rule, rIdx) {
+          var card = document.createElement('div'); card.style.cssText='background:#f8fafc;border:1.5px solid #e2e8f0;border-radius:12px;padding:12px 14px;display:flex;flex-direction:column;gap:10px';
+
+          /* top row */
+          var topRow = document.createElement('div'); topRow.style.cssText='display:flex;align-items:center;gap:8px';
+          var ncL = document.createElement('div'); ncL.style.cssText='font-size:10px;font-weight:700;color:#64748b;white-space:nowrap;text-transform:uppercase;letter-spacing:0.05em'; ncL.textContent='Code ����';
+          var ncI = document.createElement('input'); ncI.type='number'; ncI.value=rule.newCode; ncI.placeholder='1';
+          ncI.style.cssText='width:64px;padding:6px 8px;border:1.5px solid #e2e8f0;border-radius:8px;font-size:14px;font-weight:700;font-family:inherit;text-align:center;outline:none;background:#fff';
+          ncI.addEventListener('focus', function(){ ncI.style.borderColor='#3b82f6'; }); ncI.addEventListener('blur', function(){ ncI.style.borderColor='#e2e8f0'; });
+          ncI.addEventListener('input', function(){ _rules[rIdx].newCode=ncI.value; });
+          var arrow = document.createElement('div'); arrow.style.flexShrink='0'; arrow.innerHTML='<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#94a3b8" stroke-width="2" stroke-linecap="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>';
+          var nlI = document.createElement('input'); nlI.type='text'; nlI.value=rule.newLabel; nlI.placeholder='Label �? Code ���...';
+          nlI.style.cssText='flex:1;padding:6px 10px;border:1.5px solid #e2e8f0;border-radius:8px;font-size:13px;font-family:inherit;outline:none;background:#fff';
+          nlI.addEventListener('focus', function(){ nlI.style.borderColor='#3b82f6'; }); nlI.addEventListener('blur', function(){ nlI.style.borderColor='#e2e8f0'; });
+          nlI.addEventListener('input', function(){ _rules[rIdx].newLabel=nlI.value; });
+          var copyB = document.createElement('button'); copyB.textContent='Copy';
+          copyB.style.cssText='border:1px solid #dbeafe;background:#eff6ff;cursor:pointer;color:#1d4ed8;padding:4px 8px;border-radius:6px;flex-shrink:0;font-size:11px;font-weight:600';
+          copyB.addEventListener('click', function(){
+            var nextNum = _rules.reduce(function(mx, rr){
+              var n = Number(rr.newCode);
+              return Number.isFinite(n) ? Math.max(mx, n) : mx;
+            }, 0) + 1;
+            var cloned = {
+              id: uid(),
+              conditions: JSON.parse(JSON.stringify(rule.conditions || [])),
+              expression: String(rule.expression || ''),
+              newCode: String(nextNum),
+              newLabel: String(rule.newLabel || '')
+            };
+            _rules.splice(rIdx + 1, 0, cloned);
+            buildRulesPanel(container);
+          });
+          var delB = document.createElement('button'); delB.innerHTML='<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg>';
+          delB.style.cssText='border:none;background:none;cursor:pointer;color:#cbd5e1;padding:4px;border-radius:6px;flex-shrink:0;display:flex;align-items:center';
+          delB.addEventListener('mouseover', function(){ delB.style.background='#fef2f2'; delB.style.color='#ef4444'; }); delB.addEventListener('mouseout', function(){ delB.style.background='none'; delB.style.color='#cbd5e1'; });
+          delB.addEventListener('click', function(){ _rules.splice(rIdx,1); buildRulesPanel(container); });
+          topRow.appendChild(ncL); topRow.appendChild(ncI); topRow.appendChild(arrow); topRow.appendChild(nlI); topRow.appendChild(copyB); topRow.appendChild(delB);
+
+          /* conditions */
+          var condHdr = document.createElement('div'); condHdr.style.cssText='font-size:10px;font-weight:600;color:#94a3b8;letter-spacing:0.04em'; condHdr.textContent='Expression ���?� � ������?��, �?���?�?�����������, ��?��� Open ���?� Code/Label';
+          var exprTa = document.createElement('textarea');
+          exprTa.rows = 3;
+          exprTa.value = rule.expression || '';
+          exprTa.placeholder = '�� SQ1=1 & SQ2=2 ���� (SQ1=1 | SQ1=2) & SQ3!=9';
+          exprTa.style.cssText = 'width:100%;min-height:62px;border:1.5px solid #e2e8f0;border-radius:8px;padding:8px 10px;font-size:12px;line-height:1.5;font-family:ui-monospace,Consolas,monospace;box-sizing:border-box;outline:none;background:#fff';
+          var exprStatus = document.createElement('div');
+          exprStatus.style.cssText = 'font-size:11px;line-height:1.4';
+          function refreshExprStatus() {
+            var result = validateExpression(exprTa.value);
+            if (result.ok) {
+              exprStatus.style.color = '#16a34a';
+              exprStatus.textContent = '�������? | vars: ' + (result.used.length ? result.used.join(', ') : '-');
+              exprTa.style.borderColor = '#86efac';
+            } else {
+              exprStatus.style.color = '#dc2626';
+              exprStatus.textContent = 'Error: ' + result.error;
+              exprTa.style.borderColor = '#fca5a5';
+            }
+          }
+          exprTa.addEventListener('focus', function(){ _activeExpr = { ruleId: rule.id, textarea: exprTa }; });
+          exprTa.addEventListener('input', function(){ _rules[rIdx].expression = exprTa.value; refreshExprStatus(); });
+          exprTa.addEventListener('dragover', function(e){ if(!_dragVar) return; e.preventDefault(); e.dataTransfer.dropEffect='copy'; });
+          exprTa.addEventListener('drop', function(e){
+            e.preventDefault();
+            if(!_dragVar) return;
+            insertVarToken(exprTa, _dragVar.exprToken || _dragVar.displayName || _dragVar.name);
+            exprTa.dispatchEvent(new Event('input', { bubbles: true }));
+            exprTa.focus();
+          });
+          refreshExprStatus();
+          card.appendChild(topRow); card.appendChild(condHdr); card.appendChild(exprTa); card.appendChild(exprStatus);
+          rInner.appendChild(card);
+        });
+
+        if (_rules.length===0) {
+          var em2=document.createElement('div'); em2.style.cssText='text-align:center;padding:48px 20px;color:#94a3b8;font-size:13px'; em2.innerHTML='<div style="font-size:36px;margin-bottom:10px">??</div>�� "+ ���� Code" �������?����'; rInner.appendChild(em2);
+        }
+        rBody.appendChild(rInner);
+        container.appendChild(rHdr); container.appendChild(rBody);
+      }
+
+      /* �� Condition chips �� */
+      function renderConditionChips(dz, rule, rIdx, container) {
+        dz.innerHTML = '';
+        rule.conditions.forEach(function(cond, cIdx) {
+          var srcV = _allVars.find(function(v){ return v.name===cond.varName; });
+          if (!srcV) return;
+          if (cIdx>0) {
+            var andTag=document.createElement('span'); andTag.style.cssText='font-size:9px;font-weight:700;color:#7c3aed;background:#f3e8ff;padding:3px 8px;border-radius:20px;letter-spacing:0.06em;flex-shrink:0'; andTag.textContent='AND'; dz.appendChild(andTag);
+          }
+          var hasCode = cond.codes.length > 0;
+          var chip = document.createElement('div');
+          chip.style.cssText = 'display:inline-flex;align-items:center;gap:5px;padding:4px 8px 4px 6px;border-radius:8px;background:#fff;border:1.5px solid '+(hasCode?'#bfdbfe':'#fca5a5')+';cursor:pointer;user-select:none;max-width:260px';
+          chip.title = '��?�������?/��� Code';
+          var cb=document.createElement('span'); cb.style.cssText=badgeStyle(srcV); cb.textContent=varBadge(srcV).label;
+          var cn=document.createElement('span'); cn.style.cssText='font-size:11px;font-weight:700;color:#1e293b'; cn.textContent=cond.displayName||srcV.displayName||srcV.name||cond.varName;
+          var eq=document.createElement('span'); eq.style.cssText='font-size:11px;color:#94a3b8;margin:0 1px'; eq.textContent='=';
+          var cv=document.createElement('span'); cv.style.cssText='font-size:11px;font-weight:600;max-width:100px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+          if (!hasCode) { cv.textContent='��?���?'; cv.style.color='#ef4444'; }
+          else { cv.textContent=cond.codes.join(', '); cv.style.color='#1d4ed8'; }
+          var cx=document.createElement('span'); cx.style.cssText='font-size:14px;color:#94a3b8;line-height:1;cursor:pointer;margin-left:2px;flex-shrink:0'; cx.textContent='?';
+          cx.addEventListener('click', function(e){ e.stopPropagation(); rule.conditions.splice(cIdx,1); buildRulesPanel(container); });
+          chip.appendChild(cb); chip.appendChild(cn); chip.appendChild(eq); chip.appendChild(cv); chip.appendChild(cx);
+          chip.addEventListener('click', function(e){ e.stopPropagation(); showCodePopover(srcV, cond, container, chip); });
+          dz.appendChild(chip);
+        });
+        if (rule.conditions.length===0) {
+          var hint=document.createElement('div'); hint.style.cssText='font-size:11px;color:#cbd5e1;pointer-events:none'; hint.textContent='�?�����?�������?�����'; dz.appendChild(hint);
+        }
+      }
+
+      /* �� Code Popover �� */
+      function showVarCodesPopover(srcV, anchorEl, at) {
+        closePopover();
+        var pop = document.createElement('div');
+        pop.style.cssText = 'position:fixed;z-index:2147483647;background:#fff;border:1.5px solid #e2e8f0;border-radius:12px;padding:8px;min-width:300px;max-width:420px;max-height:320px;overflow-y:auto;box-shadow:0 12px 40px rgba(0,0,0,0.18);font-family:inherit';
+        pop.addEventListener('click', function(e){ e.stopPropagation(); });
+
+        var ph = document.createElement('div');
+        ph.style.cssText='font-size:11px;font-weight:700;color:#475569;padding:2px 4px 8px;border-bottom:1px solid #f1f5f9;margin-bottom:6px;display:flex;justify-content:space-between;align-items:center;gap:8px';
+        ph.innerHTML = '<span>' + (srcV.displayName||srcV.exprToken||srcV.name) + ' &nbsp;�&nbsp; Code / Label</span><span style="font-weight:500;color:#94a3b8">����?�?��</span>';
+        var phX = document.createElement('span');
+        phX.textContent='?';
+        phX.style.cssText='cursor:pointer;color:#94a3b8;font-size:16px';
+        phX.addEventListener('click', closePopover);
+        ph.appendChild(phX);
+        pop.appendChild(ph);
+
+        var entries = Object.entries(srcV.valueLabels || {}).sort(function(a,b){ return Number(a[0]) - Number(b[0]); });
+        if (entries.length === 0) {
+          var empty = document.createElement('div');
+          empty.style.cssText='padding:10px 6px;color:#94a3b8;font-size:12px';
+          empty.textContent='������������ code';
+          pop.appendChild(empty);
+        } else {
+          entries.forEach(function(pair) {
+            var row = document.createElement('div');
+            row.style.cssText='display:flex;align-items:flex-start;gap:10px;width:100%;text-align:left;padding:6px 8px;border-radius:8px';
+            row.addEventListener('mouseover', function(){ row.style.background='#f8fafc'; });
+            row.addEventListener('mouseout', function(){ row.style.background='transparent'; });
+            var code = document.createElement('span');
+            code.style.cssText='font-weight:700;color:#1d4ed8;min-width:34px;font-size:12px;line-height:1.4';
+            code.textContent = pair[0];
+            var lbl = document.createElement('span');
+            lbl.style.cssText='color:#334155;font-size:12px;line-height:1.4;flex:1;white-space:normal;word-break:break-word';
+            lbl.textContent = String(pair[1]);
+            row.appendChild(code);
+            row.appendChild(lbl);
+            pop.appendChild(row);
+          });
+        }
+
+        document.body.appendChild(pop); _popover = pop;
+        var rect = anchorEl ? anchorEl.getBoundingClientRect() : { left: at && at.x ? at.x : 8, right: at && at.x ? at.x : 8, top: at && at.y ? at.y : 8, bottom: at && at.y ? at.y : 8 };
+        var left = (at && typeof at.x === 'number') ? at.x : rect.left;
+        var top = (at && typeof at.y === 'number') ? at.y : (rect.bottom + 6);
+        pop.style.left=left+'px'; pop.style.top=top+'px';
+        var pr = pop.getBoundingClientRect();
+        if (pr.right>window.innerWidth)  pop.style.left=Math.max(8, ((at && typeof at.x === 'number') ? at.x - pr.width : rect.right-pr.width))+'px';
+        if (pr.bottom>window.innerHeight) pop.style.top=Math.max(8, ((at && typeof at.y === 'number') ? at.y - pr.height : rect.top-pr.height-6))+'px';
+        setTimeout(function(){ document.addEventListener('click', function h(){ closePopover(); document.removeEventListener('click',h); }); }, 0);
+      }
+      function showCodePopover(srcV, cond, rulesContainer, anchorEl) {
+        closePopover();
+        var pop = document.createElement('div');
+        pop.style.cssText = 'position:fixed;z-index:2147483647;background:#fff;border:1.5px solid #e2e8f0;border-radius:12px;padding:8px;min-width:260px;max-width:340px;max-height:300px;overflow-y:auto;box-shadow:0 12px 40px rgba(0,0,0,0.18);font-family:inherit';
+        pop.addEventListener('click', function(e){ e.stopPropagation(); });
+
+        var ph = document.createElement('div'); ph.style.cssText='font-size:11px;font-weight:700;color:#475569;padding:2px 4px 8px;border-bottom:1px solid #f1f5f9;margin-bottom:6px;display:flex;justify-content:space-between;align-items:center';
+        ph.innerHTML = '<span>' + (cond.displayName||srcV.displayName||srcV.name||cond.varName) + ' &nbsp;�&nbsp; ���? Code (���?������)</span>';
+        var phX=document.createElement('span'); phX.textContent='?'; phX.style.cssText='cursor:pointer;color:#94a3b8;font-size:16px'; phX.addEventListener('click', closePopover);
+        ph.appendChild(phX); pop.appendChild(ph);
+
+        var entries = Object.entries(srcV.valueLabels).sort(function(a,b){ return Number(a[0])-Number(b[0]); });
+        entries.forEach(function(pair) {
+          var row=document.createElement('label'); row.style.cssText='display:flex;align-items:center;gap:8px;padding:5px 6px;border-radius:6px;cursor:pointer;font-size:12px;color:#1e293b';
+          row.addEventListener('mouseover', function(){ row.style.background='#f8fafc'; }); row.addEventListener('mouseout', function(){ row.style.background=''; });
+          var cb=document.createElement('input'); cb.type='checkbox'; cb.value=pair[0]; cb.checked=cond.codes.indexOf(pair[0])!==-1;
+          cb.style.cssText='width:14px;height:14px;cursor:pointer;accent-color:#1d4ed8;flex-shrink:0';
+          cb.addEventListener('change', function(){
+            if (cb.checked) { if (cond.codes.indexOf(pair[0])===-1) cond.codes.push(pair[0]); }
+            else { cond.codes=cond.codes.filter(function(c){ return c!==pair[0]; }); }
+            buildRulesPanel(rulesContainer);
+            closePopover();
+          });
+          var cNum=document.createElement('span'); cNum.style.cssText='font-weight:700;color:#1d4ed8;min-width:28px;font-size:12px'; cNum.textContent=pair[0];
+          var cLbl=document.createElement('span'); cLbl.style.cssText='color:#475569;flex:1'; cLbl.textContent=String(pair[1]);
+          row.appendChild(cb); row.appendChild(cNum); row.appendChild(cLbl); pop.appendChild(row);
+        });
+
+        document.body.appendChild(pop); _popover = pop;
+        var rect = anchorEl.getBoundingClientRect();
+        pop.style.left=rect.left+'px'; pop.style.top=(rect.bottom+6)+'px';
+        var pr = pop.getBoundingClientRect();
+        if (pr.right>window.innerWidth)  pop.style.left=(rect.right-pr.width)+'px';
+        if (pr.bottom>window.innerHeight) pop.style.top=(rect.top-pr.height-6)+'px';
+        setTimeout(function(){ document.addEventListener('click', function h(){ closePopover(); document.removeEventListener('click',h); }); }, 0);
+      }
+
+      /* �� Create Variable �� */
+      function doCreate() {
+        var nameEl=document.getElementById('cx-dv-name'); var labelEl=document.getElementById('cx-dv-label');
+        var varName=nameEl?nameEl.value.trim().toUpperCase():'';
+        var varLabel=labelEl?labelEl.value.trim():'';
+        if (!varName) { alert('��?��??��?����'); return; }
+        if (!/^[A-Z_][A-Z0-9_]*$/.test(varName)) { alert('���?�?��??��� A-Z ���� _ �������?�� A-Z, 0-9, _'); return; }
+        if (_hook.data.variables.some(function(v){ return v.name===varName; })) { alert('����� '+varName+' ����������'); return; }
+        var validRules = [];
+        var exprErrors = [];
+        _rules.forEach(function(r, idx){
+          if (r.newCode==='') return;
+          var expr = String(r.expression || '').trim();
+          if (expr) {
+            var check = validateExpression(expr);
+            if (!check.ok) {
+              exprErrors.push('Rule #' + (idx + 1) + ': ' + check.error);
+              return;
+            }
+            validRules.push({ newCode: r.newCode, newLabel: r.newLabel, mode: 'expr', ast: check.ast });
+            return;
+          }
+          if (r.conditions.length>0 && r.conditions.every(function(c){ return c.codes.length>0; })) {
+            validRules.push({ newCode: r.newCode, newLabel: r.newLabel, mode: 'chip', conditions: r.conditions });
+          }
+        });
+        if (exprErrors.length > 0) { alert('Expression Error:\\n' + exprErrors.join('\\n')); return; }
+        if (validRules.length===0) { alert('�?????�?�?��??�?���?? 1 �� �??�??� expression ????????� chip �?��?�'); return; }
+        var newVL={};
+        validRules.forEach(function(r){ if(!(r.newCode in newVL)) newVL[r.newCode]=r.newLabel||('Code '+r.newCode); });
+        var ds=_hook.data;
+        var newCases=ds.cases.map(function(row){
+          for (var ri=0;ri<validRules.length;ri++) {
+            var rule=validRules[ri];
+            var allMatch = false;
+            if (rule.mode === 'expr') {
+              allMatch = !!evalExprAst(rule.ast, row);
+            } else {
+              allMatch = rule.conditions.every(function(cond){
+                var raw=row[cond.varName]; if(raw===null||raw===undefined) return false;
+                return cond.codes.some(function(code){ return Number(raw)===Number(code); });
+              });
+            }
+            if (allMatch) { var obj=Object.assign({},row); obj[varName]=Number(rule.newCode); return obj; }
+          }
+          var obj2=Object.assign({},row); obj2[varName]=null; return obj2;
+        });
+        var newVar={name:varName,longName:varName,label:varLabel||varName,isString:false,isGroupedMA:false,valueLabels:newVL,_derived:true};
+        _hook.dispatch(function(prev){ if(!prev) return prev; return Object.assign({},prev,{variables:prev.variables.concat([newVar]),cases:newCases}); });
+        var matched=newCases.filter(function(r){ return r[varName]!==null; }).length;
+        closeModal();
+        var t=document.createElement('div'); t.style.cssText='position:fixed;bottom:24px;left:50%;transform:translateX(-50%);z-index:2147483647;background:#166534;color:#fff;padding:9px 22px;border-radius:20px;font-size:12px;font-family:inherit;box-shadow:0 4px 20px rgba(0,0,0,0.2);pointer-events:none';
+        t.textContent='? ���? '+varName+' �������� � matched '+matched+'/'+newCases.length+' cases';
+        document.body.appendChild(t); setTimeout(function(){ t.remove(); }, 3500);
+      }
+
+      document.addEventListener('keydown', function(e){
+        if (e.key==='Escape') { if(_varCtxMenu) closeVarCtxMenu(); else if(_popover) closePopover(); else if(_modal) closeModal(); }
+      });
+
+    })();
+    </script>
+  </body>
+</html>
+
+
+

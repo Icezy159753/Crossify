@@ -1,0 +1,29 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-gray-50 text-gray-900 font-sans;
+    line-height: 1.6;
+  }
+
+  /* Ensure Thai text renders correctly with proper line height */
+  :lang(th), [lang="th"] {
+    line-height: 1.7;
+    word-break: normal;
+    overflow-wrap: break-word;
+  }
+
+  /* Allow text selection inside input/textarea even when parent has select-none */
+  input, textarea {
+    user-select: text !important;
+    -webkit-user-select: text !important;
+  }
+}
+
+@keyframes indeterminate {
+  0%   { transform: translateX(-100%) scaleX(0.4); }
+  50%  { transform: translateX(0%)    scaleX(0.6); }
+  100% { transform: translateX(100%)  scaleX(0.4); }
+}
