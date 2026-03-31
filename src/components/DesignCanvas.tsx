@@ -21,7 +21,6 @@ export interface AxisDropTarget {
 
 function axisTargetWithFolderDrag(event: DragEvent, base: AxisDropTarget): AxisDropTarget {
   const folder = parseFolderVarListDrag(event)
-  console.log('[AxisDrop] parseFolderVarListDrag=', folder, 'base=', base)
   return folder && folder.length > 0 ? { ...base, folderNames: folder } : base
 }
 
@@ -68,6 +67,9 @@ const AxisDropZone = memo(function AxisDropZone({
   onModeChange,
 }: AxisDropZoneProps) {
   const [over, setOver] = useState(false)
+  /** Key of the chip currently being drag-reordered (e.g. "0-1"). While set, that chip collapses
+   *  to 0-height so the cursor can freely reach chips above or below it. */
+  const [draggingChipKey, setDraggingChipKey] = useState<string | null>(null)
   const isTop = side === 'top'
   const varNames = flattenAxisSpec(branches)
 
@@ -106,6 +108,12 @@ const AxisDropZone = memo(function AxisDropZone({
     setOver(true)
   }
 
+  const handleZoneDragLeave = useCallback((event: React.DragEvent) => {
+    const next = event.relatedTarget as Node | null
+    if (next && event.currentTarget.contains(next)) return
+    setOver(false)
+  }, [])
+
   const handleDropEmpty = useCallback(
     (event: React.DragEvent) => {
       event.preventDefault()
@@ -127,7 +135,7 @@ const AxisDropZone = memo(function AxisDropZone({
     <div
       onClick={onActivateQuickTarget}
       onDragOver={handleDragOver}
-      onDragLeave={() => setOver(false)}
+      onDragLeave={handleZoneDragLeave}
       onDrop={handleDropEmpty}
       className={`border-2 rounded-xl transition-colors bg-white ${over ? 'border-blue-400 bg-blue-50' : isQuickTarget ? 'border-blue-500 bg-blue-50/60 shadow-[0_0_0_3px_rgba(59,130,246,0.08)]' : 'border-blue-200'} ${isTop ? 'w-full min-w-0 max-w-full overflow-hidden p-4' : 'flex-shrink-0 p-3'}`}
       style={isTop ? undefined : { height: 390, minWidth: 240, maxWidth: 320, width: 'min(100%,320px)', overflow: 'hidden' }}
@@ -144,11 +152,12 @@ const AxisDropZone = memo(function AxisDropZone({
           </div>
           {varNames.length > 0 ? (
             <div
+              data-crossify-axis-scroll={isTop ? 'top' : 'side'}
               onDragOver={handleDragOver}
               onDrop={handleDropEmpty}
               className={
                 isTop
-                  ? 'overflow-x-auto flex min-h-[84px] flex-nowrap items-start gap-px pb-1.5'
+                  ? 'overflow-x-auto flex min-h-[84px] flex-nowrap items-start gap-1 pb-1.5'
                   : 'flex flex-col items-start gap-1 pr-1'
               }
               style={isTop ? { overflowX: 'auto', scrollbarWidth: 'thin' } : { flex: '1 1 0%', minHeight: 0, overflowY: 'auto', scrollbarWidth: 'thin' }}
@@ -177,15 +186,46 @@ const AxisDropZone = memo(function AxisDropZone({
                       onDrop(axisTargetWithFolderDrag(event, { branchIndex, placement: 'before' }))
                     }}
                     className={isTop
-                      ? `w-0.5 rounded ${mode === 'add' ? 'hover:bg-blue-200/70' : 'pointer-events-none opacity-0'}`
-                      : `h-1 rounded ${mode === 'add' ? 'hover:bg-blue-200/70' : 'pointer-events-none opacity-0'}`
+                      ? `min-w-[10px] w-2 shrink-0 self-stretch rounded ${mode === 'add' ? 'hover:bg-blue-200/70' : ''}`
+                      : `min-h-[12px] h-3 w-full shrink-0 rounded ${mode === 'add' ? 'hover:bg-blue-200/70' : ''}`
                     }
                   />
-                  <div className="flex w-full min-w-0 flex-col gap-px">
+                  <div
+                    className={`flex w-full min-w-0 flex-col ${isTop ? 'gap-px' : 'gap-1.5'}`}
+                  >
                     {branch.map((name, itemIndex) => {
                       const flatIndex = varNames.indexOf(name)
                       const tone = getVarTone(name)
                       const axisPayload = JSON.stringify({ side, branchIndex, itemIndex })
+
+                      const handleAxisChipDragOver = (event: DragEvent) => {
+                        const axisDrag = parseAxisDrag(event)
+                        if (axisDrag) {
+                          event.preventDefault()
+                          event.stopPropagation()
+                          event.dataTransfer.dropEffect = 'move'
+                          return
+                        }
+                        handleDragOver(event)
+                      }
+
+                      const handleAxisChipDrop = (event: DragEvent) => {
+                        event.preventDefault()
+                        event.stopPropagation()
+                        setOver(false)
+                        setDraggingChipKey(null)
+                        const axisDrag = parseAxisDrag(event)
+                        if (axisDrag) {
+                          /* Top-half of chip = insert BEFORE; bottom-half = insert AFTER */
+                          const rect = (event.currentTarget as HTMLElement).getBoundingClientRect()
+                          const placement = isTop
+                            ? event.clientX < rect.left + rect.width / 2 ? 'before' : 'after'
+                            : event.clientY < rect.top + rect.height / 2 ? 'before' : 'after'
+                          onReorder(axisDrag, { branchIndex, itemIndex, placement })
+                          return
+                        }
+                        onDrop(axisTargetWithFolderDrag(event, { targetVar: name }))
+                      }
 
                       return (
                         <div
@@ -197,30 +237,19 @@ const AxisDropZone = memo(function AxisDropZone({
                             event.dataTransfer.effectAllowed = 'move'
                             event.dataTransfer.setData(AXIS_ITEM_MIME, axisPayload)
                             event.dataTransfer.setData('text/plain', `${AXIS_TEXT_PREFIX}${axisPayload}`)
+                            const key = `${branchIndex}-${itemIndex}`
+                            /* Collapse this chip after the browser has captured the drag ghost. */
+                            setTimeout(() => setDraggingChipKey(key), 0)
                           }}
-                          onDragOver={event => {
-                            const axisDrag = parseAxisDrag(event)
-                            if (axisDrag) {
-                              event.preventDefault()
-                              event.stopPropagation()
-                              event.dataTransfer.dropEffect = 'move'
-                              return
-                            }
-                            handleDragOver(event)
-                          }}
-                          onDrop={event => {
-                            event.preventDefault()
-                            event.stopPropagation()
-                            setOver(false)
-                            const axisDrag = parseAxisDrag(event)
-                            if (axisDrag) {
-                              onReorder(axisDrag, { branchIndex, itemIndex, placement: 'before' })
-                              return
-                            }
-                            onDrop(axisTargetWithFolderDrag(event, { targetVar: name }))
-                          }}
+                          onDragEnd={() => setDraggingChipKey(null)}
+                          onDragOver={handleAxisChipDragOver}
+                          onDrop={handleAxisChipDrop}
                           className={`group relative cursor-pointer transition-all shadow-sm ${isTop ? 'min-h-[42px] min-w-[86px] px-2 py-1.5 rounded-2xl' : 'w-full min-w-0 max-w-full px-2 py-1.5 rounded-2xl'} ${tone.cls} ${selectedVar === name ? 'ring-2 ring-offset-1 ring-blue-300' : 'hover:-translate-y-[1px] hover:shadow-md'}`}
-                          style={isTop ? undefined : { height: 34, minHeight: 34, maxHeight: 34, flexShrink: 0 }}
+                          style={
+                            draggingChipKey === `${branchIndex}-${itemIndex}`
+                              ? { height: 0, minHeight: 0, overflow: 'hidden', opacity: 0, padding: 0, margin: 0 }
+                              : isTop ? undefined : { height: 34, minHeight: 34, maxHeight: 34, flexShrink: 0 }
+                          }
                         >
                           <div className={`flex items-center gap-1.5 ${isTop ? '' : 'min-w-0'}`}>
                             <span className="inline-flex shrink-0 items-center justify-center rounded-full bg-white/80 px-1.5 py-0.5 text-[9px] font-bold text-slate-700 border border-white/70 shadow-sm">
@@ -232,7 +261,11 @@ const AxisDropZone = memo(function AxisDropZone({
                               {name}
                             </div>
                           </div>
-                          <div className={`absolute ${isTop ? 'bottom-0.5 right-0.5 flex gap-0.5 opacity-0 group-hover:opacity-100' : 'top-1/2 right-1 -translate-y-1/2 flex gap-0.5 opacity-70 group-hover:opacity-100'}`}>
+                          <div
+                            className={`absolute ${isTop ? 'bottom-0.5 right-0.5 flex gap-0.5 opacity-0 group-hover:opacity-100' : 'top-1/2 right-1 -translate-y-1/2 flex gap-0.5 opacity-70 group-hover:opacity-100'}`}
+                            onDragOver={handleAxisChipDragOver}
+                            onDrop={handleAxisChipDrop}
+                          >
                             <button
                               type="button"
                               draggable={false}
@@ -295,8 +328,8 @@ const AxisDropZone = memo(function AxisDropZone({
                       onDrop(axisTargetWithFolderDrag(event, { branchIndex, placement: 'after' }))
                     }}
                     className={isTop
-                      ? `w-0.5 rounded ${mode === 'add' ? 'hover:bg-blue-200/70' : 'pointer-events-none opacity-0'}`
-                      : `h-1 rounded ${mode === 'add' ? 'hover:bg-blue-200/70' : 'pointer-events-none opacity-0'}`
+                      ? `min-w-[10px] w-2 shrink-0 self-stretch rounded ${mode === 'add' ? 'hover:bg-blue-200/70' : ''}`
+                      : `min-h-[12px] h-3 w-full shrink-0 rounded ${mode === 'add' ? 'hover:bg-blue-200/70' : ''}`
                     }
                   />
                 </div>

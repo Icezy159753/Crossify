@@ -759,6 +759,28 @@
     (function () {
       'use strict';
 
+      function sideScrollContainer(zone) {
+        var byData = zone.querySelector('[data-crossify-axis-scroll="side"]');
+        if (byData) return byData;
+        var inner = zone.querySelector('.flex-1.min-w-0');
+        if (inner) {
+          var c = inner.querySelector('.flex.flex-col.items-start.gap-1');
+          if (c) return c;
+        }
+        return zone.querySelector('.flex.flex-col.items-start.gap-1');
+      }
+
+      function topScrollContainer(zone) {
+        var byData = zone.querySelector('[data-crossify-axis-scroll="top"]');
+        if (byData) return byData;
+        var all = zone.querySelectorAll('[class*="overflow-x-auto"]');
+        for (var j = 0; j < all.length; j++) {
+          var cn = all[j].className || '';
+          if (typeof cn === 'string' && cn.indexOf('flex-nowrap') !== -1) return all[j];
+        }
+        return null;
+      }
+
       function applyAxisFixes() {
         var labels = document.querySelectorAll('.font-bold.uppercase.tracking-wide');
         for (var i = 0; i < labels.length; i++) {
@@ -791,7 +813,8 @@
               innerCol.style.overflow = 'hidden';
             }
 
-            var itemsList = zone.querySelector('.flex.flex-col.gap-px');
+            /* Scroll the outer variable list, not inner .gap-px chip columns (breaks DnD hit-testing). */
+            var itemsList = sideScrollContainer(zone);
             if (itemsList) {
               itemsList.style.flex = '1 1 0%';
               itemsList.style.minHeight = '0';
@@ -810,7 +833,7 @@
           if (isTop) {
             zone.style.overflow = 'hidden';
 
-            var itemsWrap = zone.querySelector('.flex.flex-wrap');
+            var itemsWrap = topScrollContainer(zone);
             if (itemsWrap) {
               itemsWrap.style.flexWrap = 'nowrap';
               itemsWrap.style.overflowX = 'auto';
@@ -833,12 +856,12 @@
       obs.observe(document.body, { childList: true, subtree: true });
       setInterval(function () {
         document.querySelectorAll('.rounded-xl[data-axis-fixed]').forEach(function (el) {
-          var itemsList = el.querySelector('.flex.flex-col.gap-px');
-          if (itemsList && itemsList.style.overflowY !== 'auto') {
+          var sideEl = sideScrollContainer(el);
+          if (sideEl && sideEl.style.overflowY !== 'auto') {
             el.removeAttribute('data-axis-fixed');
           }
-          var itemsWrap = el.querySelector('.flex.flex-wrap, [style*="flex-wrap: nowrap"]');
-          if (itemsWrap && !itemsWrap.style.overflowX) {
+          var topEl = topScrollContainer(el);
+          if (topEl && !topEl.style.overflowX) {
             el.removeAttribute('data-axis-fixed');
           }
         });
