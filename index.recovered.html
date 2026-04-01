@@ -3350,40 +3350,31 @@
         }));
       }
 
-      /* Walk up from any DOM element inside the design panel to find the tables
-         state hook dispatch.  Uses #root as a reliable starting point. */
-      function getTablesDispatch() {
-        var root = document.getElementById('root');
-        if (!root) return null;
-        var f = fiberOf(root);
-        if (!f) return null;
-        /* Walk DOWN the fiber tree (child / sibling) searching for the tables hook.
-           Max depth 80 to cover deeply nested components. */
-        var stack = [f];
-        var visited = 0;
-        while (stack.length > 0 && visited < 400) {
-          var node = stack.pop();
-          visited++;
-          var s = node.memoizedState;
+      /* Walk UP fiber tree (same proven pattern as Script 1 dispatchTables) */
+      function dispatchTablesFix(startFiber, updaterFn) {
+        var f = startFiber;
+        while (f) {
+          var s = f.memoizedState;
           while (s) {
             var v = s.memoizedState;
             if (Array.isArray(v) && v.length > 0 && v[0] &&
                 typeof v[0].id === 'string' && 'colVar' in v[0] && 'rowVar' in v[0]) {
-              return { tables: v, dispatch: s.queue.dispatch };
+              s.queue.dispatch(updaterFn);
+              return true;
             }
             s = s.next;
           }
-          if (node.sibling) stack.push(node.sibling);
-          if (node.child) stack.push(node.child);
+          f = f.return;
         }
-        return null;
+        return false;
       }
 
-      function findActiveTable(el) {
-        var f = fiberOf(el);
+      function findTableId(fiber) {
+        var f = fiber;
         while (f) {
           var p = f.memoizedProps;
-          if (p && p.table && typeof p.table.id === 'string' && 'colVar' in p.table) return p.table;
+          if (p && p.table && typeof p.table.id === 'string' && 'colVar' in p.table)
+            return p.table.id;
           f = f.return;
         }
         return null;
@@ -3420,57 +3411,587 @@
         var t = el;
         while (t && t !== document.body) {
           if (t.tagName === 'BUTTON' && (t.title === 'Move up' || t.title === 'Move down')) return t;
-          /* SVG elements have lowercase tagName */
           if (t.nodeName && t.nodeName.toLowerCase() === 'button' && (t.title === 'Move up' || t.title === 'Move down')) return t;
           t = t.parentElement || t.parentNode;
         }
         return null;
       }
 
-      /* Use mousedown to capture info BEFORE React handles click.
-         Then schedule the fix to run AFTER React's click handler. */
-      document.addEventListener('mousedown', function(e) {
+      /* Capture click on document — fires BEFORE React's delegated handler on #root.
+         Dispatch our fix first; React's handler fires after and is a harmless no-op
+         (Fl can't swap within single-item branches, so the state stays the same). */
+      document.addEventListener('click', function(e) {
         var btn = findMoveButton(e.target);
         if (!btn) return;
 
         var axis = getAxis(btn);
-        if (!axis) { console.log('[S4] axis not found'); return; }
+        if (!axis) return;
         var varName = getVarName(btn);
-        if (!varName) { console.log('[S4] varName not found'); return; }
+        if (!varName) return;
         var dir = btn.title === 'Move up' ? -1 : 1;
         var field = axis === 'row' ? 'rowVar' : 'colVar';
 
-        var tbl = findActiveTable(btn);
-        if (!tbl) { console.log('[S4] activeTable not found'); return; }
-        var tableId = tbl.id;
+        var fiber = fiberOf(btn);
+        if (!fiber) return;
 
-        var td = getTablesDispatch();
-        if (!td) { console.log('[S4] dispatch not found'); return; }
+        var tableId = findTableId(fiber);
+        if (!tableId) return;
 
-        /* Save the old value so we can check if React's handler already fixed it */
-        var oldVal = tbl[field];
+        dispatchTablesFix(fiber, function(prev) {
+          return prev.map(function(t) {
+            if (t.id !== tableId) return t;
+            var branches = parseAxis(t[field]);
+            var allSingle = branches.every(function(b) { return b.length === 1; });
+            if (!allSingle || branches.length < 2) return t;
+            var moved = moveVar(branches, varName, dir);
+            var newVal = joinAxis(moved);
+            if (newVal === t[field]) return t;
+            var updated = {};
+            for (var k in t) updated[k] = t[k];
+            updated[field] = newVal;
+            updated.result = null;
+            return updated;
+          });
+        });
+      }, true);
+    })();
+    </script>
 
-        /* Wait for React's click handler to finish (it fires a no-op for add-mode),
-           then dispatch the correct reorder. */
-        setTimeout(function() {
-          td.dispatch(function(prev) {
-            return prev.map(function(t) {
-              if (t.id !== tableId) return t;
-              /* If React's handler already changed it, don't overwrite */
-              if (t[field] !== oldVal) return t;
-              var branches = parseAxis(t[field]);
-              var moved = moveVar(branches, varName, dir);
-              var newVal = joinAxis(moved);
-              if (newVal === t[field]) return t;
-              var updated = {};
-              for (var k in t) updated[k] = t[k];
-              updated[field] = newVal;
-              updated.result = null;
-              return updated;
+    <!-- Script 5 — Test Sig: Significance Testing for Crosstab columns -->
+    <script>
+    (function () {
+      'use strict';
+      if (window.__cxTestSig) return;
+      window.__cxTestSig = true;
+
+      /* ── Sig Settings (persisted in localStorage) ── */
+      var LS_SIG_KEY = '__cx_sig_settings__';
+      function loadSigSettings() {
+        try {
+          var s = JSON.parse(localStorage.getItem(LS_SIG_KEY) || '{}');
+          return {
+            enabled:    typeof s.enabled === 'boolean' ? s.enabled : false,
+            level:      s.level === 90 ? 90 : 95,
+            sigLetters: typeof s.sigLetters === 'string' && s.sigLetters.trim() ? s.sigLetters.trim() : ''
+          };
+        } catch(e) { return { enabled: false, level: 95, sigLetters: '' }; }
+      }
+      function saveSigSettings(s) {
+        localStorage.setItem(LS_SIG_KEY, JSON.stringify(s));
+      }
+
+      /* ── Z critical values ── */
+      function zCrit(level) {
+        return level === 90 ? 1.6449 : 1.96;
+      }
+
+      /* ── Column proportion z-test ── */
+      function computeSigLetters(counts, colBases, sigLevel, letterMap) {
+        var nRows = counts.length;
+        var nCols = colBases.length;
+        var zc = zCrit(sigLevel);
+        var result = [];
+        for (var ri = 0; ri < nRows; ri++) {
+          var row = [];
+          for (var ci = 0; ci < nCols; ci++) row.push([]);
+          result.push(row);
+        }
+        for (var ri = 0; ri < nRows; ri++) {
+          for (var ci = 0; ci < nCols; ci++) {
+            var ni = colBases[ci];
+            if (ni < 2) continue;
+            var countI = (counts[ri] && counts[ri][ci]) || 0;
+            var pi = countI / ni;
+            for (var cj = 0; cj < nCols; cj++) {
+              if (ci === cj) continue;
+              var nj = colBases[cj];
+              if (nj < 2) continue;
+              var countJ = (counts[ri] && counts[ri][cj]) || 0;
+              var pPooled = (countI + countJ) / (ni + nj);
+              if (pPooled <= 0 || pPooled >= 1) continue;
+              var se = Math.sqrt(pPooled * (1 - pPooled) * (1/ni + 1/nj));
+              if (se <= 0) continue;
+              var z = (pi - countJ / nj) / se;
+              if (z > zc) {
+                var letter = letterMap[cj];
+                if (letter) result[ri][ci].push(letter);
+              }
+            }
+          }
+        }
+        return result;
+      }
+
+      /* ── Parse letter groups ── */
+      /* Returns null if sigLettersStr is empty (user must provide letters) */
+      function parseLetterMap(sigLettersStr, nCols) {
+        if (!sigLettersStr || !sigLettersStr.trim()) return null;
+        var groups = sigLettersStr.split(',').map(function(g) { return g.trim(); });
+        var map = {};
+        var idx = 0;
+        for (var g = 0; g < groups.length; g++) {
+          for (var c = 0; c < groups[g].length; c++) {
+            if (idx < nCols) { map[idx] = groups[g][c]; idx++; }
+          }
+        }
+        while (idx < nCols) { map[idx] = String.fromCharCode(65 + (idx % 26)); idx++; }
+        return map;
+      }
+
+      /* ── Fiber helper ── */
+      function fiberOf(el) {
+        var k = Object.keys(el).find(function(k) { return k.startsWith('__reactFiber'); });
+        return k ? el[k] : null;
+      }
+
+      /* ── Inject UI into Output Options dropdown ── */
+      function findOutputOptionsPanel() {
+        var panels = document.querySelectorAll('div.absolute.right-0');
+        for (var i = 0; i < panels.length; i++) {
+          var p = panels[i];
+          if (p.querySelector && p.textContent && p.textContent.indexOf('Output Options') !== -1 && p.textContent.indexOf('ใช้กับทุก Table') !== -1) {
+            return p;
+          }
+        }
+        return null;
+      }
+
+      function createSigUI(panel) {
+        var settings = loadSigSettings();
+        var container = document.createElement('div');
+        container.className = 'cx-sig-options';
+        container.style.cssText = 'margin-top:12px; padding-top:12px; border-top:1px solid #e5e7eb;';
+
+        container.innerHTML =
+          '<p style="font-size:11px;font-weight:700;color:#374151;margin-bottom:8px;">Test Significance</p>' +
+          '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">' +
+            '<label style="display:flex;align-items:center;gap:6px;cursor:pointer;">' +
+              '<input type="checkbox" id="__cx_sig_enabled" style="width:16px;height:16px;accent-color:#1F4E78;" ' + (settings.enabled ? 'checked' : '') + '>' +
+              '<span style="font-size:13px;color:#374151;">เปิด Sig Test</span>' +
+            '</label>' +
+          '</div>' +
+          '<div id="__cx_sig_detail" style="' + (settings.enabled ? '' : 'display:none;') + '">' +
+            '<div style="display:flex;gap:12px;margin-bottom:8px;">' +
+              '<label style="display:flex;align-items:center;gap:4px;cursor:pointer;">' +
+                '<input type="radio" name="__cx_sig_level" value="90" style="width:14px;height:14px;accent-color:#1F4E78;" ' + (settings.level === 90 ? 'checked' : '') + '>' +
+                '<span style="font-size:12px;color:#374151;">90%</span>' +
+              '</label>' +
+              '<label style="display:flex;align-items:center;gap:4px;cursor:pointer;">' +
+                '<input type="radio" name="__cx_sig_level" value="95" style="width:14px;height:14px;accent-color:#1F4E78;" ' + (settings.level === 95 ? 'checked' : '') + '>' +
+                '<span style="font-size:12px;color:#374151;">95%</span>' +
+              '</label>' +
+            '</div>' +
+            '<div style="margin-bottom:4px;">' +
+              '<label style="font-size:11px;color:#6b7280;display:block;margin-bottom:3px;">Sig Letters (เช่น ABC,DEF,GHI)</label>' +
+              '<input type="text" id="__cx_sig_letters" value="' + (settings.sigLetters || '') + '" placeholder="เช่น ABCD หรือ AB,CD,EF" style="width:100%;padding:4px 8px;font-size:12px;border:1px solid #d1d5db;border-radius:6px;outline:none;font-family:monospace;">' +
+            '</div>' +
+            '<p style="font-size:9px;color:#9ca3af;margin-top:4px;">* ต้องใส่ตัวอักษรก่อนจึงจะคำนวณ Sig<br>ตัวอักษรจะกำหนดให้แต่ละคอลัมน์ตามลำดับ</p>' +
+          '</div>';
+
+        var footer = panel.querySelector('.mt-3.pt-3.border-t');
+        if (footer) { panel.insertBefore(container, footer); }
+        else { panel.appendChild(container); }
+
+        var chk = container.querySelector('#__cx_sig_enabled');
+        var detail = container.querySelector('#__cx_sig_detail');
+        var radios = container.querySelectorAll('input[name="__cx_sig_level"]');
+        var letterInput = container.querySelector('#__cx_sig_letters');
+
+        chk.addEventListener('change', function() {
+          settings.enabled = chk.checked;
+          detail.style.display = chk.checked ? '' : 'none';
+          saveSigSettings(settings);
+          applySigToAllTables();
+        });
+        for (var r = 0; r < radios.length; r++) {
+          radios[r].addEventListener('change', function() {
+            settings.level = Number(this.value);
+            saveSigSettings(settings);
+            applySigToAllTables();
+          });
+        }
+        letterInput.addEventListener('input', function() {
+          settings.sigLetters = this.value;
+          saveSigSettings(settings);
+          applySigToAllTables();
+        });
+        return container;
+      }
+
+      var _panelObs = new MutationObserver(function() {
+        var panel = findOutputOptionsPanel();
+        if (panel && !panel.querySelector('.cx-sig-options')) { createSigUI(panel); }
+      });
+      _panelObs.observe(document.body, { childList: true, subtree: true });
+
+      /* ══════════════════════════════════════════════════════════
+         PART A — Live Preview: inject sig letters into DOM table
+         ══════════════════════════════════════════════════════════ */
+
+      function applySigToAllTables() {
+        var old = document.querySelectorAll('.cx-sig-letter');
+        for (var i = 0; i < old.length; i++) old[i].parentNode.removeChild(old[i]);
+        var oldH = document.querySelectorAll('.cx-sig-header-letter');
+        for (var i = 0; i < oldH.length; i++) oldH[i].parentNode.removeChild(oldH[i]);
+
+        var settings = loadSigSettings();
+        if (!settings.enabled) return;
+
+        var tables = document.querySelectorAll('table.border-collapse.table-fixed');
+        tables.forEach(function(table) { applySigToTable(table, settings); });
+      }
+
+      function applySigToTable(table, settings) {
+        var fiber = fiberOf(table);
+        if (!fiber) return;
+
+        var result = null;
+        var f = fiber;
+        while (f) {
+          var p = f.memoizedProps;
+          if (p && p.result && p.result.colValues && p.result.counts) { result = p.result; break; }
+          if (p && p.config && p.result) { result = p.result; break; }
+          f = f.return;
+        }
+        if (!result || !result.colValues || !result.counts) return;
+
+        var nCols = result.colValues.length;
+        var letterMap = parseLetterMap(settings.sigLetters, nCols);
+        if (!letterMap) return; /* user must provide sig letters first */
+        var colBases = result.colTotalsN || [];
+        if (!colBases.length) return;
+
+        var rowTypes = result.rowTypes || result.rowValues.map(function() { return 'data'; });
+        var sectionBases = result.rowSectionBases || [];
+        var sigResults;
+
+        if (sectionBases.length > 1) {
+          sigResults = [];
+          for (var ri = 0; ri < result.rowValues.length; ri++) sigResults.push([]);
+          for (var sec = 0; sec < sectionBases.length; sec++) {
+            var lo = sectionBases[sec].startIndex;
+            var hi = sec + 1 < sectionBases.length ? sectionBases[sec + 1].startIndex : result.rowValues.length;
+            var secBases = sectionBases[sec].colTotalsN || colBases;
+            var secCounts = result.counts.slice(lo, hi);
+            var secSig = computeSigLetters(secCounts, secBases, settings.level, letterMap);
+            for (var s = 0; s < secSig.length; s++) sigResults[lo + s] = secSig[s];
+          }
+        } else {
+          sigResults = computeSigLetters(result.counts, colBases, settings.level, letterMap);
+        }
+
+        addSigHeaderLetters(table, nCols, letterMap);
+
+        var tbody = table.querySelector('tbody');
+        if (!tbody) return;
+        var rows = tbody.querySelectorAll('tr');
+
+        var dataRowDomIdx = 0;
+        for (var domRi = 0; domRi < rows.length; domRi++) {
+          var tr = rows[domRi];
+          if (tr.className && tr.className.indexOf('D9E1F2') !== -1) continue;
+          if (dataRowDomIdx >= result.rowValues.length) break;
+          var resRi = dataRowDomIdx;
+          dataRowDomIdx++;
+          var rt = (rowTypes[resRi] || 'data');
+          if (rt !== 'data') continue;
+
+          var tds = tr.querySelectorAll('td');
+          if (!tds.length) continue;
+          var startTd = tds.length - nCols;
+          if (startTd < 0) continue;
+
+          for (var ci = 0; ci < nCols; ci++) {
+            var td = tds[startTd + ci];
+            if (!td) continue;
+            var letters = sigResults[resRi] && sigResults[resRi][ci];
+            if (!letters || !letters.length) continue;
+            var span = document.createElement('span');
+            span.className = 'cx-sig-letter';
+            span.style.cssText = 'display:block;font-size:9px;font-weight:700;color:#c2410c;line-height:1.1;margin-top:1px;';
+            span.textContent = letters.sort().join('');
+            td.appendChild(span);
+          }
+        }
+      }
+
+      function addSigHeaderLetters(table, nCols, letterMap) {
+        var thead = table.querySelector('thead');
+        if (!thead) return;
+        var headerRows = thead.querySelectorAll('tr');
+        if (!headerRows.length) return;
+        var lastHeaderRow = headerRows[headerRows.length - 1];
+        var ths = lastHeaderRow.querySelectorAll('th');
+        var startTh = ths.length - nCols;
+        if (startTh < 0) return;
+        for (var ci = 0; ci < nCols; ci++) {
+          var th = ths[startTh + ci];
+          if (!th) continue;
+          var ltr = document.createElement('div');
+          ltr.className = 'cx-sig-header-letter';
+          ltr.style.cssText = 'font-size:10px;font-weight:800;color:#fbbf24;margin-top:2px;letter-spacing:0.5px;';
+          ltr.textContent = '(' + letterMap[ci] + ')';
+          th.appendChild(ltr);
+        }
+      }
+
+      var _sigTimer = null;
+      var _tableObs = new MutationObserver(function() {
+        if (_sigTimer) clearTimeout(_sigTimer);
+        _sigTimer = setTimeout(function() {
+          var settings = loadSigSettings();
+          if (settings.enabled) applySigToAllTables();
+        }, 300);
+      });
+      _tableObs.observe(document.body, { childList: true, subtree: true });
+
+      setTimeout(function() {
+        var settings = loadSigSettings();
+        if (settings.enabled) applySigToAllTables();
+      }, 1500);
+
+      /* ══════════════════════════════════════════════════════════
+         PART B — Excel Export: inject sig letters into .xlsx
+         ══════════════════════════════════════════════════════════ */
+
+      var SKIP_SHEETS = {
+        'Index':1, 'Tables':1, 'Filters':1, 'Output':1, 'Source':1,
+        'SourceMappings':1, 'Lock':1, 'VariableSettings':1, 'VariableNet':1,
+        'MRSET':1, 'TB_Setting':1, '_settings':1
+      };
+
+      var SIG_FONT = { bold: true, size: 9, name: 'Calibri', color: { argb: 'FFCC0000' } };
+
+      function cellNum(cell) {
+        var v = cell.value;
+        if (v == null) return null;
+        if (typeof v === 'number') return v;
+        if (typeof v === 'object' && v.result != null) return Number(v.result);
+        var n = Number(v);
+        return isFinite(n) ? n : null;
+      }
+
+      function injectSigIntoWorkbook(wb, sigSettings) {
+        var letterMap; /* computed per sheet */
+
+        wb.eachSheet(function(ws) {
+          if (SKIP_SHEETS[ws.name]) return;
+
+          /* ── 1. Detect structure: find the "N" / "%" header row ── */
+          var nRow = 0; /* row number of the N/% header */
+          var labelCols = 0; /* how many label columns on the left */
+          var step = 1; /* 1 = count-only or %-only, 2 = N+% side by side */
+          var isCountMode = true;
+
+          for (var r = 1; r <= Math.min(ws.rowCount, 15); r++) {
+            var c1 = String(ws.getCell(r, 1).value || '').trim();
+            /* The N/% row has "N" or "%" in data columns */
+            if (c1 === 'N' || c1 === '%') { nRow = r; labelCols = 0; break; }
+            if (c1 === '') {
+              /* check next cells */
+              for (var cc = 2; cc <= 10; cc++) {
+                var cv = String(ws.getCell(r, cc).value || '').trim();
+                if (cv === 'N' || cv === '%') {
+                  nRow = r;
+                  labelCols = cc - 1;
+                  /* step=2 only when N+% side by side (cv='N', next='%') */
+                  var nxt = String(ws.getCell(r, cc + 1).value || '').trim();
+                  if (cv === 'N' && nxt === '%') step = 2;
+                  if (cv === '%') isCountMode = false;
+                  break;
+                }
+              }
+              if (nRow) break;
+            }
+          }
+          if (!nRow) return;
+
+          /* ── 2. Count data columns: from labelCols+1 onward ── */
+          /* First data col = Total N (or %), then column data */
+          var totalCol = labelCols + 1;
+          /* Count how many column headers there are after Total */
+          var dataStartCol = totalCol + step; /* first actual column data */
+
+          /* Determine nCols by counting non-empty cells in the N/% header row */
+          var lastDataCol = dataStartCol;
+          for (var cc = dataStartCol; cc <= ws.columnCount; cc += step) {
+            var hv = ws.getCell(nRow, cc).value;
+            if (hv == null || String(hv).trim() === '') break;
+            lastDataCol = cc;
+          }
+          var nCols = Math.round((lastDataCol - dataStartCol) / step) + 1;
+          if (nCols < 2) return;
+
+          letterMap = parseLetterMap(sigSettings.sigLetters, nCols);
+          if (!letterMap) return; /* user must provide sig letters first */
+
+          /* ── 3. Add sig letter labels to the column sub-header row ── */
+          /* The sub-header with column names is typically at nRow - 1 */
+          var subHeaderRow = nRow - 1;
+          if (subHeaderRow >= 1) {
+            for (var ci = 0; ci < nCols; ci++) {
+              var col = dataStartCol + ci * step;
+              var cell = ws.getCell(subHeaderRow, col);
+              var oldVal = cell.value;
+              var label = (oldVal != null ? String(oldVal) : '');
+              /* Append letter: "BKK" → "BKK\n(A)" */
+              cell.value = { richText: [
+                { text: label, font: { bold: true, size: 11, name: 'Calibri', color: { argb: 'FFFFFFFF' } } },
+                { text: '\n(' + letterMap[ci] + ')', font: { bold: true, size: 10, name: 'Calibri', color: { argb: 'FFFBBF24' } } }
+              ]};
+              cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
+            }
+          }
+
+          /* ── 4. Scan rows: find Base rows and data rows ── */
+          var sections = []; /* { baseRow, baseCols[], startRow, endRow } */
+          var dataRows = []; /* row numbers of data rows (not base/stat/summary) */
+
+          for (var r = nRow + 1; r <= ws.rowCount; r++) {
+            /* Check if this row is a Base row */
+            var isBase = false;
+            for (var lc = 1; lc <= labelCols + 1; lc++) {
+              var lv = String(ws.getCell(r, lc).value || '').trim();
+              if (lv === 'Base') { isBase = true; break; }
+            }
+            if (isBase) {
+              /* Read base counts for each column */
+              var baseCols = [];
+              for (var ci = 0; ci < nCols; ci++) {
+                var bCol = dataStartCol + ci * step;
+                var bv = cellNum(ws.getCell(r, bCol));
+                baseCols.push(bv || 0);
+              }
+              sections.push({ baseRow: r, baseCols: baseCols, dataRows: [] });
+            } else if (sections.length > 0) {
+              /* Check if it's a "Cell Contents:" footer line → stop */
+              var fc = String(ws.getCell(r, 1).value || '').trim();
+              if (fc === 'Cell Contents:' || fc.indexOf('Cell Contents') === 0) break;
+              /* Skip empty rows */
+              var totalVal = cellNum(ws.getCell(r, totalCol));
+              if (totalVal == null && String(ws.getCell(r, totalCol).value || '').trim() === '') continue;
+
+              sections[sections.length - 1].dataRows.push(r);
+            }
+          }
+
+          if (!sections.length) return;
+
+          /* ── 5. For each section, extract counts and compute sig ── */
+          sections.forEach(function(sec) {
+            var baseCols = sec.baseCols;
+            var counts = [];
+            sec.dataRows.forEach(function(r) {
+              var rowCounts = [];
+              for (var ci = 0; ci < nCols; ci++) {
+                var col = dataStartCol + ci * step;
+                var val = cellNum(ws.getCell(r, col));
+                /* If %-only mode, reconstruct count from percent and base */
+                if (!isCountMode && val != null && baseCols[ci] > 0) {
+                  val = Math.round(val * baseCols[ci] / 100);
+                }
+                rowCounts.push(val || 0);
+              }
+              counts.push(rowCounts);
+            });
+
+            var sigResult = computeSigLetters(counts, baseCols, sigSettings.level, letterMap);
+
+            /* ── 6. Append sig letters to the % column (keep N and % in separate columns) ── */
+            for (var di = 0; di < sec.dataRows.length; di++) {
+              var r = sec.dataRows[di];
+              for (var ci = 0; ci < nCols; ci++) {
+                var letters = sigResult[di] && sigResult[di][ci];
+                if (!letters || !letters.length) continue;
+
+                var sigText = letters.sort().join('');
+
+                /* Determine which cell to append sig to */
+                var nCol = dataStartCol + ci * step;
+                var targetCol = (step === 2) ? nCol + 1 : nCol; /* % column if N+% mode, else N column */
+                var targetCell = ws.getCell(r, targetCol);
+                var oldVal = targetCell.value;
+
+                /* Skip stat/mean rows (red font) */
+                var origFont = targetCell.font || {};
+                var isMeanRow = (origFont.color && origFont.color.argb && origFont.color.argb.indexOf('C00000') !== -1);
+                if (isMeanRow) continue;
+
+                if (oldVal == null || oldVal === '-') continue;
+
+                var origColor = (origFont.color && origFont.color.argb) ? origFont.color.argb : 'FF000000';
+                var origBold = origFont.bold || false;
+                var origSize = origFont.size || 10;
+
+                var origText;
+                if (typeof oldVal === 'number') {
+                  /* Format: % column → toFixed(1), N column → integer */
+                  origText = (step === 2 || !isCountMode) ? oldVal.toFixed(1) : String(oldVal);
+                } else if (typeof oldVal === 'object' && oldVal.richText) {
+                  var rt = oldVal.richText.slice();
+                  rt.push({ text: sigText, font: SIG_FONT });
+                  targetCell.value = { richText: rt };
+                  continue;
+                } else {
+                  origText = String(oldVal);
+                }
+
+                targetCell.value = { richText: [
+                  { text: origText, font: { bold: origBold, size: origSize, name: 'Calibri', color: { argb: origColor } } },
+                  { text: sigText, font: SIG_FONT }
+                ]};
+                targetCell.alignment = Object.assign({}, targetCell.alignment || {}, { horizontal: 'center', vertical: 'middle' });
+              }
+            }
+          });
+        });
+      }
+
+      /* ── Intercept saveAs to add sig to Excel ── */
+      var _prevSaveAs = window.saveAs;
+      window.saveAs = function cxSigSaveAs(blob, filename) {
+        var sigSettings = loadSigSettings();
+        if (!sigSettings.enabled || typeof filename !== 'string' || !/\.xlsx$/i.test(filename)) {
+          return _prevSaveAs(blob, filename);
+        }
+        /* Load ExcelJS, modify workbook, pass to previous saveAs */
+        import('/assets/exceljs-BMcsBZ_F.js').then(function(m) {
+          var raw = (typeof m.r === 'function') ? m.r() : m.r;
+          var ExcelJS = (raw && raw.default) ? raw.default : raw;
+          if (!ExcelJS || !ExcelJS.Workbook) {
+            console.warn('[Sig] ExcelJS not found, skipping sig inject');
+            _prevSaveAs(blob, filename);
+            return;
+          }
+          blob.arrayBuffer().then(function(buf) {
+            var wb = new ExcelJS.Workbook();
+            wb.xlsx.load(buf).then(function() {
+              try {
+                injectSigIntoWorkbook(wb, sigSettings);
+              } catch(e) {
+                console.error('[Sig] inject failed:', e);
+                _prevSaveAs(blob, filename);
+                return;
+              }
+              wb.xlsx.writeBuffer().then(function(newBuf) {
+                var newBlob = new Blob([newBuf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+                _prevSaveAs(newBlob, filename);
+              }).catch(function(e) {
+                console.error('[Sig] writeBuffer failed:', e);
+                _prevSaveAs(blob, filename);
+              });
+            }).catch(function(e) {
+              console.error('[Sig] load failed:', e);
+              _prevSaveAs(blob, filename);
             });
           });
-        }, 50);
-      }, true);
+        }).catch(function(e) {
+          console.error('[Sig] import ExcelJS failed:', e);
+          _prevSaveAs(blob, filename);
+        });
+      };
+      window.saveAs.saveAs = window.saveAs;
+
     })();
     </script>
   </body>
