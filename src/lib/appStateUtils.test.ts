@@ -34,6 +34,16 @@ describe('appStateUtils axis helpers', () => {
     expect(moveVarInAxis(base, 'Q1', 1)).toEqual([['Q3', 'Q1'], ['Q2', 'Q3']])
   })
 
+  it('moveVarInAxis reorders add-mode SIDE/TOP (one variable per branch)', () => {
+    const addStyle: string[][] = [['SQ1'], ['SQ3'], ['SQ2']]
+    expect(flattenAxisSpec(addStyle)).toEqual(['SQ1', 'SQ3', 'SQ2'])
+    let s = moveVarInAxis(addStyle, 'SQ2', -1)
+    expect(s).toEqual([['SQ1'], ['SQ2'], ['SQ3']])
+    s = moveVarInAxis(s, 'SQ2', -1)
+    expect(s).toEqual([['SQ2'], ['SQ1'], ['SQ3']])
+    expect(moveVarInAxis(addStyle, 'SQ1', 1)).toEqual([['SQ3'], ['SQ1'], ['SQ2']])
+  })
+
   it('removes only the clicked nested occurrence when the same variable appears in multiple branches', () => {
     const base = [
       ['SQ1', 'SQ3'],

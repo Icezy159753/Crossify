@@ -193,6 +193,18 @@ export function moveVarInAxis(branches: AxisSpec, name: string, direction: -1 | 
   const matches = findBranchIndexes(normalized, name)
   if (matches.length === 0) return branches
 
+  /* Add mode: each variable is often its own branch `[['A'],['B'],['C']]`. Swapping inside a
+   * length-1 branch is impossible; reorder by swapping adjacent branches in display order. */
+  const allBranchesSingleItem = normalized.every(b => b.length === 1)
+  if (allBranchesSingleItem && matches.length === 1 && normalized.length > 1) {
+    const pos = matches[0].branchIndex
+    const neighbor = pos + direction
+    if (neighbor < 0 || neighbor >= normalized.length) return branches
+    const next = [...normalized]
+    ;[next[pos], next[neighbor]] = [next[neighbor], next[pos]]
+    return dedupeBranches(next)
+  }
+
   return dedupeBranches(normalized.map((branch, branchIndex) => {
     const match = matches.find(item => item.branchIndex === branchIndex)
     if (!match) return branch

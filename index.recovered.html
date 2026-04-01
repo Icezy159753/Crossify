@@ -754,6 +754,205 @@
     })();
     </script>
 
+    <!-- SIDE reorder guard: enforce drag reorder intent (especially upward moves) -->
+    <script>
+    (function () {
+      'use strict';
+
+      var AXIS_MIME = 'application/x-crossify-axis-item';
+      var AXIS_PREFIX = 'crossify-axis:';
+      var dragCtx = null;
+
+      function parseAxisDragPayload(dataTransfer) {
+        if (!dataTransfer) return null;
+        var raw = '';
+        try { raw = dataTransfer.getData(AXIS_MIME) || ''; } catch (e) {}
+        if (!raw) {
+          try {
+            var plain = dataTransfer.getData('text/plain') || '';
+            if (plain.indexOf(AXIS_PREFIX) === 0) raw = plain.slice(AXIS_PREFIX.length);
+          } catch (e) {}
+        }
+        if (!raw) return null;
+        try {
+          var parsed = JSON.parse(raw);
+          if (
+            parsed &&
+            parsed.side === 'side' &&
+            typeof parsed.branchIndex === 'number' &&
+            typeof parsed.itemIndex === 'number'
+          ) {
+            return parsed;
+          }
+        } catch (e) {}
+        return null;
+      }
+
+      function findSideZone(el) {
+        var e = el;
+        while (e && e !== document.body) {
+          if (e.classList && e.classList.contains('rounded-xl')) {
+            var label = e.querySelector('.font-bold.uppercase');
+            if (label && (label.textContent || '').trim().toUpperCase() === 'SIDE') return e;
+          }
+          e = e.parentElement;
+        }
+        return null;
+      }
+
+      function findAxisChip(el) {
+        var e = el;
+        while (e && e !== document.body) {
+          if (e.getAttribute && e.getAttribute('draggable') === 'true') {
+            var cls = typeof e.className === 'string' ? e.className : '';
+            if (cls.indexOf('cursor-grab') === -1 && cls.indexOf('rounded-2xl') !== -1) return e;
+          }
+          e = e.parentElement;
+        }
+        return null;
+      }
+
+      function chipName(chip) {
+        if (!chip) return '';
+        var nameEl = chip.querySelector('.font-semibold');
+        return nameEl ? (nameEl.textContent || '').trim() : '';
+      }
+
+      function getSideOrder(zone) {
+        if (!zone) return [];
+        var out = [];
+        var chips = zone.querySelectorAll('[draggable="true"]');
+        chips.forEach(function (chip) {
+          var cls = typeof chip.className === 'string' ? chip.className : '';
+          if (cls.indexOf('cursor-grab') !== -1 || cls.indexOf('rounded-2xl') === -1) return;
+          var name = chipName(chip);
+          if (name) out.push(name);
+        });
+        return out;
+      }
+
+      function clickMove(zone, name, dir) {
+        if (!zone || !name) return false;
+        var chips = zone.querySelectorAll('[draggable="true"]');
+        for (var i = 0; i < chips.length; i++) {
+          var chip = chips[i];
+          var cls = typeof chip.className === 'string' ? chip.className : '';
+          if (cls.indexOf('cursor-grab') !== -1 || cls.indexOf('rounded-2xl') === -1) continue;
+          if (chipName(chip) !== name) continue;
+          var title = dir < 0 ? 'Move up' : 'Move down';
+          var btn = chip.querySelector('button[title="' + title + '"]');
+          if (!btn) {
+            var icon = chip.querySelector(dir < 0 ? '.lucide-chevron-up' : '.lucide-chevron-down');
+            if (icon && icon.closest) btn = icon.closest('button');
+          }
+          if (!btn || btn.disabled) return false;
+          btn.click();
+          return true;
+        }
+        return false;
+      }
+
+      function closestChipAtY(zone, clientY, sourceName) {
+        if (!zone) return null;
+        var best = null;
+        var bestDist = Infinity;
+        var chips = zone.querySelectorAll('[draggable="true"]');
+        for (var i = 0; i < chips.length; i++) {
+          var chip = chips[i];
+          var cls = typeof chip.className === 'string' ? chip.className : '';
+          if (cls.indexOf('cursor-grab') !== -1 || cls.indexOf('rounded-2xl') === -1) continue;
+          var name = chipName(chip);
+          if (!name || name === sourceName) continue;
+          var rect = chip.getBoundingClientRect();
+          if (!rect || !rect.height) continue;
+          var center = rect.top + rect.height / 2;
+          var dist = Math.abs(clientY - center);
+          if (dist < bestDist) {
+            bestDist = dist;
+            best = { name: name, centerY: center };
+          }
+        }
+        return best;
+      }
+
+      function nudgeUntilIndex(zone, sourceName, desiredIndex, remainingSteps) {
+        if (remainingSteps <= 0) return;
+        var order = getSideOrder(zone);
+        var sourceIndex = order.indexOf(sourceName);
+        if (sourceIndex < 0) return;
+        var clamped = Math.max(0, Math.min(desiredIndex, Math.max(order.length - 1, 0)));
+        if (sourceIndex === clamped) return;
+        var dir = sourceIndex > clamped ? -1 : 1;
+        if (!clickMove(zone, sourceName, dir)) return;
+        setTimeout(function () {
+          nudgeUntilIndex(zone, sourceName, clamped, remainingSteps - 1);
+        }, 0);
+      }
+
+      document.addEventListener('dragstart', function (event) {
+        var zone = findSideZone(event.target);
+        if (!zone) { dragCtx = null; return; }
+        var sourceChip = findAxisChip(event.target);
+        var sourceName = chipName(sourceChip);
+        if (!sourceName) { dragCtx = null; return; }
+        dragCtx = {
+          zone: zone,
+          sourceName: sourceName,
+          startOrder: getSideOrder(zone),
+          targetName: '',
+          placement: 'before',
+        };
+      }, true);
+
+      document.addEventListener('dragover', function (event) {
+        if (!dragCtx) return;
+        var payload = parseAxisDragPayload(event.dataTransfer);
+        if (!payload) return;
+        var zone = findSideZone(event.target) || dragCtx.zone;
+        if (!zone) return;
+        var pick = closestChipAtY(zone, event.clientY, dragCtx.sourceName);
+        if (!pick || !pick.name) return;
+        dragCtx.zone = zone;
+        dragCtx.targetName = pick.name;
+        dragCtx.placement = event.clientY < pick.centerY ? 'before' : 'after';
+      }, true);
+
+      document.addEventListener('drop', function (event) {
+        var payload = parseAxisDragPayload(event.dataTransfer);
+        if (!payload) { dragCtx = null; return; }
+
+        var zone = findSideZone(event.target) || (dragCtx && dragCtx.zone);
+        if (!zone) { dragCtx = null; return; }
+        var ctx = dragCtx || {
+          zone: zone,
+          sourceName: '',
+          startOrder: getSideOrder(zone),
+        };
+        var sourceName = ctx.sourceName || ctx.startOrder[payload.branchIndex] || '';
+        if (!sourceName) { dragCtx = null; return; }
+        var targetChip = findAxisChip(event.target);
+        var targetName = (targetChip ? chipName(targetChip) : '') || ctx.targetName;
+        if (!targetName || targetName === sourceName) { dragCtx = null; return; }
+        var placement = ctx.placement === 'after' ? 'after' : 'before';
+        dragCtx = null;
+
+        requestAnimationFrame(function () {
+          var afterOrder = getSideOrder(zone);
+          var afterSource = afterOrder.indexOf(sourceName);
+          var afterTarget = afterOrder.indexOf(targetName);
+          if (afterSource < 0 || afterTarget < 0) return;
+          var desiredIndex = placement === 'after' ? afterTarget + 1 : afterTarget;
+          if (afterSource < desiredIndex) desiredIndex -= 1;
+          nudgeUntilIndex(zone, sourceName, desiredIndex, Math.max(afterOrder.length * 2, 12));
+        });
+      }, true);
+
+      document.addEventListener('dragend', function () {
+        dragCtx = null;
+      }, true);
+    })();
+    </script>
+
     <!-- SIDE/TOP axis box layout fix: SIDE gets fixed height + vertical scroll, TOP stays single-row + horizontal scroll -->
     <script>
     (function () {
@@ -813,6 +1012,7 @@
               innerCol.style.overflow = 'hidden';
             }
 
+            /* Scroll the outer variable list, not inner .gap-px chip columns (breaks DnD hit-testing). */
             var itemsList = sideScrollContainer(zone);
             if (itemsList) {
               itemsList.style.flex = '1 1 0%';
@@ -3025,9 +3225,254 @@
 
     })();
     </script>
+
+    <!-- Script 4 — Fix: SIDE/TOP move up/down reorder for add-mode (single-item branches) -->
+    <script>
+    (function() {
+      var AXIS2 = '__AXIS2__:';
+      var LJ = ' || ';
+      var AJ = ' ++ ';
+
+      function fiberOf(el) {
+        var k = Object.keys(el).find(function(k) { return k.startsWith('__reactFiber'); });
+        return k ? el[k] : null;
+      }
+
+      function dedupe(branches) {
+        var seen = {};
+        var result = [];
+        branches.forEach(function(b) {
+          var clean = b.filter(Boolean);
+          if (clean.length === 0) return;
+          var key = clean.join('\x1f');
+          if (seen[key]) return;
+          seen[key] = true;
+          result.push(clean);
+        });
+        return result;
+      }
+
+      function parseAxis(str) {
+        if (!str) return [];
+        var s = str.trim();
+        if (s.indexOf(AXIS2) === 0) {
+          try {
+            var arr = JSON.parse(s.slice(AXIS2.length));
+            if (!Array.isArray(arr)) return [];
+            return dedupe(arr.filter(Array.isArray).map(function(b) {
+              return b.map(function(v) { return String(v).trim(); }).filter(Boolean);
+            }));
+          } catch(e) { return []; }
+        }
+        var levels = s.split(LJ).map(function(lvl) {
+          var t = lvl.trim();
+          if (!t) return [];
+          return t.indexOf(AJ) >= 0
+            ? t.split(AJ).map(function(v){return v.trim()}).filter(Boolean)
+            : [t];
+        }).filter(function(l){return l.length > 0});
+        var branches = [[]];
+        levels.forEach(function(level) {
+          var next = [];
+          branches.forEach(function(branch) {
+            level.forEach(function(item) { next.push(branch.concat([item])); });
+          });
+          branches = next;
+        });
+        return dedupe(branches);
+      }
+
+      function tryJoinLegacy(branches) {
+        if (branches.length === 0) return null;
+        var maxLen = Math.max.apply(null, branches.map(function(b){return b.length}));
+        var levels = [];
+        for (var i = 0; i < maxLen; i++) {
+          var items = []; var seen = {};
+          branches.forEach(function(b) {
+            var v = b[i];
+            if (v && !seen[v]) { seen[v] = true; items.push(v); }
+          });
+          if (items.length === 0) return null;
+          levels.push(items);
+        }
+        var cart = [[]];
+        levels.forEach(function(level) {
+          var next = [];
+          cart.forEach(function(branch) {
+            level.forEach(function(item) { next.push(branch.concat([item])); });
+          });
+          cart = next;
+        });
+        if (cart.length !== branches.length) return null;
+        var bSet = new Set(branches.map(function(b){return b.join('\x1f')}));
+        var cSet = new Set(cart.map(function(b){return b.join('\x1f')}));
+        if (bSet.size !== cSet.size) return null;
+        for (var v of cSet) { if (!bSet.has(v)) return null; }
+        return levels.map(function(l){return l.join(AJ)}).join(LJ);
+      }
+
+      function joinAxis(branches) {
+        var d = dedupe(branches);
+        if (d.length === 0) return null;
+        var legacy = tryJoinLegacy(d);
+        return legacy !== null ? legacy : AXIS2 + JSON.stringify(d);
+      }
+
+      function moveVar(branches, name, direction) {
+        var d = dedupe(branches);
+        var matches = [];
+        d.forEach(function(b, bi) {
+          var ii = b.indexOf(name);
+          if (ii >= 0) matches.push({branchIndex: bi, itemIndex: ii});
+        });
+        if (matches.length === 0) return branches;
+
+        /* Add mode: each branch has exactly 1 item → swap whole branches */
+        var allSingle = d.every(function(b){return b.length === 1});
+        if (allSingle && matches.length === 1 && d.length > 1) {
+          var pos = matches[0].branchIndex;
+          var nb = pos + direction;
+          if (nb < 0 || nb >= d.length) return branches;
+          var next = d.map(function(b){return b.slice()});
+          var tmp = next[pos]; next[pos] = next[nb]; next[nb] = tmp;
+          return dedupe(next);
+        }
+
+        /* Nest mode: swap within branch */
+        return dedupe(d.map(function(branch, bi) {
+          var m = matches.find(function(x){return x.branchIndex === bi});
+          if (!m) return branch;
+          var ti = m.itemIndex + direction;
+          if (ti < 0 || ti >= branch.length) return branch;
+          var n = branch.slice();
+          var t2 = n[m.itemIndex]; n[m.itemIndex] = n[ti]; n[ti] = t2;
+          return n;
+        }));
+      }
+
+      /* Walk up from any DOM element inside the design panel to find the tables
+         state hook dispatch.  Uses #root as a reliable starting point. */
+      function getTablesDispatch() {
+        var root = document.getElementById('root');
+        if (!root) return null;
+        var f = fiberOf(root);
+        if (!f) return null;
+        /* Walk DOWN the fiber tree (child / sibling) searching for the tables hook.
+           Max depth 80 to cover deeply nested components. */
+        var stack = [f];
+        var visited = 0;
+        while (stack.length > 0 && visited < 400) {
+          var node = stack.pop();
+          visited++;
+          var s = node.memoizedState;
+          while (s) {
+            var v = s.memoizedState;
+            if (Array.isArray(v) && v.length > 0 && v[0] &&
+                typeof v[0].id === 'string' && 'colVar' in v[0] && 'rowVar' in v[0]) {
+              return { tables: v, dispatch: s.queue.dispatch };
+            }
+            s = s.next;
+          }
+          if (node.sibling) stack.push(node.sibling);
+          if (node.child) stack.push(node.child);
+        }
+        return null;
+      }
+
+      function findActiveTable(el) {
+        var f = fiberOf(el);
+        while (f) {
+          var p = f.memoizedProps;
+          if (p && p.table && typeof p.table.id === 'string' && 'colVar' in p.table) return p.table;
+          f = f.return;
+        }
+        return null;
+      }
+
+      function getAxis(btn) {
+        var el = btn;
+        while (el && el !== document.body) {
+          if (el.querySelector) {
+            var lbl = el.querySelector('.font-bold.uppercase');
+            if (lbl) {
+              var t = (lbl.textContent || '').trim().toUpperCase();
+              if (t === 'SIDE') return 'row';
+              if (t === 'TOP') return 'col';
+            }
+          }
+          el = el.parentElement;
+        }
+        return null;
+      }
+
+      function getVarName(btn) {
+        var item = btn;
+        while (item && item !== document.body) {
+          if (item.getAttribute && item.getAttribute('draggable') === 'true') break;
+          item = item.parentElement;
+        }
+        if (!item || item === document.body) return null;
+        var nm = item.querySelector('.font-semibold');
+        return nm ? nm.textContent.trim() : null;
+      }
+
+      function findMoveButton(el) {
+        var t = el;
+        while (t && t !== document.body) {
+          if (t.tagName === 'BUTTON' && (t.title === 'Move up' || t.title === 'Move down')) return t;
+          /* SVG elements have lowercase tagName */
+          if (t.nodeName && t.nodeName.toLowerCase() === 'button' && (t.title === 'Move up' || t.title === 'Move down')) return t;
+          t = t.parentElement || t.parentNode;
+        }
+        return null;
+      }
+
+      /* Use mousedown to capture info BEFORE React handles click.
+         Then schedule the fix to run AFTER React's click handler. */
+      document.addEventListener('mousedown', function(e) {
+        var btn = findMoveButton(e.target);
+        if (!btn) return;
+
+        var axis = getAxis(btn);
+        if (!axis) { console.log('[S4] axis not found'); return; }
+        var varName = getVarName(btn);
+        if (!varName) { console.log('[S4] varName not found'); return; }
+        var dir = btn.title === 'Move up' ? -1 : 1;
+        var field = axis === 'row' ? 'rowVar' : 'colVar';
+
+        var tbl = findActiveTable(btn);
+        if (!tbl) { console.log('[S4] activeTable not found'); return; }
+        var tableId = tbl.id;
+
+        var td = getTablesDispatch();
+        if (!td) { console.log('[S4] dispatch not found'); return; }
+
+        /* Save the old value so we can check if React's handler already fixed it */
+        var oldVal = tbl[field];
+
+        /* Wait for React's click handler to finish (it fires a no-op for add-mode),
+           then dispatch the correct reorder. */
+        setTimeout(function() {
+          td.dispatch(function(prev) {
+            return prev.map(function(t) {
+              if (t.id !== tableId) return t;
+              /* If React's handler already changed it, don't overwrite */
+              if (t[field] !== oldVal) return t;
+              var branches = parseAxis(t[field]);
+              var moved = moveVar(branches, varName, dir);
+              var newVal = joinAxis(moved);
+              if (newVal === t[field]) return t;
+              var updated = {};
+              for (var k in t) updated[k] = t[k];
+              updated[field] = newVal;
+              updated.result = null;
+              return updated;
+            });
+          });
+        }, 50);
+      }, true);
+    })();
+    </script>
   </body>
 </html>
-
-
-
 
