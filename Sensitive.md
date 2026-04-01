@@ -163,9 +163,10 @@ function ex(v) {
 ## 9. Workflow ประจำวัน
 
 ```bash
-# รัน dev server (ถ้ายังไม่รัน)
+# รัน dev server — ต้องใช้ index.html ที่ชี้ index-DsrIxxwV.js (ไม่ใช่ /src/main.tsx)
 cd "c:/Users/songklod/Desktop/Crosstab"
-npx vite --port 5173
+npm run dev
+# เทียบเท่า: npx vite --port 5173
 
 # หลังแก้ index.html ทุกครั้ง
 cp index.html index.recovered.html
