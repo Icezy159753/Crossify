@@ -2800,13 +2800,96 @@
         return bases;
       }
 
+      function cxSortCodesForPreset(codes) {
+        return (codes || []).slice().sort(function(a, b) {
+          var an = Number(a), bn = Number(b);
+          if (isFinite(an) && isFinite(bn)) return an - bn;
+          return String(a).localeCompare(String(b), undefined, { numeric: true, sensitivity: 'base' });
+        });
+      }
+
+      function cxBuildAutoWeightsFromInfo(info) {
+        if (!info || !info.memberLabels) return null;
+        var keys = cxSortCodesForPreset(Object.keys(info.memberLabels).filter(function(k) { return k && !SUMMARY_SET[k]; }));
+        if (!keys.length) return null;
+        var w = {};
+        var preset = info.preset || '';
+        if (preset === 'justright_02') {
+          var mid = (keys.length - 1) / 2;
+          keys.forEach(function(k, i) { w[k] = String(i - mid); });
+          return w;
+        }
+        if (preset === 'justright_code') {
+          keys.forEach(function(k) {
+            var num = Number(String(k).trim());
+            w[k] = isFinite(num) ? String(num) : String(k);
+          });
+          return w;
+        }
+        var lowGood = /_low_good$/.test(preset);
+        if (!preset && Array.isArray(info.summaries) && info.summaries.length) {
+          var tb = info.summaries.find(function(s) { return s && s.code === 'TB' && Array.isArray(s.members) && s.members.length; });
+          var bb = info.summaries.find(function(s) { return s && s.code === 'BB' && Array.isArray(s.members) && s.members.length; });
+          if (tb && bb) {
+            var tbIdx = keys.indexOf(String(tb.members[0]));
+            var bbIdx = keys.indexOf(String(bb.members[0]));
+            if (tbIdx !== -1 && bbIdx !== -1) lowGood = tbIdx < bbIdx;
+          }
+        }
+        keys.forEach(function(k, i) {
+          w[k] = String(lowGood ? keys.length - i : i + 1);
+        });
+        return w;
+      }
+
+      function cxSectionRowLabelSet(result, lo, hi) {
+        var set = Object.create(null);
+        for (var ri = lo; ri < hi; ri++) {
+          var t = (result.rowTypes && result.rowTypes[ri]) || 'data';
+          if (t === 'stat' || t === 'summary' || t === 'net') continue;
+          var rv = String(result.rowValues[ri] == null ? '' : result.rowValues[ri]).trim();
+          if (rv) set[rv] = true;
+          var path = (result.rowPaths && result.rowPaths[ri]) || [];
+          var last = String(path[path.length - 1] == null ? '' : path[path.length - 1]).trim();
+          if (last) set[last] = true;
+        }
+        return set;
+      }
+
+      function cxResolveTbInfoForSection(vName, result, lo, hi, overrides) {
+        ensureTbInfoExpanded(vName);
+        var stored = JSON.parse(localStorage.getItem(LS_KEY) || '{}');
+        var direct = stored[vName];
+        if (direct && direct.summaries && direct.summaries.length) {
+          return { key: vName, info: direct };
+        }
+
+        var labelsInSection = cxSectionRowLabelSet(result, lo, hi);
+        var best = null, bestScore = 0;
+        Object.keys(stored).forEach(function(k) {
+          var expanded = expandTbStoredEntry(stored[k], overrides && overrides[k], k);
+          if (!expanded || !expanded.memberLabels) return;
+          var codes = Object.keys(expanded.memberLabels);
+          if (!codes.length) return;
+          var score = 0;
+          codes.forEach(function(code) {
+            var lbl = String(expanded.memberLabels[code] == null ? '' : expanded.memberLabels[code]).trim();
+            if (lbl && labelsInSection[lbl]) score++;
+          });
+          if (score > bestScore) {
+            bestScore = score;
+            best = { key: k, info: expanded };
+          }
+        });
+        return (best && bestScore >= 2) ? best : { key: vName, info: direct || null };
+      }
+
       function cxSectionExtraRows(result, lo, hi, vName, overrides) {
         var extra = [];
         var colCount = (result.colValues || []).length;
-        ensureTbInfoExpanded(vName);
-        var stored = JSON.parse(localStorage.getItem(LS_KEY) || '{}');
-        var info = stored[vName];
-        var ov = overrides && overrides[vName];
+        var resolved = cxResolveTbInfoForSection(vName, result, lo, hi, overrides || {});
+        var info = resolved.info;
+        var ov = overrides && overrides[resolved.key || vName];
         var weights = ov && ov.weights;
         var labels = (ov && ov.labels) || {};
         var weightsOk = weights && Object.keys(weights).some(function(k) {
@@ -2814,10 +2897,17 @@
           return v != null && String(v).trim() !== '' && String(v).trim() !== '-';
         });
         if (!weightsOk && typeof window.__cxResolveMeanWeights === 'function') {
-          var autoMw = window.__cxResolveMeanWeights(vName, overrides);
+          var autoMw = window.__cxResolveMeanWeights(resolved.key || vName, overrides);
           if (autoMw && Object.keys(autoMw).length) {
             weights = autoMw;
             labels = Object.assign({}, labels, (info && info.memberLabels) || {});
+          }
+        }
+        if ((!weights || !Object.keys(weights).length) && info && info.memberLabels) {
+          var presetMw = cxBuildAutoWeightsFromInfo(info);
+          if (presetMw && Object.keys(presetMw).length) {
+            weights = presetMw;
+            labels = Object.assign({}, labels, info.memberLabels || {});
           }
         }
 
@@ -2829,6 +2919,7 @@
           var path = (result.rowPaths && result.rowPaths[ri]) || [rv];
           var last = path[path.length - 1];
           labelToIdx[rv] = ri;
+          labelToIdx[String(rv).trim()] = ri;
           labelToIdx[String(last).trim()] = ri;
         }
 
@@ -2837,7 +2928,9 @@
             var memberIdxs = [];
             (sum.members || []).forEach(function(mCode) {
               var lbl = (info.memberLabels || {})[mCode] || mCode;
+              var lblKey = String(lbl == null ? '' : lbl).trim();
               if (labelToIdx[lbl] != null) memberIdxs.push(labelToIdx[lbl]);
+              else if (labelToIdx[lblKey] != null) memberIdxs.push(labelToIdx[lblKey]);
             });
             var sumCounts = [];
             for (var ci = 0; ci < colCount; ci++) {
@@ -2860,8 +2953,14 @@
           Object.keys(weights).forEach(function(code) {
             var lab = labels[code] || (info && info.memberLabels && info.memberLabels[code]);
             if (lab != null && String(lab).trim() !== '') labelToCode[String(lab).trim()] = code;
+            labelToCode[String(code).trim()] = code;
           });
-          var stats = (ov && ov.numericStats && ov.numericStats.length) ? ov.numericStats : ['mean'];
+          var stats = (ov && ov.numericStats && ov.numericStats.length) ? ov.numericStats.slice() : ['mean'];
+          stats = stats.map(function(s) { return String(s == null ? '' : s).trim().toLowerCase(); }).filter(Boolean);
+          if (!stats.length) stats = ['mean'];
+          if (info && ((info.preset && String(info.preset).trim() !== '') || (info.summaries && info.summaries.length)) && stats.indexOf('mean') === -1) {
+            stats.unshift('mean');
+          }
           stats.forEach(function(st) {
             if (st !== 'mean') return;
             var lblOut = st === 'stddev' ? 'StdDev' : st.charAt(0).toUpperCase() + st.slice(1);
@@ -2874,9 +2973,10 @@
                 var path1 = (result.rowPaths && result.rowPaths[ri]) || [];
                 var last1 = String(path1[path1.length - 1] || result.rowValues[ri] || '').trim();
                 var code1 = labelToCode[last1];
+                if (code1 == null && weights[last1] != null) code1 = last1;
                 if (code1 == null) {
                   for (var lk in labelToCode) {
-                    if (result.rowValues[ri].indexOf(lk) !== -1) { code1 = labelToCode[lk]; break; }
+                    if (String(result.rowValues[ri] == null ? '' : result.rowValues[ri]).indexOf(lk) !== -1) { code1 = labelToCode[lk]; break; }
                   }
                 }
                 if (code1 == null) continue;
@@ -2895,9 +2995,10 @@
               var path2 = (result.rowPaths && result.rowPaths[ri2]) || [];
               var last2 = String(path2[path2.length - 1] || result.rowValues[ri2] || '').trim();
               var code2 = labelToCode[last2];
+              if (code2 == null && weights[last2] != null) code2 = last2;
               if (code2 == null) {
                 for (var lk2 in labelToCode) {
-                  if (result.rowValues[ri2].indexOf(lk2) !== -1) { code2 = labelToCode[lk2]; break; }
+                  if (String(result.rowValues[ri2] == null ? '' : result.rowValues[ri2]).indexOf(lk2) !== -1) { code2 = labelToCode[lk2]; break; }
                 }
               }
               if (code2 == null) continue;
@@ -2919,6 +3020,69 @@
 
         return extra;
       }
+
+      function cxEnsureSingleVarMean(result, vName, overrides) {
+        if (!result || !result.rowValues || !result.rowValues.length) return result;
+        var n = result.rowValues.length;
+        var rawTypes = result.rowTypes;
+        if (!Array.isArray(rawTypes) || rawTypes.length !== n) {
+          rawTypes = result.rowValues.map(function() { return 'data'; });
+        }
+        var hasMean = false;
+        for (var i = 0; i < n; i++) {
+          var rv0 = String(result.rowValues[i] == null ? '' : result.rowValues[i]).trim();
+          var rt0 = rawTypes[i];
+          if ((rt0 === 'stat' || rt0 === 'data') && /^mean$/i.test(rv0)) { hasMean = true; break; }
+        }
+        if (hasMean) return result;
+
+        var extras = cxSectionExtraRows(result, 0, n, vName, overrides || {});
+        var meanRows = extras.filter(function(r) {
+          return r && r.rt === 'stat' && /^mean$/i.test(String(r.rv == null ? '' : r.rv).trim());
+        });
+        if (!meanRows.length) return result;
+
+        var rowTypes = result.rowValues.map(function(rv, idx) {
+          var t = rawTypes[idx];
+          if (t === 'stat' || t === 'summary' || t === 'net' || t === 'data') return t;
+          var lab = String(rv == null ? '' : rv).trim();
+          if (/^mean$/i.test(lab) || /^min$/i.test(lab) || /^max$/i.test(lab) || /^stddev$/i.test(lab)) return 'stat';
+          return t != null && t !== '' ? t : 'data';
+        });
+        var rowPaths = result.rowPaths && result.rowPaths.length === n
+          ? result.rowPaths
+          : result.rowValues.map(function(v) { return [v]; });
+
+        var insertIdx = n;
+        for (var si = 0; si < n; si++) {
+          if (rowTypes[si] === 'stat') { insertIdx = si; break; }
+        }
+        var before = { rv: [], rt: [], rp: [], ct: [], rtn: [] };
+        var after = { rv: [], rt: [], rp: [], ct: [], rtn: [] };
+        for (var k = 0; k < n; k++) {
+          var target = k < insertIdx ? before : after;
+          target.rv.push(result.rowValues[k]);
+          target.rt.push(rowTypes[k]);
+          target.rp.push(rowPaths[k]);
+          target.ct.push(result.counts[k]);
+          target.rtn.push(result.rowTotalsN[k]);
+        }
+        meanRows.forEach(function(m) {
+          before.rv.push(m.rv);
+          before.rt.push('stat');
+          before.rp.push(m.rp || [m.rv]);
+          before.ct.push(Array.isArray(m.ct) ? m.ct.slice() : []);
+          before.rtn.push(m.rtn || 0);
+        });
+        return Object.assign({}, result, {
+          rowValues: before.rv.concat(after.rv),
+          rowTypes: before.rt.concat(after.rt),
+          rowPaths: before.rp.concat(after.rp),
+          counts: before.ct.concat(after.ct),
+          rowTotalsN: before.rtn.concat(after.rtn)
+        });
+      }
+      window.__cxEnsureSingleVarMean = cxEnsureSingleVarMean;
 
       window.__cxAugmentStackedTable = function(result, rowAxisO, colAxisT, overrides, rowGrouped, caseBundle) {
         if (!result || !result.rowValues || !result.rowValues.length) return result;
@@ -3034,7 +3198,10 @@
 
         var labelToIdx = {};
         result.rowValues.forEach(function(v, idx) {
-          if (rowTypes[idx] !== 'stat' && rowTypes[idx] !== 'summary') labelToIdx[v] = idx;
+          if (rowTypes[idx] !== 'stat' && rowTypes[idx] !== 'summary') {
+            labelToIdx[v] = idx;
+            labelToIdx[String(v == null ? '' : v).trim()] = idx;
+          }
         });
 
         info.summaries.forEach(function(sum) {
@@ -3994,6 +4161,475 @@
 
     })();
     </script>
+
+    <!-- Script 6 — TB/T2B/Mean injection + run without TOP (dispatch-wrapper approach) -->
+    <script>
+    (function () {
+      'use strict';
+      if (window.__cxResultAugment) return;
+      window.__cxResultAugment = true;
+
+      var LS_KEY   = '__cx_tb_preset__';
+      var AXIS_PFX = '__AXIS2__:';
+      var SUMMARY_SET = { TB:1, T2B:1, T3B:1, BB:1, B2B:1, B3B:1 };
+
+      /* ── Fiber helpers ── */
+      function fiberOf(el) {
+        if (!el) return null;
+        var k = Object.keys(el).find(function(k) { return k.startsWith('__reactFiber'); });
+        return k ? el[k] : null;
+      }
+
+      function findTablesHook(startFiber) {
+        var f = startFiber;
+        while (f) {
+          var s = f.memoizedState;
+          while (s) {
+            var v = s.memoizedState;
+            if (Array.isArray(v) && v.length > 0 && v[0] &&
+                typeof v[0].id === 'string' && 'colVar' in v[0] && 'rowVar' in v[0]) {
+              return s;
+            }
+            s = s.next;
+          }
+          f = f.return;
+        }
+        return null;
+      }
+
+      function findOverrides(tablesHook) {
+        if (!tablesHook) return {};
+        var s = tablesHook;
+        var count = 0;
+        while (s && count < 40) {
+          var v = s.memoizedState;
+          if (v && typeof v === 'object' && !Array.isArray(v) &&
+              !(v instanceof Set) && !(v instanceof Map) &&
+              Object.keys(v).length > 0) {
+            var looksLike = Object.keys(v).some(function(k) {
+              var val = v[k];
+              return val && typeof val === 'object' && ('labels' in val || 'order' in val || 'weights' in val);
+            });
+            if (looksLike) return v;
+          }
+          s = s.next;
+          count++;
+        }
+        return {};
+      }
+
+      function findDataset(startFiber) {
+        var f = startFiber;
+        while (f) {
+          var s = f.memoizedState;
+          while (s) {
+            var v = s.memoizedState;
+            if (v && typeof v === 'object' && !Array.isArray(v) &&
+                Array.isArray(v.variables) && Array.isArray(v.cases) && v.variables.length > 0) {
+              return v;
+            }
+            s = s.next;
+          }
+          f = f.return;
+        }
+        return null;
+      }
+
+      function findTabsHook(tablesHook) {
+        /* Find the tab state ("design"/"filter"/"results") — it's a string hook near tables */
+        if (!tablesHook) return null;
+        var s = tablesHook;
+        var count = 0;
+        while (s && count < 15) {
+          var v = s.memoizedState;
+          if (v === 'design' || v === 'filter' || v === 'results') return s;
+          s = s.next;
+          count++;
+        }
+        return null;
+      }
+
+      /* ── Axis parsing ── */
+      function parseAxis(str) {
+        if (!str) return [];
+        var s = str.trim();
+        if (s.startsWith(AXIS_PFX)) {
+          try {
+            var arr = JSON.parse(s.slice(AXIS_PFX.length));
+            return Array.isArray(arr) ? arr.filter(Array.isArray)
+              .map(function(d) { return d.map(function(p) { return String(p).trim(); }).filter(Boolean); })
+              .filter(function(d) { return d.length > 0; }) : [];
+          } catch(e) { return []; }
+        }
+        return s.split('|').map(function(v) { return [v.trim()]; }).filter(function(a) { return a[0]; });
+      }
+
+      function flatVars(parsed) {
+        var out = [];
+        parsed.forEach(function(b) { b.forEach(function(v) { if (out.indexOf(v) === -1) out.push(v); }); });
+        return out;
+      }
+
+      /* ── T2B/Mean augmentation ── */
+      function augmentResult(result, rowVarStr, overrides) {
+        if (!result || !result.rowValues || !result.rowValues.length) return result;
+        if (result.__cxAugmented) return result;
+
+        var parsed = parseAxis(rowVarStr);
+        var varNames = flatVars(parsed);
+        if (!varNames.length) {
+          return Object.assign({}, result, { __cxAugmented: true });
+        }
+
+        var aug = result;
+
+        /* Multi-var SIDE → __cxAugmentStackedTable (handles per-section TB/T2B + Mean) */
+        if (varNames.length > 1 || (result.rowSectionBases && result.rowSectionBases.length > 1)) {
+          if (typeof window.__cxAugmentStackedTable === 'function') {
+            try { aug = window.__cxAugmentStackedTable(aug, parsed, parseAxis(result.colVar), overrides); } catch(e) { console.warn('[S6] augStack err', e); }
+          }
+        }
+        /* Single-var SIDE → __cxAddSummary + keep existing Mean */
+        else {
+          var vn = varNames[0];
+          if (typeof window.__cxAddSummary === 'function') {
+            try { aug = window.__cxAddSummary(aug, vn); } catch(e) { console.warn('[S6] addSum err', e); }
+          }
+          if (typeof window.__cxEnsureSingleVarMean === 'function') {
+            try { aug = window.__cxEnsureSingleVarMean(aug, vn, overrides); } catch(e2) { console.warn('[S6] addMean err', e2); }
+          }
+        }
+
+        return Object.assign({}, aug, { __cxAugmented: true });
+      }
+
+      /* ── Frequency table (no colVar) ── */
+      function buildFreqTable(table, dataset, overrides) {
+        var parsed = parseAxis(table.rowVar);
+        var varNames = flatVars(parsed);
+        if (!varNames.length || !dataset || !dataset.cases.length) return null;
+
+        var results = [];
+        varNames.forEach(function(vName) {
+          var vInfo = dataset.variables.find(function(v) { return v.name === vName; });
+          if (!vInfo) return;
+          var ov = overrides[vName] || {};
+          var labels = ov.labels || vInfo.valueLabels || {};
+          var order = Array.isArray(ov.order) ? ov.order.slice() : Object.keys(labels);
+
+          /* If no order, collect from data */
+          if (!order.length) {
+            var seen = {};
+            dataset.cases.forEach(function(c) {
+              var v = c[vName]; if (v == null || v === '') return;
+              var k = String(v); if (!seen[k]) { seen[k] = true; order.push(k); }
+            });
+            order.sort(function(a, b) { var an = Number(a), bn = Number(b); return isFinite(an) && isFinite(bn) ? an - bn : a.localeCompare(b); });
+          }
+
+          var cnt = {}; order.forEach(function(k) { cnt[k] = 0; });
+          var tot = 0;
+          dataset.cases.forEach(function(c) {
+            var v = c[vName]; if (v == null || v === '') return;
+            var k = String(v);
+            if (cnt[k] != null) { cnt[k]++; tot++; }
+            else {
+              /* Try by label */
+              var found = false;
+              for (var code in labels) { if (String(labels[code]) === k) { cnt[code] = (cnt[code] || 0) + 1; tot++; found = true; break; } }
+              if (!found) { order.push(k); cnt[k] = 1; tot++; }
+            }
+          });
+
+          results.push({ vName: vName, vInfo: vInfo, labels: labels, order: order, cnt: cnt, tot: tot });
+        });
+
+        if (!results.length) return null;
+
+        if (results.length === 1) {
+          var r = results[0];
+          var rv = [], ca = [], rtn = [];
+          r.order.forEach(function(k) {
+            rv.push(r.labels[k] || k);
+            ca.push([r.cnt[k] || 0]);
+            rtn.push(r.cnt[k] || 0);
+          });
+          return {
+            rowVar: r.vName, colVar: 'Total',
+            rowLabel: r.vInfo.label || r.vInfo.longName || r.vName,
+            colLabel: 'Total',
+            rowValues: rv, colValues: ['Total'],
+            counts: ca, rowTotalsN: rtn,
+            colTotalsN: [r.tot], grandTotal: r.tot,
+            rowPaths: rv.map(function(v) { return [v]; }),
+            rowTypes: rv.map(function() { return 'data'; })
+          };
+        }
+
+        /* Multi-var: stacked */
+        var allRV = [], allC = [], allRTN = [], allRP = [], allRT = [];
+        var secBases = [];
+        results.forEach(function(r) {
+          var secLabel = r.vInfo.label || r.vInfo.longName || r.vName;
+          secBases.push({ startIndex: allRV.length, label: secLabel, totalN: r.tot, colTotalsN: [r.tot] });
+          r.order.forEach(function(k) {
+            var lbl = r.labels[k] || k;
+            allRV.push(lbl); allC.push([r.cnt[k] || 0]); allRTN.push(r.cnt[k] || 0);
+            allRP.push([secLabel, lbl]); allRT.push('data');
+          });
+        });
+        return {
+          rowVar: varNames.join(' | '), colVar: 'Total',
+          rowLabel: varNames.join(' / '), colLabel: 'Total',
+          rowValues: allRV, colValues: ['Total'],
+          counts: allC, rowTotalsN: allRTN,
+          colTotalsN: [dataset.cases.length], grandTotal: dataset.cases.length,
+          rowPaths: allRP, rowLevelLabels: ['Variable', 'Category'],
+          rowTypes: allRT, rowSectionBases: secBases
+        };
+      }
+
+      /* ══════════════════════════════════════════════════════
+         PART A: Wrap tables dispatch — augment every result
+         ══════════════════════════════════════════════════════ */
+      var _hooked = false;
+      var _hookAttempts = 0;
+      var _tablesHookRef = null;
+
+      function tryHookDispatch() {
+        if (_hooked) return true;
+        _hookAttempts++;
+
+        /* Find ANY rendered element to get fiber */
+        var el = document.querySelector('[draggable="true"]')
+              || document.querySelector('button')
+              || document.querySelector('.flex-1')
+              || document.querySelector('table');
+        if (!el) return false;
+
+        var fiber = fiberOf(el);
+        if (!fiber) return false;
+
+        var hook = findTablesHook(fiber);
+        if (!hook) return false;
+
+        _tablesHookRef = hook;
+        var origDispatch = hook.queue.dispatch;
+
+        hook.queue.dispatch = function cxWrappedDispatch(action) {
+          if (typeof action === 'function') {
+            return origDispatch(function(prev) {
+              var next = action(prev);
+              if (!Array.isArray(next)) return next;
+              return augmentTablesArray(next);
+            });
+          }
+          if (Array.isArray(action)) {
+            return origDispatch(augmentTablesArray(action));
+          }
+          return origDispatch(action);
+        };
+
+        _hooked = true;
+        console.log('[S6] dispatch hooked successfully');
+        return true;
+      }
+
+      function augmentTablesArray(tables) {
+        var ov = findOverrides(_tablesHookRef);
+        return tables.map(function(t) {
+          if (t.result && !t.result.__cxAugmented) {
+            var aug = augmentResult(t.result, t.rowVar, ov);
+            return Object.assign({}, t, { result: aug });
+          }
+          return t;
+        });
+      }
+
+      /* ══════════════════════════════════════════════════════
+         PART B: Enable Run without TOP + inject Run Table btn
+         ══════════════════════════════════════════════════════ */
+      function enableNoTopRun() {
+        /* Find disabled Run Table buttons and enable them when rowVar is set */
+        var buttons = document.querySelectorAll('button[disabled]');
+        buttons.forEach(function(btn) {
+          if ((btn.textContent || '').trim() !== 'Run Table') return;
+
+          /* Walk fiber to find table props and check if rowVar is set */
+          var fiber = fiberOf(btn);
+          if (!fiber) return;
+
+          /* Find the table from the nearby Design component */
+          var f = fiber;
+          var tableData = null;
+          while (f) {
+            var p = f.memoizedProps;
+            if (p && p.table && typeof p.table.id === 'string' && 'rowVar' in p.table) {
+              tableData = p.table;
+              break;
+            }
+            /* Also check onGenerate prop */
+            if (p && p.canRun !== undefined && p.onGenerate) {
+              /* Found the Design component — check if rowVar is set via branches */
+              break;
+            }
+            f = f.return;
+          }
+
+          /* Check from tables state */
+          if (!tableData && _tablesHookRef) {
+            var tables = _tablesHookRef.memoizedState;
+            if (tables && tables.length) {
+              /* Find selected table (the one being designed) */
+              tableData = tables.find(function(t) { return t.rowVar && !t.colVar; });
+            }
+          }
+
+          if (tableData && tableData.rowVar && !tableData.colVar) {
+            /* Enable the button */
+            btn.disabled = false;
+            btn.style.cssText = 'width:100%;padding:10px;background:#1F4E78;color:white;font-weight:bold;border-radius:12px;cursor:pointer;font-size:14px;border:none;';
+
+            /* Remove old handler and add ours */
+            if (!btn.__cxNoTopHandler) {
+              btn.__cxNoTopHandler = true;
+              btn.addEventListener('click', function(e) {
+                var liveTable = getCurrentTableForRunButton(btn);
+                if (!liveTable || !liveTable.rowVar || liveTable.colVar) return;
+                e.stopPropagation();
+                e.preventDefault();
+                runWithoutTop(liveTable);
+              }, true);
+            }
+          }
+        });
+      }
+
+      function getCurrentTableForRunButton(btn) {
+        var fiber = fiberOf(btn);
+        var tableId = null;
+        var tableData = null;
+        var f = fiber;
+        while (f) {
+          var p = f.memoizedProps;
+          if (p && p.table && typeof p.table.id === 'string' && 'rowVar' in p.table) {
+            tableData = p.table;
+            tableId = p.table.id;
+            break;
+          }
+          f = f.return;
+        }
+        if (_tablesHookRef && Array.isArray(_tablesHookRef.memoizedState)) {
+          var tables = _tablesHookRef.memoizedState;
+          if (tableId) {
+            var byId = tables.find(function(t) { return t && t.id === tableId; });
+            if (byId) return byId;
+          }
+          if (tableData && tableData.id) {
+            var byId2 = tables.find(function(t) { return t && t.id === tableData.id; });
+            if (byId2) return byId2;
+          }
+          return tables.find(function(t) { return t && t.rowVar && (!t.result || t.id === (tableData && tableData.id)); }) || tableData;
+        }
+        return tableData;
+      }
+
+      function runWithoutTop(tableData) {
+        if (!tableData || !tableData.rowVar) return;
+
+        /* Find dataset */
+        var el = document.querySelector('[draggable="true"]') || document.querySelector('button');
+        if (!el) return;
+        var fiber = fiberOf(el);
+        if (!fiber) return;
+        var dataset = findDataset(fiber);
+        if (!dataset) { console.warn('[S6] no dataset'); return; }
+
+        var ov = findOverrides(_tablesHookRef);
+        var freq = buildFreqTable(tableData, dataset, ov);
+        if (!freq) { console.warn('[S6] could not build freq table'); return; }
+
+        /* Augment with T2B/Mean */
+        freq = augmentResult(freq, tableData.rowVar, ov);
+
+        /* Dispatch: update this table's result */
+        if (_tablesHookRef) {
+          _tablesHookRef.queue.dispatch(function(prev) {
+            if (!Array.isArray(prev)) return prev;
+            return prev.map(function(t) {
+              if (t.id === tableData.id) {
+                return Object.assign({}, t, { result: freq });
+              }
+              return t;
+            });
+          });
+
+          /* Switch to results tab */
+          var tabHook = findTabsHook(_tablesHookRef);
+          if (tabHook && tabHook.queue && tabHook.queue.dispatch) {
+            tabHook.queue.dispatch('results');
+          }
+        }
+      }
+
+      /* Also intercept Run All to handle no-colVar tables */
+      document.addEventListener('click', function(e) {
+        var btn = e.target.closest ? e.target.closest('button') : null;
+        if (!btn) return;
+        var text = (btn.textContent || '').trim();
+        if (text !== 'Run All' && text !== 'Running...') return;
+
+        /* After bundle's Run All, run our no-colVar tables */
+        setTimeout(function() {
+          if (!_tablesHookRef) return;
+          var tables = _tablesHookRef.memoizedState;
+          if (!Array.isArray(tables)) return;
+
+          var el = document.querySelector('[draggable="true"]') || document.querySelector('button');
+          var fiber = el ? fiberOf(el) : null;
+          if (!fiber) return;
+          var dataset = findDataset(fiber);
+          if (!dataset) return;
+          var ov = findOverrides(_tablesHookRef);
+
+          var needUpdate = false;
+          var updated = tables.map(function(t) {
+            if (t.rowVar && !t.colVar && !t.result) {
+              var freq = buildFreqTable(t, dataset, ov);
+              if (freq) {
+                freq = augmentResult(freq, t.rowVar, ov);
+                needUpdate = true;
+                return Object.assign({}, t, { result: freq });
+              }
+            }
+            return t;
+          });
+          if (needUpdate) {
+            _tablesHookRef.queue.dispatch(function() { return updated; });
+          }
+        }, 800);
+      }, true);
+
+      /* ══════════════════════════════════════════════════════
+         PART C: MutationObserver — hook dispatch + enable btns
+         ══════════════════════════════════════════════════════ */
+      var _obsTimer = null;
+      new MutationObserver(function() {
+        if (_obsTimer) clearTimeout(_obsTimer);
+        _obsTimer = setTimeout(function() {
+          if (!_hooked && _hookAttempts < 50) tryHookDispatch();
+          enableNoTopRun();
+        }, 300);
+      }).observe(document.body, { childList: true, subtree: true });
+
+      /* Initial attempts */
+      setTimeout(function() { tryHookDispatch(); }, 1000);
+      setTimeout(function() { tryHookDispatch(); }, 2500);
+      setTimeout(function() { tryHookDispatch(); enableNoTopRun(); }, 4000);
+
+      console.log('[S6] TB/T2B/Mean + no-TOP support loaded');
+
+    })();
+    </script>
   </body>
 </html>
-
