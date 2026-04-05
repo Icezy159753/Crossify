@@ -3095,28 +3095,8 @@
         ensureTbInfoExpanded(vName);
         var stored = window.__cxGetTbPresetStore();
         var direct = stored[vName];
-        if (direct && direct.summaries && direct.summaries.length) {
-          return { key: vName, info: direct };
-        }
-
-        var labelsInSection = cxSectionRowLabelSet(result, lo, hi);
-        var best = null, bestScore = 0;
-        Object.keys(stored).forEach(function(k) {
-          var expanded = expandTbStoredEntry(stored[k], overrides && overrides[k], k);
-          if (!expanded || !expanded.memberLabels) return;
-          var codes = Object.keys(expanded.memberLabels);
-          if (!codes.length) return;
-          var score = 0;
-          codes.forEach(function(code) {
-            var lbl = String(expanded.memberLabels[code] == null ? '' : expanded.memberLabels[code]).trim();
-            if (lbl && labelsInSection[lbl]) score++;
-          });
-          if (score > bestScore) {
-            bestScore = score;
-            best = { key: k, info: expanded };
-          }
-        });
-        return (best && bestScore >= 2) ? best : { key: vName, info: direct || null };
+        /* Only use direct preset — no fuzzy matching from other variables */
+        return { key: vName, info: (direct && direct.summaries && direct.summaries.length) ? direct : null };
       }
 
       function cxSectionExtraRows(result, lo, hi, vName, overrides) {
