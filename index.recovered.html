@@ -1,4 +1,4 @@
-﻿<!doctype html>
+<!doctype html>
 <!--
   !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
   DO NOT CHANGE THIS FILE โ€” bundle เธ—เธตเนเนเธเนเธเธฒเธเธเธฃเธดเธเธเธทเธญ index-DsrIxxwV.js เน€เธ—เนเธฒเธเธฑเนเธ
@@ -15,46 +15,169 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=Noto+Sans+Thai:wght@400;500;600;700;800;900&family=Plus+Jakarta+Sans:wght@700;800;900&display=swap" rel="stylesheet" />
     <!-- Preemptive safe saveAs — MUST run before bundle so file-saver picks it up -->
+    <!-- Also hide showSaveFilePicker so bundle always routes through saveAs (which we intercept for TB_Setting injection) -->
     <script>
     (function () {
       'use strict';
       function safeSaveAs(blob, filename) {
-        var b;
-        if (blob instanceof Blob) b = blob;
-        else if (blob instanceof ArrayBuffer || blob instanceof Uint8Array) b = new Blob([blob], { type: 'application/octet-stream' });
-        else return;
-        var url = URL.createObjectURL(b);
-        var a = document.createElement('a');
-        a.href = url;
-        a.download = filename || 'download.xlsx';
-        a.rel = 'noopener';
-        a.style.cssText = 'position:fixed;left:-9999px;top:-9999px;opacity:0;pointer-events:none';
-        (document.body || document.documentElement).appendChild(a);
-        a.click();
-        setTimeout(function () {
-          try { a.parentNode && a.parentNode.removeChild(a); } catch (e) {}
-          try { URL.revokeObjectURL(url); } catch (e) {}
-        }, 60000);
+        if (window.__cxInterceptSaveAs) {
+          window.__cxInterceptSaveAs(blob, filename, _doSave);
+          return;
+        }
+        _doSave();
+
+        function _doSave() {
+          var b;
+          if (blob instanceof Blob) b = blob;
+          else if (blob instanceof ArrayBuffer || blob instanceof Uint8Array) b = new Blob([blob], { type: 'application/octet-stream' });
+          else return;
+          var url = URL.createObjectURL(b);
+          var a = document.createElement('a');
+          a.href = url;
+          a.download = filename || 'download.xlsx';
+          a.rel = 'noopener';
+          a.style.cssText = 'position:fixed;left:-9999px;top:-9999px;opacity:0;pointer-events:none';
+          (document.body || document.documentElement).appendChild(a);
+          a.click();
+          setTimeout(function () {
+            try { a.parentNode && a.parentNode.removeChild(a); } catch (e) {}
+            try { URL.revokeObjectURL(url); } catch (e) {}
+          }, 60000);
+        }
       }
       safeSaveAs.saveAs = safeSaveAs;
       window.saveAs = safeSaveAs;
+
+      /* Globally wrap createWritable to capture the write completion on ANY file handle.
+         This catches saves via both showSaveFilePicker AND showOpenFilePicker handles. */
+      if (typeof FileSystemFileHandle !== 'undefined' && typeof FileSystemFileHandle.prototype.createWritable === 'function') {
+        var _globalCW = FileSystemFileHandle.prototype.createWritable;
+        FileSystemFileHandle.prototype.createWritable = async function() {
+          /* Store the handle and the original function so the injector can use them */
+          window.__cxSavedSettingsHandle = this;
+          window.__cxRealCreateWritable = _globalCW.bind(this);
+          
+          var writable = await _globalCW.apply(this, arguments);
+          
+          /* Wrap close() — fires ONLY for non-injection writes */
+          var _origClose = writable.close.bind(writable);
+          writable.close = async function() {
+            var result = await _origClose();
+            
+            /* Only trigger if it looks like a settings file, to avoid touching result exports */
+            var fname = window.__cxSavedSettingsHandle.name || '';
+            var isSettings = fname.toLowerCase().indexOf('setting') > -1;
+            
+            if (!window.__cxTBInjecting && isSettings) {
+              console.log('[TB_Setting] file write closed (' + fname + ') — scheduling TB_Setting injection');
+              setTimeout(function() {
+                if (typeof window.__cxInjectTBAfterWrite === 'function') {
+                  window.__cxInjectTBAfterWrite();
+                }
+              }, 800);
+            }
+            return result;
+          };
+          
+          return writable;
+        };
+        console.log('[TB_Setting] global createWritable hook installed');
+      }
     })();
     </script>
-    <!-- Script 4 — Inject TB_Setting sheet into settings xlsx on Save -->
+    <!-- Script 4 — Inject TB_Setting sheet into settings xlsx on Save (both saveAs and File System Access API) -->
     <script>
     (function () {
       var _orig = window.saveAs;
-      function interceptedSaveAs(blob, filename) {
-        console.log('[TB_Setting] interceptedSaveAs called:', filename, blob);
-        if (typeof filename === 'string' && /\.xlsx$/i.test(filename)) {
-          _injectTBSheet(blob, filename).catch(function (err) { console.error('[TB_Setting] inject failed:', err); _orig(blob, filename); });
-          return;
-        }
-        _orig(blob, filename);
-      }
-      interceptedSaveAs.saveAs = interceptedSaveAs;
-      window.saveAs = interceptedSaveAs;
+      window.__cxSettingsWorkbookLinked = !!window.__cxSettingsWorkbookLinked;
+      window.__cxPendingSettingsAction = window.__cxPendingSettingsAction || null;
 
+      window.__cxRunPendingSettingsAction = function() {
+        var fn = window.__cxPendingSettingsAction;
+        window.__cxPendingSettingsAction = null;
+        if (typeof fn !== 'function') return;
+        setTimeout(function() {
+          try { fn(); } catch (err) { console.error('[CX Settings] pending action failed:', err); }
+        }, 160);
+      };
+
+      window.__cxMarkSettingsWorkbookLinked = function(source) {
+        if (!window.__cxSettingsWorkbookLinked) {
+          console.log('[CX Settings] settings workbook linked via', source || 'unknown');
+        }
+        window.__cxSettingsWorkbookLinked = true;
+        /* After save completes via File System API, inject TB_Setting into the saved file */
+        if (source === 'tables-save') {
+          setTimeout(function() { _injectTBSettingPostSave(); }, 600);
+        }
+        window.__cxRunPendingSettingsAction();
+      };
+
+      /* ── Preset labels (short, user-friendly) ── */
+      var presetLabels = {
+        'tb_low_good':        'TB (1 ดี)',
+        'tb_high_good':       'TB (5 ดี)',
+        't2b_low_good':       'T2B (1 ดี)',
+        't2b_high_good':      'T2B (5 ดี)',
+        't3b_low_good':       'T3B (1 ดี)',
+        't3b_high_good':      'T3B (5 ดี)',
+        'justright_code':     'Justright (code)',
+        'justright_centered': 'Justright (-2..2)'
+      };
+
+      /* ── Intercept File Load to Restore TB_Setting ── */
+      if (typeof Blob !== 'undefined' && Blob.prototype.arrayBuffer) {
+        var _origBlobAB = Blob.prototype.arrayBuffer;
+        Blob.prototype.arrayBuffer = async function() {
+          var buf = await _origBlobAB.apply(this, arguments);
+          // Proceed only if this is a File representing an xlsx settings file
+          if (this instanceof File && this.name && typeof this.name === 'string' && this.name.toLowerCase().endsWith('.xlsx')) {
+             _restoreTBSettingFromBuffer(buf.slice(0), this.name);
+          }
+          return buf;
+        };
+      }
+
+      async function _restoreTBSettingFromBuffer(buf, filename) {
+        try {
+          var ExcelJS = await _getExcelJS();
+          if (!ExcelJS) return;
+          var wb = new ExcelJS.Workbook();
+          await wb.xlsx.load(buf);
+          var ws = wb.worksheets.find(function(w) { return w.name === 'TB_Setting'; });
+          if (!ws) {
+            console.log('[TB_Setting] File read from', filename, '— no TB_Setting sheet found.');
+            return;
+          }
+          var revLabels = {};
+          Object.keys(presetLabels).forEach(function(k) { revLabels[presetLabels[k]] = k; });
+          var newStore = {};
+          for (var r = 2; r <= ws.rowCount; r++) {
+            var vCell = ws.getCell(r, 1);
+            var sCell = ws.getCell(r, 2);
+            if (!vCell || !sCell) continue;
+            var vName = vCell.value && vCell.value.richText ? vCell.value.richText.map(function(x){return x.text;}).join('') : String(vCell.value || '');
+            var setting = sCell.value && sCell.value.richText ? sCell.value.richText.map(function(x){return x.text;}).join('') : String(sCell.value || '');
+            if (vName && setting && vName !== 'Variable') {
+               var presetId = revLabels[setting] || setting;
+               newStore[vName] = { preset: presetId };
+            }
+          }
+          console.log('[TB_Setting] Loaded from', filename, '-> mapped presets:', newStore);
+          
+          /* The app resets state shortly after reading the file. We wait 800ms then apply our presets. */
+          setTimeout(function() {
+            var currentStore = (typeof window.__cxGetTbPresetStore === 'function') ? window.__cxGetTbPresetStore() : {};
+            var merged = Object.assign({}, currentStore, newStore);
+            if (typeof window.__cxSetTbPresetStore === 'function') {
+               window.__cxSetTbPresetStore(merged);
+               console.log('[TB_Setting] ✅ Restored T2B presets back to app state!');
+            }
+          }, 800);
+        } catch(e) { console.error('[TB_Setting] restore error:', e); }
+      }
+
+      /* ── Styling helpers ── */
       function _styleHeader(cell) {
         cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1F4E78' } };
         cell.font = { bold: true, color: { argb: 'FFFFFFFF' }, size: 11, name: 'Calibri' };
@@ -67,23 +190,19 @@
         cell.border = { top:{style:'thin'}, left:{style:'thin'}, bottom:{style:'thin'}, right:{style:'thin'} };
       }
 
-      async function _injectTBSheet(blob, filename) {
-        console.log('[TB_Setting] _injectTBSheet start');
+      /* ── Get ExcelJS from chunk ── */
+      async function _getExcelJS() {
         var m = await import('/assets/exceljs-BMcsBZ_F.js');
-        console.log('[TB_Setting] chunk loaded, m.r type:', typeof m.r, 'keys:', Object.keys(m));
         var raw = (typeof m.r === 'function') ? m.r() : m.r;
-        console.log('[TB_Setting] raw type:', typeof raw, 'keys:', raw ? Object.keys(raw).slice(0,5) : null);
         var ExcelJS = (raw && raw.default) ? raw.default : raw;
-        console.log('[TB_Setting] ExcelJS.Workbook:', ExcelJS && ExcelJS.Workbook ? 'found' : 'NOT FOUND');
-        if (!ExcelJS || !ExcelJS.Workbook) { console.warn('[TB_Setting] no Workbook, falling back'); _orig(blob, filename); return; }
+        if (!ExcelJS || !ExcelJS.Workbook) return null;
+        return ExcelJS;
+      }
 
-        var buf = await blob.arrayBuffer();
-        var wb = new ExcelJS.Workbook();
-        await wb.xlsx.load(buf);
-
-        // อ่าน variableOverrides จาก hidden _settings sheet
+      /* ── Read overrides from _settings JSON in workbook ── */
+      function _readOverrides(wb) {
         var wsH = wb.worksheets.find(function (w) { return w.name === '_settings'; });
-        if (!wsH) { _orig(blob, filename); return; }
+        if (!wsH) return null;
         var chunks = [];
         for (var i = 1; i <= wsH.rowCount; i++) {
           var v = wsH.getCell(i, 1).value;
@@ -91,51 +210,534 @@
           chunks.push(String(v));
         }
         var json = chunks.join('');
-        if (!json.startsWith('{')) { _orig(blob, filename); return; }
-        var settings;
-        try { settings = JSON.parse(json); } catch (e) { _orig(blob, filename); return; }
-        var overrides = settings.variableOverrides || {};
+        if (!json.startsWith('{')) return null;
+        try { return JSON.parse(json); } catch (e) { return null; }
+      }
 
-        // สร้าง TB_Setting sheet ใหม่
-        var oldWs = wb.worksheets.find(function (w) { return w.name === 'TB_Setting'; });
-        if (oldWs) { try { wb.removeWorksheet(oldWs.id); } catch(e) {} }
-
-        var presetLabels = {
-          'tb_low_good':       '1.Create TB (Low scale = good)',
-          'tb_high_good':      '2.Create TB (High scale = good)',
-          't2b_low_good':      '3.Create T2B (Low scale = good)',
-          't2b_high_good':     '4.Create T2B (High scale = good)',
-          't3b_low_good':      '5.Create T3B (Low scale = good)',
-          't3b_high_good':     '6.Create T3B (High scale = good)',
-          'justright_code':    '7.Justright (By code)',
-          'justright_centered':'8.Justright (-2 -1 0 1 2)'
-        };
-
-        var ws = wb.addWorksheet('TB_Setting');
-        ws.getColumn(1).width = 24;
-        ws.getColumn(2).width = 34;
-
-        var hRow = ws.addRow(['Variable', 'Setting']);
-        hRow.height = 18;
-        hRow.eachCell(_styleHeader);
-
-        var tbEntries = Object.keys(overrides)
-          .filter(function (k) { return overrides[k] && overrides[k].summaryPreset; })
-          .sort(function (a, b) { return a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }); });
-
-        tbEntries.forEach(function (variable, idx) {
-          var preset = overrides[variable].summaryPreset;
-          var label = presetLabels[preset] || preset;
-          var dRow = ws.addRow([variable, label]);
-          dRow.height = 16;
-          var even = idx % 2 === 1;
-          dRow.eachCell(function (cell) { _styleData(cell, even); });
+      /* ── Inject/Append TB_Setting sheet into workbook and clean VariableSettings ── */
+      function _injectTBSettingSheet(wb) {
+        /* Read preset data from LIVE app state because export JSON drops summaryPreset */
+        var tbPresets = {};
+        if (typeof window.__cxGetTbPresetStore === 'function') {
+          try { tbPresets = window.__cxGetTbPresetStore() || {}; } catch(e) {}
+        }
+        var presetKeys = Object.keys(tbPresets).filter(function(k) {
+          return tbPresets[k] && tbPresets[k].preset;
         });
+        
+        var newEntries = presetKeys
+          .sort(function (a, b) { return a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }); })
+          .map(function (k) {
+            var preset = tbPresets[k].preset;
+            var label = presetLabels[preset] || preset;
+            return { variable: k, setting: label };
+          });
+
+        /* 1. Find or create TB_Setting sheet */
+        var ws = wb.worksheets.find(function (w) { return w.name === 'TB_Setting'; });
+        if (newEntries.length > 0) {
+          var existingVars = {};
+          var startRow = 2; /* row after header */
+
+          if (ws) {
+            for (var r = 2; r <= ws.rowCount; r++) {
+              var varName = ws.getCell(r, 1).value;
+              if (varName) {
+                existingVars[String(varName).trim()] = r;
+              }
+            }
+            startRow = ws.rowCount + 1;
+          } else {
+            ws = wb.addWorksheet('TB_Setting');
+            ws.getColumn(1).width = 24;
+            ws.getColumn(2).width = 34;
+            var hRow = ws.addRow(['Variable', 'Setting']);
+            hRow.height = 18;
+            hRow.eachCell(_styleHeader);
+            startRow = 2;
+          }
+
+          var rowIdx = startRow;
+          newEntries.forEach(function (entry) {
+            if (existingVars[entry.variable]) {
+              var existRow = existingVars[entry.variable];
+              ws.getCell(existRow, 2).value = entry.setting;
+              var even = (existRow - 2) % 2 === 1;
+              ws.getCell(existRow, 1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: even ? 'FFEBF3FB' : 'FFFFFFFF' } };
+              ws.getCell(existRow, 2).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: even ? 'FFEBF3FB' : 'FFFFFFFF' } };
+            } else {
+              var dRow = ws.addRow([entry.variable, entry.setting]);
+              dRow.height = 16;
+              var even = (rowIdx - 2) % 2 === 1;
+              dRow.eachCell(function (cell) { _styleData(cell, even); });
+              rowIdx++;
+            }
+          });
+          console.log('[TB_Setting] sheet updated: ' + newEntries.length + ' entries processed');
+        }
+
+        /* 2. Clean VariableSettings: completely remove variables having T2B to ensure clean settings workbook */
+        var vsSheet = wb.worksheets.find(function(w) { return w.name === 'VariableSettings'; });
+        if (vsSheet && presetKeys.length > 0) {
+          var toDelete = [];
+          for (var ri = 1; ri <= vsSheet.rowCount; ri++) {
+            var varCell = vsSheet.getCell(ri, 1); /* Column A = Variable */
+            var vStr = "";
+            if (varCell && varCell.value) {
+              if (varCell.value.richText) vStr = varCell.value.richText.map(function(x){return x.text;}).join('');
+              else if (varCell.value.text) vStr = varCell.value.text;
+              else vStr = String(varCell.value);
+            }
+            if (vStr && presetKeys.indexOf(vStr.trim()) > -1) {
+              toDelete.push(ri);
+            }
+          }
+          for (var di = toDelete.length - 1; di >= 0; di--) {
+            vsSheet.spliceRows(toDelete[di], 1);
+          }
+          if (toDelete.length > 0) {
+            console.log('[TB_Setting] wiped ' + toDelete.length + ' rows for T2B vars from VariableSettings');
+          }
+        }
+      }
+
+      /* ═══ Path 1: Intercept saveAs (fallback browsers) ═══ */
+      window.__cxInterceptSaveAs = function(blob, filename, originalAction) {
+        console.log('[TB_Setting] interceptedSaveAs called:', filename);
+        if (typeof filename === 'string' && /\.xlsx$/i.test(filename)) {
+          _processBlob(blob, filename, originalAction).catch(function (err) {
+            console.error('[TB_Setting] inject failed:', err);
+            originalAction();
+          });
+          return;
+        }
+        originalAction();
+      };
+
+      async function _processBlob(blob, filename, originalAction) {
+        var ExcelJS = await _getExcelJS();
+        if (!ExcelJS) { originalAction(); return; }
+
+        var buf = await blob.arrayBuffer();
+        var wb = new ExcelJS.Workbook();
+        await wb.xlsx.load(buf);
+
+        _injectTBSettingSheet(wb);
 
         var newBuf = await wb.xlsx.writeBuffer();
         var newBlob = new Blob([newBuf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
-        _orig(newBlob, filename);
+        
+        // Pass the modified blob to the original safeSaveAs logic
+        var _tempSave = window.__cxInterceptSaveAs;
+        window.__cxInterceptSaveAs = null; // disable intercept temporarily
+        window.saveAs(newBlob, filename);
+        window.__cxInterceptSaveAs = _tempSave;
+        
+        if (typeof window.__cxMarkSettingsWorkbookLinked === 'function') {
+          window.__cxMarkSettingsWorkbookLinked('saveAs');
+        }
       }
+
+      /* ═══ Path 2: Post-save injection via File System API ═══ */
+
+      function _findFileHandleInFiber() {
+        try {
+          var root = document.getElementById('root');
+          if (!root) return null;
+          var fKey = Object.keys(root).find(function(k) {
+            return k.startsWith('__reactContainer') || k.startsWith('__reactFiber');
+          });
+          if (!fKey) return null;
+          var fiber = root[fKey];
+          var visited = new Set();
+          var queue = [fiber];
+          while (queue.length > 0) {
+            var f = queue.shift();
+            if (!f || visited.has(f)) continue;
+            visited.add(f);
+            var s = f.memoizedState;
+            while (s) {
+              var v = s.memoizedState;
+              if (v && typeof v === 'object' && v !== null &&
+                  typeof v.getFile === 'function' &&
+                  typeof v.createWritable === 'function') {
+                return v;
+              }
+              s = s.next;
+            }
+            if (f.child) queue.push(f.child);
+            if (f.sibling) queue.push(f.sibling);
+          }
+        } catch (err) {
+          console.error('[TB_Setting] fiber search failed:', err);
+        }
+        return null;
+      }
+
+      /* Expose injector so showSaveFilePicker wrapper can call it */
+      window.__cxInjectTBAfterWrite = function() {
+        _injectTBSettingPostSave();
+      };
+
+      async function _injectTBSettingPostSave() {
+        /* Guard: prevent re-entrant calls */
+        if (window.__cxTBInjecting) return;
+        window.__cxTBInjecting = true;
+        console.log('[TB_Setting] post-save injection starting...');
+        try {
+          var handle = window.__cxSavedSettingsHandle;
+          if (!handle) {
+            console.warn('[TB_Setting] no file handle (showSaveFilePicker not captured)'); return;
+          }
+          var realCreateWritable = window.__cxRealCreateWritable;
+          if (!realCreateWritable) {
+            try { realCreateWritable = FileSystemFileHandle.prototype.createWritable.bind(handle); }
+            catch(e) { console.error('[TB_Setting] no createWritable available'); return; }
+          }
+
+          /* ── Read preset data from LIVE app state (not from file _settings) ──
+             Reason: __cxSanitizeVariableOverridesForExport intentionally deletes
+             summaryPreset before saving to the file. The real data lives in
+             window.__cxGetTbPresetStore() → __cxGlobalSettingsState.tbPresets */
+          var tbPresets = {};
+          if (typeof window.__cxGetTbPresetStore === 'function') {
+            try { tbPresets = window.__cxGetTbPresetStore() || {}; } catch(e) {}
+          }
+          var presetKeys = Object.keys(tbPresets).filter(function(k) {
+            return tbPresets[k] && tbPresets[k].preset;
+          });
+          console.log('[TB_Setting] tbPresets from live state:', presetKeys);
+
+          if (presetKeys.length === 0) {
+            console.log('[TB_Setting] no presets set — skipping TB_Setting injection');
+            return;
+          }
+
+          /* Read the saved file */
+          var file = await handle.getFile();
+          var buf = await file.arrayBuffer();
+          var ExcelJS = await _getExcelJS();
+          if (!ExcelJS) return;
+
+          var wb = new ExcelJS.Workbook();
+          await wb.xlsx.load(buf);
+
+          var existingSheets = wb.worksheets.map(function(w){ return w.name; });
+          console.log('[TB_Setting] sheets in file:', JSON.stringify(existingSheets));
+
+          _injectTBSettingSheet(wb);
+
+          /* Write back to SAME file */
+          var newBuf = await wb.xlsx.writeBuffer();
+          var writable = await realCreateWritable();
+          await writable.write(new Blob([newBuf], {
+            type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+          }));
+          await writable.close();
+
+          console.log('[TB_Setting] Finished saving settings back to file');
+        } catch (err) {
+          console.warn('[TB_Setting] post-save injection warning:', err);
+        } finally {
+          window.__cxTBInjecting = false;
+        }
+      }
+
+      console.log('[TB_Setting] Script 4 loaded (saveAs + post-save file handle injection)');
+    })();
+    </script>
+    <script>
+    (function() {
+      'use strict';
+      if (window.__cxSettingsGuardLoaded) return;
+      window.__cxSettingsGuardLoaded = true;
+      window.__cxSettingsSavePrompt = window.__cxSettingsSavePrompt || null;
+
+      function cxFindWorkspaceButton() {
+        var btns = document.querySelectorAll('button');
+        for (var i = 0; i < btns.length; i++) {
+          var txt = (btns[i].textContent || '').trim();
+          if (txt.indexOf('Workspace') !== -1) return btns[i];
+        }
+        return null;
+      }
+
+      function cxFindWorkspaceMenu() {
+        var menus = document.querySelectorAll('div.absolute, div[role="menu"], div[class*="absolute"]');
+        for (var i = 0; i < menus.length; i++) {
+          var menu = menus[i];
+          if (!menu || !menu.querySelectorAll) continue;
+          var rect = menu.getBoundingClientRect();
+          if (rect.width < 120 || rect.height < 40) continue;
+          if (rect.top < 0 || rect.top > 220) continue;
+          var text = (menu.textContent || '').replace(/\s+/g, ' ').trim();
+          if (!text) continue;
+          if (text.indexOf('Settings') !== -1 || text.indexOf('SPSS') !== -1 || text.indexOf('Workspace') !== -1) {
+            return menu;
+          }
+        }
+        return null;
+      }
+
+      function cxFindSettingsMenuAction(menu) {
+        if (!menu || !menu.querySelectorAll) return null;
+        var items = menu.querySelectorAll('button, a, [role="menuitem"], div[class*="cursor"]');
+        var exportItem = null;
+        var loadItem = null;
+        for (var i = 0; i < items.length; i++) {
+          var txt = (items[i].textContent || '').replace(/\s+/g, ' ').trim();
+          if (!txt) continue;
+          if (txt.indexOf('Save Settings') !== -1) return { mode: 'save', el: items[i], label: txt };
+          if (txt.indexOf('Export Settings') !== -1) exportItem = { mode: 'export', el: items[i], label: txt };
+          else if (txt.indexOf('Settings') !== -1 && txt.indexOf('Load') === -1) {
+            return {
+              mode: txt.indexOf('Save') !== -1 ? 'save' : 'export',
+              el: items[i],
+              label: txt
+            };
+          }
+          if (txt.indexOf('Load Settings') !== -1) loadItem = items[i];
+        }
+        if (exportItem) return exportItem;
+        if (loadItem) return { mode: 'load_only', el: loadItem, label: (loadItem.textContent || '').trim() };
+        return null;
+      }
+
+      function cxWithWorkspaceMenu(cb) {
+        var wsBtn = cxFindWorkspaceButton();
+        if (!wsBtn) { cb(null, null); return; }
+
+        var existing = cxFindWorkspaceMenu();
+        if (existing) {
+          cb(existing, function() {});
+          return;
+        }
+
+        var resolved = false;
+        var obs = new MutationObserver(function() {
+          if (resolved) return;
+          var menu = cxFindWorkspaceMenu();
+          if (!menu) return;
+          resolved = true;
+          obs.disconnect();
+          cb(menu, function() {
+            try { wsBtn.click(); } catch (e) {}
+          });
+        });
+        obs.observe(document.body, { childList: true, subtree: true });
+
+        try { wsBtn.click(); } catch (e) {}
+        setTimeout(function() {
+          if (resolved) return;
+          var menu = cxFindWorkspaceMenu();
+          if (menu) {
+            resolved = true;
+            obs.disconnect();
+            cb(menu, function() {
+              try { wsBtn.click(); } catch (e) {}
+            });
+            return;
+          }
+          obs.disconnect();
+          cb(null, function() {});
+        }, 700);
+      }
+
+      function cxCloseSettingsPrompt() {
+        var old = window.__cxSettingsSavePrompt;
+        if (old && old.parentNode) old.parentNode.removeChild(old);
+        window.__cxSettingsSavePrompt = null;
+      }
+
+      function cxShowSettingsPrompt(actionLabel) {
+        cxCloseSettingsPrompt();
+        var overlay = document.createElement('div');
+        overlay.style.cssText = 'position:fixed;inset:0;z-index:2147483647;background:rgba(15,23,42,0.45);display:flex;align-items:center;justify-content:center;padding:20px;font-family:inherit';
+        var panel = document.createElement('div');
+        panel.style.cssText = 'width:min(480px,calc(100vw - 28px));background:#fff;border:1px solid #dbeafe;border-radius:18px;box-shadow:0 28px 72px rgba(15,23,42,0.28);overflow:hidden';
+        var head = document.createElement('div');
+        head.style.cssText = 'padding:16px 18px;background:linear-gradient(135deg,#1F4E78 0%,#2E75B6 100%);color:#fff';
+        head.innerHTML = '<div style="font-size:15px;font-weight:700">บันทึกไฟล์ Setting ก่อนใช้งานครั้งแรก</div><div style="font-size:12px;opacity:0.9;margin-top:4px">เพื่อให้การแก้ไขครั้งนี้และครั้งถัดไปผูกกับไฟล์ Setting Excel เดิม</div>';
+        var body = document.createElement('div');
+        body.style.cssText = 'padding:18px;color:#334155;font-size:13px;line-height:1.65';
+        body.innerHTML = 'คุณกำลังจะ <b>' + String(actionLabel || 'แก้ไขข้อมูล').replace(/</g, '&lt;') + '</b><br>กรุณา Export/Save ไฟล์ Setting Excel ก่อน 1 ครั้ง ระบบจะเชื่อมไฟล์ setting ให้ แล้วค่อยทำรายการนี้ต่อให้อัตโนมัติ';
+        var foot = document.createElement('div');
+        foot.style.cssText = 'display:flex;justify-content:flex-end;gap:10px;padding:0 18px 18px';
+        var cancelBtn = document.createElement('button');
+        cancelBtn.type = 'button';
+        cancelBtn.textContent = 'ยกเลิก';
+        cancelBtn.style.cssText = 'border:1px solid #d1d5db;background:#fff;color:#475569;border-radius:10px;padding:8px 14px;font-size:12px;cursor:pointer';
+        cancelBtn.addEventListener('click', cxCloseSettingsPrompt);
+        var saveBtn = document.createElement('button');
+        saveBtn.type = 'button';
+        saveBtn.textContent = 'บันทึก Setting ตอนนี้';
+        saveBtn.style.cssText = 'border:1px solid #1F4E78;background:#1F4E78;color:#fff;border-radius:10px;padding:8px 14px;font-size:12px;font-weight:700;cursor:pointer';
+        saveBtn.addEventListener('click', function() {
+          cxCloseSettingsPrompt();
+          if (typeof window.cxTriggerWorkspaceSave === 'function') window.cxTriggerWorkspaceSave();
+        });
+        foot.appendChild(cancelBtn);
+        foot.appendChild(saveBtn);
+        panel.appendChild(head);
+        panel.appendChild(body);
+        panel.appendChild(foot);
+        overlay.appendChild(panel);
+        overlay.addEventListener('click', function(e) {
+          if (e.target === overlay) cxCloseSettingsPrompt();
+        });
+        document.body.appendChild(overlay);
+        window.__cxSettingsSavePrompt = overlay;
+      }
+
+      /* ── cxTriggerWorkspaceSave: simulate Tables ▸ Save click ── */
+      window.cxTriggerWorkspaceSave = function() {
+        console.log('[CX Settings] cxTriggerWorkspaceSave called');
+
+        // Strategy 1: Find the "Tables" button reliably
+        // The top bar has buttons: Workspace, Tables, Batch — all with rounded-xl bg-white/10
+        // We match by checking the DIRECT child text, not textContent (which includes dropdown children)
+        var btns = document.querySelectorAll('button');
+        var candidateBtns = [];
+        for (var i = 0; i < btns.length; i++) {
+          var btn = btns[i];
+          var cls = btn.className || '';
+          if (cls.indexOf('rounded-xl') === -1 || cls.indexOf('bg-white/10') === -1) continue;
+          // Check direct child text nodes + span text
+          var childTexts = [];
+          for (var c = 0; c < btn.childNodes.length; c++) {
+            var child = btn.childNodes[c];
+            if (child.nodeType === 3) childTexts.push(child.textContent.trim()); // text node
+            else if (child.nodeType === 1 && child.tagName !== 'svg' && child.tagName !== 'SVG') {
+              // It might be an SVG icon, skip SVGs — only get text from non-SVG elements
+              var t = child.textContent ? child.textContent.trim() : '';
+              if (t) childTexts.push(t);
+            }
+          }
+          var directText = childTexts.join(' ').trim();
+          if (directText === 'Tables') {
+            candidateBtns.push(btn);
+          }
+        }
+
+        // Use the last candidate (Tables is typically right of Workspace)
+        var tablesBtn = candidateBtns.length > 0 ? candidateBtns[candidateBtns.length - 1] : null;
+
+        if (!tablesBtn) {
+          console.warn('[CX Settings] Tables button not found in DOM — trying fiber');
+          cxTriggerSaveViaFiber();
+          return;
+        }
+
+        console.log('[CX Settings] Found Tables button, opening dropdown...');
+        tablesBtn.click();
+
+        // Wait for the dropdown to appear, then click Save
+        var attempts = 0;
+        var maxAttempts = 25;
+        var finder = setInterval(function() {
+          attempts++;
+          // The Tables dropdown appears as a sibling div.absolute inside the same parent
+          var parent = tablesBtn.closest('div.relative') || tablesBtn.parentElement;
+          var dropdown = parent ? parent.querySelector('div.absolute') : null;
+          if (dropdown) {
+            var saveBtns = dropdown.querySelectorAll('button');
+            for (var s = 0; s < saveBtns.length; s++) {
+              var sTxt = (saveBtns[s].textContent || '').replace(/\s+/g, ' ').trim();
+              if (sTxt === 'Save') {
+                clearInterval(finder);
+                console.log('[CX Settings] Found Save button, clicking...');
+                saveBtns[s].click();
+                return;
+              }
+            }
+          }
+          // Also try broader search as fallback
+          if (attempts >= 5) {
+            var allDropdowns = document.querySelectorAll('div.absolute.right-0.top-full');
+            for (var d = 0; d < allDropdowns.length; d++) {
+              var dd = allDropdowns[d];
+              var ddBtns = dd.querySelectorAll('button');
+              for (var b = 0; b < ddBtns.length; b++) {
+                var bTxt = (ddBtns[b].textContent || '').replace(/\s+/g, ' ').trim();
+                if (bTxt === 'Save') {
+                  clearInterval(finder);
+                  console.log('[CX Settings] Found Save button (broad), clicking...');
+                  ddBtns[b].click();
+                  return;
+                }
+              }
+            }
+          }
+          if (attempts >= maxAttempts) {
+            clearInterval(finder);
+            console.warn('[CX Settings] Save button not found in dropdown — trying fiber');
+            try { tablesBtn.click(); } catch(e) {}
+            cxTriggerSaveViaFiber();
+          }
+        }, 60);
+      };
+
+      /* Fallback: traverse React fiber tree to invoke save directly */
+      function cxTriggerSaveViaFiber() {
+        try {
+          var root = document.getElementById('root');
+          if (!root) return;
+          var fKey = Object.keys(root).find(function(k) { return k.startsWith('__reactContainer') || k.startsWith('__reactFiber'); });
+          if (!fKey) return;
+          var fiber = root[fKey];
+          // BFS through fiber tree looking for the Save button component
+          // The Save button in bundle has: onClick that calls Fi() then at(null)
+          // Props pattern: { onClick: fn, disabled: bool, className: "...emerald..." }
+          // Children has a <span> with "Save"
+          var queue = [fiber];
+          var visited = new Set();
+          while (queue.length > 0) {
+            var f = queue.shift();
+            if (!f || visited.has(f)) continue;
+            visited.add(f);
+            var p = f.memoizedProps;
+            if (p && typeof p.onClick === 'function' && typeof p.className === 'string' && p.className.indexOf('emerald') !== -1) {
+              // Check if children contain "Save" text
+              var ch = p.children;
+              if (Array.isArray(ch)) {
+                for (var ci = 0; ci < ch.length; ci++) {
+                  var item = ch[ci];
+                  if (item && typeof item === 'object' && item.props && item.props.children === 'Save') {
+                    console.log('[CX Settings] Found Save via fiber, invoking onClick...');
+                    p.onClick();
+                    return;
+                  }
+                }
+              }
+            }
+            if (f.child) queue.push(f.child);
+            if (f.sibling) queue.push(f.sibling);
+          }
+          console.error('[CX Settings] Could not find Save handler via fiber');
+        } catch (err) {
+          console.error('[CX Settings] fiber fallback failed:', err);
+        }
+      }
+
+      window.__cxRequireSettingsWorkbook = function(actionLabel, onReady) {
+        if (window.__cxSettingsWorkbookLinked) {
+          if (typeof onReady === 'function') onReady();
+          return true;
+        }
+        cxWithWorkspaceMenu(function(menu, closeMenu) {
+          var match = cxFindSettingsMenuAction(menu);
+          if (match && match.mode === 'save') {
+            window.__cxSettingsWorkbookLinked = true;
+            try { closeMenu(); } catch (e) {}
+            if (typeof onReady === 'function') onReady();
+            return;
+          }
+          try { closeMenu(); } catch (e) {}
+          window.__cxPendingSettingsAction = (typeof onReady === 'function') ? onReady : null;
+          cxShowSettingsPrompt(actionLabel);
+        });
+        return false;
+      };
     })();
     </script>
     <script type="module" crossorigin src="/assets/index-DsrIxxwV.js"></script>
@@ -164,6 +766,57 @@
       document.addEventListener('submit', function (ev) {
         ev.preventDefault();
         ev.stopImmediatePropagation();
+      }, true);
+    })();
+    </script>
+    <script>
+    (function() {
+      'use strict';
+      if (window.__cxVariableEditorGuardLoaded) return;
+      window.__cxVariableEditorGuardLoaded = true;
+
+      function isEditVariableModalButton(btn) {
+        var el = btn;
+        while (el && el !== document.body) {
+          if (el.querySelector) {
+            var h3 = el.querySelector('h3');
+            if (h3 && /^Edit Variable - /.test((h3.textContent || '').trim())) return true;
+          }
+          el = el.parentElement;
+        }
+        return false;
+      }
+
+      document.addEventListener('click', function(e) {
+        var btn = e.target && e.target.closest ? e.target.closest('button') : null;
+        if (!btn || !isEditVariableModalButton(btn)) return;
+
+        var txt = (btn.textContent || '').replace(/\s+/g, ' ').trim();
+        var title = (btn.title || '').trim();
+        var isOrderBtn = title === 'Move selected up' || title === 'Move selected down' || title === 'Move up' || title === 'Move down';
+        var isSaveBtn = txt === 'Save Variable';
+
+        if (isOrderBtn && !window.__cxSettingsWorkbookLinked && typeof window.__cxRequireSettingsWorkbook === 'function') {
+          e.preventDefault();
+          e.stopImmediatePropagation();
+          window.__cxRequireSettingsWorkbook('แก้ไขลำดับตัวแปร', function() {
+            try { btn.click(); } catch (err) {}
+          });
+          return;
+        }
+
+        if (isSaveBtn && typeof window.__cxRequireSettingsWorkbook === 'function' && !window.__cxSettingsWorkbookLinked) {
+          e.preventDefault();
+          e.stopImmediatePropagation();
+          window.__cxRequireSettingsWorkbook('บันทึกการแก้ไขตัวแปร', function() {
+            try { btn.click(); } catch (err) {}
+          });
+          return;
+        }
+
+        if (isSaveBtn && window.__cxSettingsWorkbookLinked && typeof window.cxTriggerWorkspaceSave === 'function') {
+          setTimeout(function() { window.cxTriggerWorkspaceSave(); }, 420);
+        }
       }, true);
     })();
     </script>
@@ -1378,7 +2031,14 @@
           btn.style.cssText = 'display:flex;align-items:center;justify-content:center;width:22px;height:22px;border-radius:6px;border:1px solid #d1d5db;background:#fff;cursor:pointer;color:#374151;padding:0;flex-shrink:0';
           btn.addEventListener('mouseover', function(){ btn.style.background='#eff6ff';btn.style.borderColor='#93c5fd';btn.style.color='#1d4ed8'; });
           btn.addEventListener('mouseout',  function(){ btn.style.background='#fff';btn.style.borderColor='#d1d5db';btn.style.color='#374151'; });
-          btn.addEventListener('click', function(e){ e.stopPropagation(); openModal(); });
+          btn.addEventListener('click', function(e){
+            e.stopPropagation();
+            if (typeof window.__cxRequireSettingsWorkbook === 'function') {
+              var ok = window.__cxRequireSettingsWorkbook('สร้างข้อใหม่ / ตัวแปรใหม่', function() { openModal(); });
+              if (!ok) return;
+            }
+            openModal();
+          });
           hdr.appendChild(btn); return;
         }
       }
@@ -2279,6 +2939,9 @@
         }
         var matched=newCases.filter(function(r){ return r[varName]!==null; }).length;
         closeModal();
+        if (window.__cxSettingsWorkbookLinked && typeof window.cxTriggerWorkspaceSave === 'function') {
+          setTimeout(function() { window.cxTriggerWorkspaceSave(); }, 320);
+        }
         var t=document.createElement('div'); t.style.cssText='position:fixed;bottom:24px;left:50%;transform:translateX(-50%);z-index:2147483647;background:#166534;color:#fff;padding:9px 22px;border-radius:20px;font-size:12px;font-family:inherit;box-shadow:0 4px 20px rgba(0,0,0,0.2);pointer-events:none';
         t.textContent=(isEdit?'แก้ไข ':'สร้าง ')+varName+' เรียบร้อย — matched '+matched+'/'+newCases.length+' cases';
         document.body.appendChild(t); setTimeout(function(){ t.remove(); }, 3500);
@@ -2432,6 +3095,95 @@
         jr:  { idleBg: '#fffbeb', idleBorder: '#fcd34d', hoverBg: '#fef3c7', hoverBorder: '#fbbf24', actBg: '#fde68a', actBorder: '#d97706' }
       };
 
+      /* ── Force Save Setting — trigger app's own Workspace Save ── */
+      window._cxSettingSavedVars = {}; /* track which vars already saved */
+
+      function cxTriggerWorkspaceSave() {
+        console.log('[TB] cxTriggerWorkspaceSave: looking for Tables button...');
+        /* Find the "Tables" button in the top bar (NOT Workspace) */
+        var headerBtns = document.querySelectorAll('button');
+        var tablesBtn = null;
+        for (var i = 0; i < headerBtns.length; i++) {
+          var btn = headerBtns[i];
+          var cls = btn.className || '';
+          /* Top-bar dropdown buttons have rounded-xl bg-white/10 */
+          if (cls.indexOf('rounded-xl') === -1 || cls.indexOf('bg-white') === -1) continue;
+          /* Check the direct text inside the button (not descendants) */
+          var directText = '';
+          for (var c = 0; c < btn.childNodes.length; c++) {
+            var nd = btn.childNodes[c];
+            if (nd.nodeType === 3) directText += nd.textContent;
+          }
+          directText = directText.trim();
+          if (directText === 'Tables') { tablesBtn = btn; break; }
+        }
+        if (!tablesBtn) {
+          console.warn('[TB] Tables button not found');
+          return;
+        }
+
+        function findAndClickSave() {
+          /* Look for Save button inside the Tables dropdown */
+          var parent = tablesBtn.closest('div.relative') || tablesBtn.parentElement;
+          if (!parent) return false;
+          var dropdown = parent.querySelector('div.absolute');
+          if (!dropdown) return false;
+          var items = dropdown.querySelectorAll('button');
+          for (var j = 0; j < items.length; j++) {
+            var t = (items[j].textContent || '').trim();
+            if (t === 'Save') {
+              items[j].click();
+              console.log('[TB] triggered Save from Tables dropdown');
+              /* Mark settings as linked so the popup won't appear again */
+              if (typeof window.__cxMarkSettingsWorkbookLinked === 'function') {
+                /* Delay to let the save dialog finish */
+                setTimeout(function() { window.__cxMarkSettingsWorkbookLinked('tables-save'); }, 500);
+              } else {
+                window.__cxSettingsWorkbookLinked = true;
+                if (typeof window.__cxRunPendingSettingsAction === 'function') {
+                  setTimeout(window.__cxRunPendingSettingsAction, 500);
+                }
+              }
+              return true;
+            }
+          }
+          return false;
+        }
+
+        /* Click to open the Tables dropdown */
+        tablesBtn.click();
+
+        /* Use MutationObserver to wait for dropdown to render */
+        var found = false;
+        var obs = new MutationObserver(function() {
+          if (found) return;
+          if (findAndClickSave()) {
+            found = true;
+            obs.disconnect();
+          }
+        });
+        obs.observe(document.body, { childList: true, subtree: true });
+
+        /* Also try immediately */
+        if (findAndClickSave()) { found = true; obs.disconnect(); return; }
+        /* Cleanup after 3s */
+        setTimeout(function() {
+          if (!found) {
+            obs.disconnect();
+            console.warn('[TB] Save button not found in Tables dropdown');
+            try { tablesBtn.click(); } catch(e) {} /* close dropdown */
+          }
+        }, 3000);
+      }
+      window.cxTriggerWorkspaceSave = cxTriggerWorkspaceSave;
+
+      function cxShowSaveSettingDialog(varName) {
+        if (window._cxSettingSavedVars[varName]) return; /* already saved, skip */
+        window._cxSettingSavedVars[varName] = true;
+        /* Delay slightly so preset data is committed before save */
+        setTimeout(function() { cxTriggerWorkspaceSave(); }, 300);
+      }
+
       function isFactorOnlyPreset(id) {
         return id === 'justright_02' || id === 'justright_code';
       }
@@ -2571,13 +3323,30 @@
         });
       }
 
-      function expandTbStoredEntry(info, ov, varName) {
+      function expandTbStoredEntry(info, ov, varName, resultCtx, lo, hi) {
         if (!info || !info.preset) return info;
         if (info.summaries && info.summaries.length && info.memberLabels && Object.keys(info.memberLabels).length) return info;
         if (isFactorOnlyPreset(info.preset) && info.memberLabels && Object.keys(info.memberLabels).length) return info;
         var presetMeta = PRESETS.find(function(p) { return p.id === info.preset; });
         var minCodes = (presetMeta && presetMeta.minCodes) || 0;
         var codeRows = codeRowsFromOverride(ov);
+        if (!codeRows.length && resultCtx && resultCtx.rowValues) {
+          var seen = {};
+          var nativeCounter = 1;
+          var low = typeof lo === 'number' ? lo : 0;
+          var high = typeof hi === 'number' ? hi : resultCtx.rowValues.length;
+          for (var ri = low; ri < high; ri++) {
+            var t0 = (resultCtx.rowTypes && resultCtx.rowTypes[ri]) || 'data';
+            if (t0 === 'stat' || t0 === 'summary' || t0 === 'net') continue;
+            var rv = String(resultCtx.rowValues[ri] == null ? '' : resultCtx.rowValues[ri]).trim();
+            if (rv && rv !== 'Base' && rv !== 'ไม่มีผู้ตอบ' && rv !== 'ไม่มีคนตอบ' && rv.toLowerCase() !== 'total' && rv.indexOf('_summary_') === -1) {
+              if (!seen[rv]) {
+                seen[rv] = true;
+                codeRows.push({ key: rv, code: String(nativeCounter++), label: rv, rowKind: 'code' });
+              }
+            }
+          }
+        }
         if (!codeRows.length && varName && typeof window.__cxTbScaleFromSource === 'function') {
           var syn = window.__cxTbScaleFromSource(varName);
           if (syn) codeRows = codeRowsFromOverride(syn);
@@ -2598,12 +3367,12 @@
         return { preset: info.preset, summaries: built.summaries, memberLabels: memberLabels };
       }
 
-      function ensureTbInfoExpanded(varName) {
+      function ensureTbInfoExpanded(varName, resultCtx, lo, hi) {
         var stored = window.__cxGetTbPresetStore();
         var info = stored[varName];
         if (!info || !info.preset) return null;
         var ov = window.__cxVariableOverrides && window.__cxVariableOverrides[varName];
-        var expanded = expandTbStoredEntry(info, ov, varName);
+        var expanded = expandTbStoredEntry(info, ov, varName, resultCtx, lo, hi);
         if (!expanded || !expanded.memberLabels || !Object.keys(expanded.memberLabels).length) {
           if (info.memberLabels && Object.keys(info.memberLabels).length) return info;
           return (info.summaries && info.summaries.length) ? info : null;
@@ -2676,6 +3445,10 @@
       };
 
       function applyPreset(preset, modalEl, varName) {
+        if (typeof window.__cxRequireSettingsWorkbook === 'function' && !window.__cxSettingsWorkbookLinked) {
+          var okPre = window.__cxRequireSettingsWorkbook('สร้าง TB / T2B / T3B', function() { applyPreset(preset, modalEl, varName); });
+          if (!okPre) return false;
+        }
         var hook = findVarEditorHook(modalEl);
         if (!hook) return false;
 
@@ -2740,10 +3513,16 @@
 
         setTimeout(function() { styleSummaryRows(modalEl); }, 120);
         setTimeout(function() { styleSummaryRows(modalEl); }, 400);
+
+        cxShowSaveSettingDialog(varName);
         return true;
       }
 
       function clearPreset(modalEl, varName) {
+        if (typeof window.__cxRequireSettingsWorkbook === 'function' && !window.__cxSettingsWorkbookLinked) {
+          var okClr = window.__cxRequireSettingsWorkbook('ล้างค่า TB / T2B / T3B', function() { clearPreset(modalEl, varName); });
+          if (!okClr) return false;
+        }
         var hook = findVarEditorHook(modalEl);
         if (hook) {
           var cleaned = hook.memoizedState
@@ -2757,6 +3536,9 @@
         var stored = window.__cxGetTbPresetStore();
         delete stored[varName];
         window.__cxSetTbPresetStore(stored);
+        /* Reset so next apply triggers save again */
+        delete window._cxSettingSavedVars[varName];
+        cxShowSaveSettingDialog(varName);
       }
 
       /* ── Summary row styling ── */
@@ -2951,6 +3733,10 @@
           + '<span id="cx-tb-label">' + lblTxt + '</span>';
         btn.addEventListener('click', function(e) {
           e.stopPropagation();
+          if (typeof window.__cxRequireSettingsWorkbook === 'function') {
+            var ok = window.__cxRequireSettingsWorkbook('สร้าง TB / T2B / T3B', function() { showPresetDialog(modalEl, varName); });
+            if (!ok) return;
+          }
           showPresetDialog(modalEl, varName);
         });
 
@@ -3092,7 +3878,7 @@
       }
 
       function cxResolveTbInfoForSection(vName, result, lo, hi, overrides) {
-        ensureTbInfoExpanded(vName);
+        ensureTbInfoExpanded(vName, result, lo, hi);
         var stored = window.__cxGetTbPresetStore();
         var direct = stored[vName];
         /* Only use direct preset — no fuzzy matching from other variables */
@@ -3367,7 +4153,7 @@
 
       /* ── Engine-level summary injection (called from patched Qn in bundle) ── */
       window.__cxAddSummary = function(result, varName) {
-        ensureTbInfoExpanded(varName);
+        ensureTbInfoExpanded(varName, result, 0, result.rowValues ? result.rowValues.length : 0);
         var stored = window.__cxGetTbPresetStore();
         var info = stored[varName];
         if (!info || !info.summaries || !info.summaries.length) return result;
@@ -3809,6 +4595,14 @@
       document.addEventListener('click', function(e) {
         var btn = findMoveButton(e.target);
         if (!btn) return;
+        if (!window.__cxSettingsWorkbookLinked && typeof window.__cxRequireSettingsWorkbook === 'function') {
+          e.preventDefault();
+          e.stopImmediatePropagation();
+          window.__cxRequireSettingsWorkbook('แก้ไขลำดับตัวแปรใน TOP / SIDE', function() {
+            try { btn.click(); } catch (err) {}
+          });
+          return;
+        }
 
         var axis = getAxis(btn);
         if (!axis) return;
@@ -3839,6 +4633,9 @@
             return updated;
           });
         });
+        if (window.__cxSettingsWorkbookLinked && typeof window.cxTriggerWorkspaceSave === 'function') {
+          setTimeout(function() { window.cxTriggerWorkspaceSave(); }, 260);
+        }
       }, true);
     })();
     </script>
@@ -5081,6 +5878,7 @@
             _hookedHook = null;
             _tablesHookRef = null;
             _hookAttempts = 0;
+            window._cxSettingSavedVars = {};
             /* Re-enable buttons after React finishes re-rendering */
             setTimeout(function() { tryHookDispatch(); enableNoTopRun(); }, 500);
             setTimeout(function() { tryHookDispatch(); enableNoTopRun(); }, 1500);
