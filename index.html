@@ -172,9 +172,17 @@
     (function () {
       'use strict';
 
-      var COPY_KEY = '__cx_tbl_copy__';
       var menuEl = null;
       var lastRowFiber = null; // captured at right-click time
+      window.__cxTableClipboard = Array.isArray(window.__cxTableClipboard) ? window.__cxTableClipboard : [];
+
+      function getClipboardTables() {
+        return Array.isArray(window.__cxTableClipboard) ? window.__cxTableClipboard : [];
+      }
+
+      function setClipboardTables(items) {
+        window.__cxTableClipboard = Array.isArray(items) ? items : [];
+      }
 
       /* โ”€โ”€ React fiber helpers โ”€โ”€ */
       function fiberOf(el) {
@@ -310,8 +318,7 @@
         removeMenu();
 
         var selectedForCopy = getSelectedForCopy(table);
-        var copied = [];
-        try { copied = JSON.parse(localStorage.getItem(COPY_KEY) || '[]'); } catch (e) {}
+        var copied = getClipboardTables();
 
         menuEl = document.createElement('div');
         menuEl.style.cssText = [
@@ -324,7 +331,7 @@
 
         // Copy โ€” copies all selected tables if right-clicked table is in the selection
         menuEl.appendChild(makeBtn('Copy' + (selectedForCopy.length > 1 ? ' (' + selectedForCopy.length + ')' : ''), SVG_COPY, false, function () {
-          try { localStorage.setItem(COPY_KEY, JSON.stringify(selectedForCopy)); } catch (e) {}
+          setClipboardTables(selectedForCopy);
           removeMenu();
         }));
 
@@ -404,15 +411,14 @@
           var active = getActiveTableRow();
           if (!active) return;
           var tocopy = getSelectedForCopy(active.table);
-          try { localStorage.setItem(COPY_KEY, JSON.stringify(tocopy)); } catch (ex) {}
+          setClipboardTables(tocopy);
           showToast('Copied ' + tocopy.length + ' table' + (tocopy.length > 1 ? 's' : ''));
           e.preventDefault();
         }
 
         // Ctrl+V โ€” paste after active table
         if ((e.ctrlKey || e.metaKey) && e.key === 'v') {
-          var copied = [];
-          try { copied = JSON.parse(localStorage.getItem(COPY_KEY) || '[]'); } catch (ex) {}
+          var copied = getClipboardTables();
           if (copied.length === 0) return;
           var active = getActiveTableRow();
           if (!active) return;
@@ -2292,7 +2298,121 @@
       window.__cxTBT2B = true;
 
       var LS_KEY = '__cx_tb_preset__';
+      var GLOBAL_SETTINGS_KEY = '__cx_global_settings__';
       var SUMMARY_SET = { TB: 1, T2B: 1, T3B: 1, BB: 1, B2B: 1, B3B: 1 };
+
+      function cxCloneJson(v, fallback) {
+        try { return JSON.parse(JSON.stringify(v == null ? fallback : v)); } catch (e) { return fallback; }
+      }
+
+      function cxNormalizeSigSettings(raw) {
+        raw = raw && typeof raw === 'object' ? raw : {};
+        return {
+          enabled: typeof raw.enabled === 'boolean' ? raw.enabled : false,
+          level: raw.level === 90 ? 90 : 95,
+          sigLetters: typeof raw.sigLetters === 'string' ? raw.sigLetters : ''
+        };
+      }
+
+      function cxNormalizeGlobalSettings(raw) {
+        raw = raw && typeof raw === 'object' ? raw : {};
+        return {
+          tbPresets: cxCloneJson(raw.tbPresets, {}) || {},
+          sigSettings: cxNormalizeSigSettings(raw.sigSettings)
+        };
+      }
+
+      window.__cxGlobalSettingsState = cxNormalizeGlobalSettings(window.__cxGlobalSettingsState);
+
+      function cxFindFiber(el) {
+        if (!el) return null;
+        var k = Object.keys(el).find(function(key) { return key.startsWith('__reactFiber'); });
+        return k ? el[k] : null;
+      }
+
+      function cxFindLiveOverridesObject() {
+        var el = document.querySelector('[draggable="true"]')
+              || document.querySelector('button')
+              || document.querySelector('.flex-1')
+              || document.querySelector('table');
+        if (!el) return null;
+        var fiber = cxFindFiber(el);
+        var emptyCandidate = null;
+        while (fiber) {
+          var s = fiber.memoizedState;
+          var count = 0;
+          while (s && count < 40) {
+            var v = s.memoizedState;
+            if (v && typeof v === 'object' && !Array.isArray(v) &&
+                !(v instanceof Set) && !(v instanceof Map)) {
+              if (v[GLOBAL_SETTINGS_KEY] && typeof v[GLOBAL_SETTINGS_KEY] === 'object') return v;
+              if (!emptyCandidate && Object.keys(v).length === 0) emptyCandidate = v;
+              var looksLike = Object.keys(v).some(function(k) {
+                var val = v[k];
+                return val && typeof val === 'object' && ('labels' in val || 'order' in val || 'weights' in val);
+              });
+              if (looksLike) return v;
+            }
+            s = s.next;
+            count++;
+          }
+          fiber = fiber.return;
+        }
+        return emptyCandidate;
+      }
+
+      function cxSyncGlobalSettingsFromOverrides() {
+        var ov = cxFindLiveOverridesObject();
+        if (!ov) return null;
+        if (ov[GLOBAL_SETTINGS_KEY] && typeof ov[GLOBAL_SETTINGS_KEY] === 'object') {
+          window.__cxGlobalSettingsState = cxNormalizeGlobalSettings(ov[GLOBAL_SETTINGS_KEY]);
+        } else {
+          ov[GLOBAL_SETTINGS_KEY] = cxCloneJson(window.__cxGlobalSettingsState, { tbPresets: {}, sigSettings: { enabled: false, level: 95, sigLetters: '' } });
+        }
+        window.__cxVariableOverrides = ov;
+        return ov;
+      }
+
+      function cxPersistGlobalSettings(nextState) {
+        window.__cxGlobalSettingsState = cxNormalizeGlobalSettings(nextState);
+        var ov = cxFindLiveOverridesObject();
+        if (ov) {
+          ov[GLOBAL_SETTINGS_KEY] = cxCloneJson(window.__cxGlobalSettingsState, { tbPresets: {}, sigSettings: { enabled: false, level: 95, sigLetters: '' } });
+          window.__cxVariableOverrides = ov;
+        }
+      }
+
+      window.__cxGetTbPresetStore = function() {
+        cxSyncGlobalSettingsFromOverrides();
+        return cxCloneJson(window.__cxGlobalSettingsState.tbPresets, {}) || {};
+      };
+
+      window.__cxSetTbPresetStore = function(store) {
+        var next = cxCloneJson(window.__cxGlobalSettingsState, { tbPresets: {}, sigSettings: { enabled: false, level: 95, sigLetters: '' } });
+        next.tbPresets = cxCloneJson(store, {}) || {};
+        cxPersistGlobalSettings(next);
+      };
+
+      window.__cxLoadSigSettings = function() {
+        cxSyncGlobalSettingsFromOverrides();
+        return cxNormalizeSigSettings(window.__cxGlobalSettingsState.sigSettings);
+      };
+
+      window.__cxSaveSigSettings = function(sigSettings) {
+        var next = cxCloneJson(window.__cxGlobalSettingsState, { tbPresets: {}, sigSettings: { enabled: false, level: 95, sigLetters: '' } });
+        next.sigSettings = cxNormalizeSigSettings(sigSettings);
+        cxPersistGlobalSettings(next);
+      };
+
+      if (!window.__cxGlobalSettingsSyncStarted) {
+        window.__cxGlobalSettingsSyncStarted = true;
+        new MutationObserver(function() {
+          cxSyncGlobalSettingsFromOverrides();
+        }).observe(document.body, { childList: true, subtree: true });
+        setTimeout(cxSyncGlobalSettingsFromOverrides, 300);
+        setTimeout(cxSyncGlobalSettingsFromOverrides, 1200);
+        setTimeout(cxSyncGlobalSettingsFromOverrides, 2500);
+      }
 
       var PRESETS = [
         { id: 'tb_low_good',   title: 'TB (1 ดี)',   desc: '1=ดี · TB+BB', factorOnly: false, group: 'tb' },
@@ -2479,7 +2599,7 @@
       }
 
       function ensureTbInfoExpanded(varName) {
-        var stored = JSON.parse(localStorage.getItem(LS_KEY) || '{}');
+        var stored = window.__cxGetTbPresetStore();
         var info = stored[varName];
         if (!info || !info.preset) return null;
         var ov = window.__cxVariableOverrides && window.__cxVariableOverrides[varName];
@@ -2494,7 +2614,7 @@
         }
         if (needSave) {
           stored[varName] = expanded;
-          localStorage.setItem(LS_KEY, JSON.stringify(stored));
+          window.__cxSetTbPresetStore(stored);
         }
         return expanded;
       }
@@ -2538,7 +2658,7 @@
         });
         if (hasManual) return null;
         ensureTbInfoExpanded(varName);
-        var stored = JSON.parse(localStorage.getItem(LS_KEY) || '{}');
+        var stored = window.__cxGetTbPresetStore();
         var info = stored[varName];
         if (!info || !info.preset) return null;
         var codeRows = codeRowsFromOverride(ov);
@@ -2577,9 +2697,9 @@
           hook.queue.dispatch(function() { return updatedJr; });
           var memberLabelsJr = {};
           codeRows.forEach(function(r) { memberLabelsJr[r.key] = r.label; });
-          var storedJr = JSON.parse(localStorage.getItem(LS_KEY) || '{}');
+          var storedJr = window.__cxGetTbPresetStore();
           storedJr[varName] = { preset: preset, summaries: [], memberLabels: memberLabelsJr };
-          localStorage.setItem(LS_KEY, JSON.stringify(storedJr));
+          window.__cxSetTbPresetStore(storedJr);
           return true;
         }
 
@@ -2614,9 +2734,9 @@
         var memberLabels = {};
         codeRows.forEach(function(r) { memberLabels[r.key] = r.label; });
 
-        var stored = JSON.parse(localStorage.getItem(LS_KEY) || '{}');
+        var stored = window.__cxGetTbPresetStore();
         stored[varName] = { preset: preset, summaries: summaries, memberLabels: memberLabels };
-        localStorage.setItem(LS_KEY, JSON.stringify(stored));
+        window.__cxSetTbPresetStore(stored);
 
         setTimeout(function() { styleSummaryRows(modalEl); }, 120);
         setTimeout(function() { styleSummaryRows(modalEl); }, 400);
@@ -2634,9 +2754,9 @@
             });
           hook.queue.dispatch(function() { return cleaned; });
         }
-        var stored = JSON.parse(localStorage.getItem(LS_KEY) || '{}');
+        var stored = window.__cxGetTbPresetStore();
         delete stored[varName];
-        localStorage.setItem(LS_KEY, JSON.stringify(stored));
+        window.__cxSetTbPresetStore(stored);
       }
 
       /* ── Summary row styling ── */
@@ -2666,7 +2786,7 @@
       function closeDialog() { if (_dialog) { _dialog.remove(); _dialog = null; } }
 
       function refreshBtnLabel(btn, varName) {
-        var stored = JSON.parse(localStorage.getItem(LS_KEY) || '{}');
+        var stored = window.__cxGetTbPresetStore();
         var saved = stored[varName];
         if (saved && saved.preset) {
           var p = PRESETS.find(function(x) { return x.id === saved.preset; });
@@ -2685,7 +2805,7 @@
         _activeModal = modalEl;
         _activeVarName = varName;
 
-        var stored = JSON.parse(localStorage.getItem(LS_KEY) || '{}');
+        var stored = window.__cxGetTbPresetStore();
         var activePid = stored[varName] ? stored[varName].preset : null;
 
         var hook = findVarEditorHook(modalEl);
@@ -2806,7 +2926,7 @@
         var h3 = modalEl.querySelector('h3');
         var varName = h3 ? h3.textContent.replace('Edit Variable - ', '').trim() : '';
 
-        var stored = JSON.parse(localStorage.getItem(LS_KEY) || '{}');
+        var stored = window.__cxGetTbPresetStore();
         var activePid = stored[varName] ? stored[varName].preset : null;
         var lblTxt = activePid
           ? ((PRESETS.find(function(x) { return x.id === activePid; }) || {}).title || 'Scale Preset') + ' ✓'
@@ -2973,7 +3093,7 @@
 
       function cxResolveTbInfoForSection(vName, result, lo, hi, overrides) {
         ensureTbInfoExpanded(vName);
-        var stored = JSON.parse(localStorage.getItem(LS_KEY) || '{}');
+        var stored = window.__cxGetTbPresetStore();
         var direct = stored[vName];
         if (direct && direct.summaries && direct.summaries.length) {
           return { key: vName, info: direct };
@@ -3039,7 +3159,10 @@
         }
 
         if (info && info.summaries && info.summaries.length) {
+          var _seenSumCodes = {};
           info.summaries.forEach(function(sum) {
+            if (_seenSumCodes[sum.code]) return; /* prevent duplicate codes */
+            _seenSumCodes[sum.code] = true;
             var memberIdxs = [];
             (sum.members || []).forEach(function(mCode) {
               var lbl = (info.memberLabels || {})[mCode] || mCode;
@@ -3265,7 +3388,7 @@
       /* ── Engine-level summary injection (called from patched Qn in bundle) ── */
       window.__cxAddSummary = function(result, varName) {
         ensureTbInfoExpanded(varName);
-        var stored = JSON.parse(localStorage.getItem(LS_KEY) || '{}');
+        var stored = window.__cxGetTbPresetStore();
         var info = stored[varName];
         if (!info || !info.summaries || !info.summaries.length) return result;
         if (!result || !result.rowValues || !result.rowValues.length) return result;
@@ -3321,6 +3444,7 @@
 
         info.summaries.forEach(function(sum) {
           if (existingSumCodes[sum.code]) return;
+          existingSumCodes[sum.code] = true; /* prevent duplicate codes */
           var memberIdxs = [];
           (sum.members || []).forEach(function(mCode) {
             var lbl = memberLabels[mCode] || mCode;
@@ -3388,7 +3512,7 @@
       Object.keys(TB_DISPLAY).forEach(function(k) { TB_REVERSE[TB_DISPLAY[k]] = k; });
 
       window.__cxWriteTBSheet = function(wb, variableOverrides) {
-        var stored = JSON.parse(localStorage.getItem(LS_KEY) || '{}');
+        var stored = window.__cxGetTbPresetStore();
         var vars = Object.keys(stored);
         if (!vars.length) return;
 
@@ -3423,7 +3547,7 @@
                || wb.getWorksheet('TB_Setting');
         if (!ws) return;
 
-        var stored = JSON.parse(localStorage.getItem(LS_KEY) || '{}');
+        var stored = window.__cxGetTbPresetStore();
         var changed = false;
         var ov = variableOverrides || {};
 
@@ -3462,7 +3586,7 @@
               stored[vn] = ex;
             }
           });
-          localStorage.setItem(LS_KEY, JSON.stringify(stored));
+          window.__cxSetTbPresetStore(stored);
         }
       };
 
@@ -3746,20 +3870,12 @@
       if (window.__cxTestSig) return;
       window.__cxTestSig = true;
 
-      /* ── Sig Settings (persisted in localStorage) ── */
-      var LS_SIG_KEY = '__cx_sig_settings__';
+      /* ── Sig Settings (persisted in settings workbook) ── */
       function loadSigSettings() {
-        try {
-          var s = JSON.parse(localStorage.getItem(LS_SIG_KEY) || '{}');
-          return {
-            enabled:    typeof s.enabled === 'boolean' ? s.enabled : false,
-            level:      s.level === 90 ? 90 : 95,
-            sigLetters: typeof s.sigLetters === 'string' && s.sigLetters.trim() ? s.sigLetters.trim() : ''
-          };
-        } catch(e) { return { enabled: false, level: 95, sigLetters: '' }; }
+        return window.__cxLoadSigSettings ? window.__cxLoadSigSettings() : { enabled: false, level: 95, sigLetters: '' };
       }
       function saveSigSettings(s) {
-        localStorage.setItem(LS_SIG_KEY, JSON.stringify(s));
+        if (window.__cxSaveSigSettings) window.__cxSaveSigSettings(s);
       }
 
       /* ── Z critical values ── */
@@ -4353,11 +4469,11 @@
       }
 
       function findTabsHook(tablesHook) {
-        /* Find the tab state ("design"/"filter"/"results") — it's a string hook near tables */
+        /* Find the tab state ("design"/"filter"/"results") — string useState after tables in App */
         if (!tablesHook) return null;
         var s = tablesHook;
         var count = 0;
-        while (s && count < 15) {
+        while (s && count < 80) {
           var v = s.memoizedState;
           if (v === 'design' || v === 'filter' || v === 'results') return s;
           s = s.next;
@@ -4409,6 +4525,19 @@
         return out;
       }
 
+      var _s6SummarySet = { TB: 1, T2B: 1, T3B: 1, BB: 1, B2B: 1, B3B: 1 };
+      function isSummaryKey(k) {
+        var s = String(k);
+        if (s.indexOf('__summary__') === 0) return true;
+        return !!_s6SummarySet[s];
+      }
+      function cxFilterOutSummaryCodes(list) {
+        return (list || []).filter(function(item) {
+          var key = String(item == null ? '' : item).trim();
+          return key && !isSummaryKey(key);
+        });
+      }
+
       /* ── T2B/Mean augmentation ── */
       function augmentResult(result, rowVarStr, overrides) {
         if (!result || !result.rowValues || !result.rowValues.length) return result;
@@ -4440,6 +4569,18 @@
         }
 
         return Object.assign({}, aug, { __cxAugmented: true });
+      }
+
+      /* Case-insensitive variable name resolver */
+      function resolveVarName(name, dataset) {
+        if (!name || !dataset || !dataset.variables) return name;
+        /* Exact match first */
+        var exact = dataset.variables.find(function(v) { return v.name === name; });
+        if (exact) return exact.name;
+        /* Case-insensitive */
+        var lower = name.toLowerCase();
+        var ci = dataset.variables.find(function(v) { return v.name.toLowerCase() === lower; });
+        return ci ? ci.name : name;
       }
 
       /* ── Frequency table (no colVar) ── */
@@ -4475,15 +4616,21 @@
           if (liveVars.length) parsed = liveVars.map(function(v) { return [v]; });
         }
         var varNames = flatVars(parsed);
+        /* Resolve case-insensitive variable names */
+        if (dataset) {
+          varNames = varNames.map(function(vn) { return resolveVarName(vn, dataset); });
+        }
         if (!varNames.length || !dataset || !dataset.cases.length) return null;
 
         var results = [];
         varNames.forEach(function(vName) {
           var vInfo = dataset.variables.find(function(v) { return v.name === vName; });
           if (!vInfo) return;
-          var ov = overrides[vName] || {};
+          /* Try both original and lowercase keys for overrides */
+          var ov = overrides[vName] || overrides[vName.toLowerCase()] || {};
           var labels = ov.labels || vInfo.valueLabels || {};
           var order = Array.isArray(ov.order) ? ov.order.slice() : Object.keys(labels);
+          order = cxFilterOutSummaryCodes(order);
 
           /* If no order, collect from data */
           if (!order.length) {
@@ -4498,13 +4645,16 @@
           var cnt = {}; order.forEach(function(k) { cnt[k] = 0; });
           var tot = 0;
           dataset.cases.forEach(function(c) {
-            var v = c[vName]; if (v == null || v === '') return;
-            var k = String(v);
-            if (cnt[k] != null) { cnt[k]++; tot++; }
-            else {
-              /* Try by label */
+              var v = c[vName]; if (v == null || v === '') return;
+              var k = String(v);
+              if (cnt[k] != null) { cnt[k]++; tot++; }
+              else {
+                /* Try by label */
               var found = false;
-              for (var code in labels) { if (String(labels[code]) === k) { cnt[code] = (cnt[code] || 0) + 1; tot++; found = true; break; } }
+              for (var code in labels) {
+                if (isSummaryKey(String(code == null ? '' : code).trim())) continue;
+                if (String(labels[code]) === k) { cnt[code] = (cnt[code] || 0) + 1; tot++; found = true; break; }
+              }
               if (!found) { order.push(k); cnt[k] = 1; tot++; }
             }
           });
@@ -4561,50 +4711,98 @@
          PART A: Wrap tables dispatch — augment every result
          ══════════════════════════════════════════════════════ */
       var _hooked = false;
+      var _hookedHook = null;
       var _hookAttempts = 0;
       var _tablesHookRef = null;
+      var _lastDatasetKey = null; /* track SPSS file identity */
 
-      function tryHookDispatch() {
-        if (_hooked) return true;
+      function getFiberSeeds(preferredEl) {
+        var seeds = [];
+        function push(el) {
+          if (!el || seeds.indexOf(el) >= 0) return;
+          seeds.push(el);
+        }
+        push(preferredEl);
+        push(document.querySelector('[draggable="true"].border-l-2.cursor-pointer.border-\\[\\#1F4E78\\]'));
+        push(document.querySelector('[draggable="true"]'));
+        push(document.querySelector('button'));
+        push(document.querySelector('.flex-1'));
+        push(document.querySelector('table'));
+        push(document.getElementById('root'));
+        return seeds.filter(Boolean);
+      }
+
+      function resolveLiveTablesHook(preferredEl) {
+        var seeds = getFiberSeeds(preferredEl);
+        for (var i = 0; i < seeds.length; i++) {
+          var fiber = fiberOf(seeds[i]);
+          if (!fiber) continue;
+          var hook = findTablesHook(fiber);
+          if (hook) {
+            _tablesHookRef = hook;
+            return hook;
+          }
+        }
+        return _tablesHookRef;
+      }
+
+      function resolveLiveDataset(preferredEl) {
+        var seeds = getFiberSeeds(preferredEl);
+        for (var i = 0; i < seeds.length; i++) {
+          var fiber = fiberOf(seeds[i]);
+          if (!fiber) continue;
+          var dataset = findDataset(fiber);
+          if (dataset) return dataset;
+        }
+        return null;
+      }
+
+      function tryHookDispatch(preferredEl) {
         _hookAttempts++;
-
-        /* Find ANY rendered element to get fiber */
-        var el = document.querySelector('[draggable="true"]')
-              || document.querySelector('button')
-              || document.querySelector('.flex-1')
-              || document.querySelector('table');
-        if (!el) return false;
-
-        var fiber = fiberOf(el);
-        if (!fiber) return false;
-
-        var hook = findTablesHook(fiber);
+        var hook = resolveLiveTablesHook(preferredEl);
         if (!hook) return false;
+        if (_hooked && _hookedHook === hook) return true;
 
         _tablesHookRef = hook;
-        var origDispatch = hook.queue.dispatch;
 
-        hook.queue.dispatch = function cxWrappedDispatch(action) {
+        /* Prevent double-wrapping: if dispatch is already ours, skip */
+        if (hook.queue.dispatch && hook.queue.dispatch.__cxWrapped) {
+          _hooked = true;
+          _hookedHook = hook;
+          _tablesHookRef = hook;
+          console.log('[S6] dispatch already wrapped, reusing');
+          return true;
+        }
+
+        var origDispatch = hook.queue.dispatch;
+        hook.queue.__cxOrigDispatch = origDispatch;
+
+        var wrappedFn = function cxWrappedDispatch(action) {
+          /* Always use the freshest original dispatch */
+          var od = hook.queue.__cxOrigDispatch || origDispatch;
           if (typeof action === 'function') {
-            return origDispatch(function(prev) {
+            return od(function(prev) {
               var next = action(prev);
               if (!Array.isArray(next)) return next;
               return augmentTablesArray(next);
             });
           }
           if (Array.isArray(action)) {
-            return origDispatch(augmentTablesArray(action));
+            return od(augmentTablesArray(action));
           }
-          return origDispatch(action);
+          return od(action);
         };
+        wrappedFn.__cxWrapped = true;
+        hook.queue.dispatch = wrappedFn;
 
         _hooked = true;
+        _hookedHook = hook;
         console.log('[S6] dispatch hooked successfully');
         return true;
       }
 
       function augmentTablesArray(tables) {
-        var ov = findOverrides(_tablesHookRef);
+        var ov = findOverrides(resolveLiveTablesHook());
         return tables.map(function(t) {
           if (t.result && !t.result.__cxAugmented) {
             var aug = augmentResult(t.result, t.rowVar, ov);
@@ -4617,128 +4815,228 @@
       /* ══════════════════════════════════════════════════════
          PART B: Enable Run without TOP + inject Run Table btn
          ══════════════════════════════════════════════════════ */
+      function getTableFromFiber(startFiber) {
+        /* Walk fiber UP — do NOT break early at canRun/onGenerate */
+        var f = startFiber;
+        while (f) {
+          var p = f.memoizedProps;
+          if (p && p.table && typeof p.table.id === 'string' && 'rowVar' in p.table) {
+            return p.table;
+          }
+          f = f.return;
+        }
+        return null;
+      }
+
+      function getNoTopTable(seedEl) {
+        /* Strategy 1: fiber walk from element */
+        var fiber = seedEl ? fiberOf(seedEl) : null;
+        var td = fiber ? getTableFromFiber(fiber) : null;
+        if (td && td.rowVar && !td.colVar) return td;
+
+        /* Strategy 2: fresh hook resolution */
+        var freshHook = resolveLiveTablesHook(seedEl);
+        if (freshHook) {
+          var tables = freshHook.memoizedState;
+          if (Array.isArray(tables)) {
+            /* Prefer the selected/active table */
+            var activeRow = document.querySelector('[draggable="true"].border-l-2.cursor-pointer.border-\\[\\#1F4E78\\]');
+            if (activeRow) {
+              var af = fiberOf(activeRow);
+              if (af) {
+                var activeTable = getTableFromFiber(af);
+                if (activeTable) {
+                  var match = tables.find(function(t) { return t.id === activeTable.id && t.rowVar && !t.colVar; });
+                  if (match) return match;
+                }
+              }
+            }
+            /* Fallback: any table with rowVar and no colVar */
+            var found = tables.find(function(t) { return t.rowVar && !t.colVar; });
+            if (found) return found;
+          }
+        }
+        return null;
+      }
+
       function enableNoTopRun() {
-        /* Find disabled Run Table buttons and enable them when rowVar is set */
-        var buttons = document.querySelectorAll('button[disabled]');
-        buttons.forEach(function(btn) {
+        /* Find ALL Run Table buttons (disabled or not) */
+        var allButtons = document.querySelectorAll('button');
+        allButtons.forEach(function(btn) {
           if ((btn.textContent || '').trim() !== 'Run Table') return;
 
-          /* Walk fiber to find table props and check if rowVar is set */
-          var fiber = fiberOf(btn);
-          if (!fiber) return;
-
-          /* Find the table from the nearby Design component */
-          var f = fiber;
-          var tableData = null;
-          while (f) {
-            var p = f.memoizedProps;
-            if (p && p.table && typeof p.table.id === 'string' && 'rowVar' in p.table) {
-              tableData = p.table;
-              break;
-            }
-            /* Also check onGenerate prop */
-            if (p && p.canRun !== undefined && p.onGenerate) {
-              /* Found the Design component — check if rowVar is set via branches */
-              break;
-            }
-            f = f.return;
-          }
-
-          /* Check from tables state */
-          if (!tableData && _tablesHookRef) {
-            var tables = _tablesHookRef.memoizedState;
-            if (tables && tables.length) {
-              /* Find selected table (the one being designed) */
-              tableData = tables.find(function(t) { return t.rowVar && !t.colVar; });
-            }
-          }
-
-          if (tableData && tableData.rowVar && !tableData.colVar) {
-            /* Enable the button */
+          var tableData = getNoTopTable(btn);
+          if (tableData) {
+            /* Force enable */
             btn.disabled = false;
             btn.style.cssText = 'width:100%;padding:10px;background:#1F4E78;color:white;font-weight:bold;border-radius:12px;cursor:pointer;font-size:14px;border:none;';
-
-            /* Remove old handler and add ours */
-            if (!btn.__cxNoTopHandler) {
-              btn.__cxNoTopHandler = true;
-              btn.addEventListener('click', function(e) {
-                var liveTable = getCurrentTableForRunButton(btn);
-                if (!liveTable || !liveTable.rowVar || liveTable.colVar) return;
-                e.stopPropagation();
-                e.preventDefault();
-                runWithoutTop(liveTable);
-              }, true);
-            }
           }
         });
       }
 
       function getCurrentTableForRunButton(btn) {
+        /* Use fresh fiber walk (no early break) + fresh hook */
         var fiber = fiberOf(btn);
-        var tableId = null;
-        var tableData = null;
-        var f = fiber;
-        while (f) {
-          var p = f.memoizedProps;
-          if (p && p.table && typeof p.table.id === 'string' && 'rowVar' in p.table) {
-            tableData = p.table;
-            tableId = p.table.id;
-            break;
-          }
-          f = f.return;
-        }
-        if (_tablesHookRef && Array.isArray(_tablesHookRef.memoizedState)) {
-          var tables = _tablesHookRef.memoizedState;
+        var tableData = fiber ? getTableFromFiber(fiber) : null;
+        var tableId = tableData ? tableData.id : null;
+
+        var liveHook = resolveLiveTablesHook(btn);
+        if (liveHook && Array.isArray(liveHook.memoizedState)) {
+          var tables = liveHook.memoizedState;
           if (tableId) {
             var byId = tables.find(function(t) { return t && t.id === tableId; });
             if (byId) return byId;
-          }
-          if (tableData && tableData.id) {
-            var byId2 = tables.find(function(t) { return t && t.id === tableData.id; });
-            if (byId2) return byId2;
           }
           return tables.find(function(t) { return t && t.rowVar && (!t.result || t.id === (tableData && tableData.id)); }) || tableData;
         }
         return tableData;
       }
 
-      function runWithoutTop(tableData) {
+      function showResultsTabFallback() {
+        var btns = document.querySelectorAll('button');
+        for (var i = 0; i < btns.length; i++) {
+          var txt = String(btns[i].textContent || '').trim();
+          if (txt === 'Results') {
+            try { btns[i].click(); } catch (e) {}
+            return true;
+          }
+        }
+        return false;
+      }
+
+      function runWithoutTop(tableData, triggerEl) {
         if (!tableData || !tableData.rowVar) return;
+        console.log('[S6] runWithoutTop:', tableData.id, 'rowVar:', tableData.rowVar);
+        try {
+
+        /* Always get a FRESH hook directly from fiber tree */
+        var freshHook = null;
+        var seeds = getFiberSeeds(triggerEl);
+        for (var si = 0; si < seeds.length; si++) {
+          var sf = seeds[si] ? fiberOf(seeds[si]) : null;
+          if (!sf) continue;
+          var fh = findTablesHook(sf);
+          if (fh) { freshHook = fh; break; }
+        }
+        if (!freshHook) {
+          console.warn('[S6] no tables hook — cannot run');
+          return;
+        }
+        if (!freshHook.queue) {
+          console.warn('[S6] hook has no queue');
+          return;
+        }
+
+        /* Get the RAW dispatch — bypass our wrapper */
+        var rawDispatch = freshHook.queue.__cxOrigDispatch || freshHook.queue.dispatch;
+        if (typeof rawDispatch !== 'function') {
+          console.warn('[S6] tables hook has no dispatch');
+          return;
+        }
+        console.log('[S6] freshHook found, queue ok, dispatch type:', typeof rawDispatch, 'wrapped:', !!rawDispatch.__cxWrapped);
 
         /* Find dataset */
-        var el = document.querySelector('[draggable="true"]') || document.querySelector('button');
-        if (!el) return;
-        var fiber = fiberOf(el);
-        if (!fiber) return;
-        var dataset = findDataset(fiber);
+        var dataset = resolveLiveDataset(triggerEl);
         if (!dataset) { console.warn('[S6] no dataset'); return; }
 
-        var ov = findOverrides(_tablesHookRef);
+        var ov = findOverrides(freshHook);
         var freq = buildFreqTable(tableData, dataset, ov);
         if (!freq) { console.warn('[S6] could not build freq table'); return; }
 
-        /* Augment with T2B/Mean */
-        freq = augmentResult(freq, tableData.rowVar, ov);
+        /* Pre-augment result so we don't need the wrapper */
+        try {
+          freq = augmentResult(freq, tableData.rowVar, ov);
+          freq.__cxAugmented = true;
+        } catch (augErr) {
+          console.warn('[S6] augment failed, using raw freq:', augErr);
+        }
 
-        /* Dispatch: update this table's result */
-        if (_tablesHookRef) {
-          _tablesHookRef.queue.dispatch(function(prev) {
-            if (!Array.isArray(prev)) return prev;
-            return prev.map(function(t) {
-              if (t.id === tableData.id) {
+        console.log('[S6] freq built OK, rows:', freq.rowValues ? freq.rowValues.length : 0,
+                     'dispatching via', rawDispatch.__cxWrapped ? 'wrapped' : 'raw', 'dispatch');
+
+        var tableId = tableData.id;
+        try {
+          rawDispatch(function (prev) {
+            if (!Array.isArray(prev)) {
+              console.warn('[S6] runWithoutTop: prev state not array:', typeof prev);
+              return prev;
+            }
+            var matched = false;
+            var out = prev.map(function (t) {
+              if (t && t.id === tableId) {
+                matched = true;
                 return Object.assign({}, t, { result: freq });
               }
               return t;
             });
+            console.log('[S6] dispatch updater ran: matched=', matched, 'prevLen=', prev.length);
+            if (!matched) console.warn('[S6] table id not in prev:', tableId);
+            return out;
           });
+        } catch (e) {
+          console.error('[S6] dispatch tables failed:', e);
+          return;
+        }
 
-          /* Switch to results tab */
-          var tabHook = findTabsHook(_tablesHookRef);
-          if (tabHook && tabHook.queue && tabHook.queue.dispatch) {
-            tabHook.queue.dispatch('results');
+        function switchToResults() {
+          var th = resolveLiveTablesHook(triggerEl) || freshHook;
+          var tabHook = findTabsHook(th);
+          if (tabHook && tabHook.queue && typeof tabHook.queue.dispatch === 'function') {
+            try {
+              tabHook.queue.dispatch('results');
+            } catch (e2) {
+              console.warn('[S6] tab dispatch failed:', e2);
+              showResultsTabFallback();
+            }
+          } else {
+            showResultsTabFallback();
           }
         }
+        /* Defer tab switch so tables commit first; fallback click covers hook-order / batching edge cases */
+        if (typeof queueMicrotask === 'function') queueMicrotask(switchToResults);
+        else setTimeout(switchToResults, 0);
+        setTimeout(showResultsTabFallback, 50);
+        setTimeout(showResultsTabFallback, 200);
+
+        } catch (outerErr) {
+          console.error('[S6] runWithoutTop FAILED:', outerErr);
+        }
       }
+
+      /* Use mousedown+click on document to catch even disabled buttons */
+      document.addEventListener('mousedown', function(e) {
+        var btn = e.target && e.target.closest ? e.target.closest('button') : null;
+        if (!btn) return;
+        if ((btn.textContent || '').trim() !== 'Run Table') return;
+        /* Try to ensure hook is ready (don't reset aggressively) */
+        if (!_hooked) tryHookDispatch(btn);
+        var liveTable = getNoTopTable(btn);
+        if (!liveTable) return;
+        /* Mark that we should handle the upcoming click */
+        btn.__cxNoTopPending = liveTable;
+        /* Enable button so click fires */
+        btn.disabled = false;
+      }, true);
+
+      document.addEventListener('click', function(e) {
+        var btn = e.target && e.target.closest ? e.target.closest('button') : null;
+        if (!btn) return;
+        if ((btn.textContent || '').trim() !== 'Run Table') return;
+        var now = Date.now();
+        if (btn.__cxNoTopHandledAt && now - btn.__cxNoTopHandledAt < 250) return;
+        var pending = btn.__cxNoTopPending;
+        if (!pending) {
+          /* Not a no-top scenario — also check live */
+          var liveTable = getNoTopTable(btn);
+          if (!liveTable) return;
+          pending = liveTable;
+        }
+        btn.__cxNoTopHandledAt = now;
+        btn.__cxNoTopPending = null;
+        e.stopPropagation();
+        e.preventDefault();
+        runWithoutTop(pending, btn);
+      }, true);
 
       /* Also intercept Run All to handle no-colVar tables */
       document.addEventListener('click', function(e) {
@@ -4749,23 +5047,20 @@
 
         /* After bundle's Run All, run our no-colVar tables */
         setTimeout(function() {
-          if (!_tablesHookRef) return;
-          var tables = _tablesHookRef.memoizedState;
+          var liveHook = resolveLiveTablesHook(btn);
+          if (!liveHook) return;
+          var tables = liveHook.memoizedState;
           if (!Array.isArray(tables)) return;
 
-          var el = document.querySelector('[draggable="true"]') || document.querySelector('button');
-          var fiber = el ? fiberOf(el) : null;
-          if (!fiber) return;
-          var dataset = findDataset(fiber);
+          var dataset = resolveLiveDataset(btn);
           if (!dataset) return;
-          var ov = findOverrides(_tablesHookRef);
+          var ov = findOverrides(liveHook);
 
           var needUpdate = false;
           var updated = tables.map(function(t) {
             if (t.rowVar && !t.colVar && !t.result) {
               var freq = buildFreqTable(t, dataset, ov);
               if (freq) {
-                freq = augmentResult(freq, t.rowVar, ov);
                 needUpdate = true;
                 return Object.assign({}, t, { result: freq });
               }
@@ -4773,7 +5068,7 @@
             return t;
           });
           if (needUpdate) {
-            _tablesHookRef.queue.dispatch(function() { return updated; });
+            liveHook.queue.dispatch(function() { return updated; });
           }
         }, 800);
       }, true);
@@ -4781,11 +5076,66 @@
       /* ══════════════════════════════════════════════════════
          PART C: MutationObserver — hook dispatch + enable btns
          ══════════════════════════════════════════════════════ */
+      function detectDatasetKey() {
+        var seeds = getFiberSeeds();
+        for (var i = 0; i < seeds.length; i++) {
+          var fiber = seeds[i] ? fiberOf(seeds[i]) : null;
+          if (!fiber) continue;
+          var ds = findDataset(fiber);
+          if (ds && ds.variables && ds.variables.length > 0) {
+            return ds.variables.length + ':' + ds.cases.length + ':' + ds.variables[0].name;
+          }
+        }
+        return null;
+      }
+
       var _obsTimer = null;
       new MutationObserver(function() {
         if (_obsTimer) clearTimeout(_obsTimer);
         _obsTimer = setTimeout(function() {
-          if (!_hooked && _hookAttempts < 50) tryHookDispatch();
+          /* Detect SPSS file change via dataset identity */
+          var dsKey = detectDatasetKey();
+          if (dsKey && _lastDatasetKey && dsKey !== _lastDatasetKey) {
+            console.log('[S6] Dataset changed (' + _lastDatasetKey + ' -> ' + dsKey + '), resetting hooks...');
+            _hooked = false;
+            _hookedHook = null;
+            _tablesHookRef = null;
+            _hookAttempts = 0;
+            /* Re-enable buttons after React finishes re-rendering */
+            setTimeout(function() { tryHookDispatch(); enableNoTopRun(); }, 500);
+            setTimeout(function() { tryHookDispatch(); enableNoTopRun(); }, 1500);
+          }
+          if (dsKey) _lastDatasetKey = dsKey;
+
+          /* Detect stale hook: old hook no longer findable in current fiber tree */
+          if (_hooked && _tablesHookRef) {
+             var el = document.querySelector('[draggable="true"]') || document.querySelector('button');
+             var fiber = el ? fiberOf(el) : null;
+             var currentHook = fiber ? findTablesHook(fiber) : null;
+             if (currentHook && currentHook !== _tablesHookRef) {
+                /* Compare queue identity — React recreates hook objects on re-render
+                   but keeps the same queue. Only reset if queue actually changed. */
+                if (currentHook.queue !== _tablesHookRef.queue) {
+                  console.log('[S6] Hook queue changed (new SPSS file?), re-hooking...');
+                  _hooked = false;
+                  _hookedHook = null;
+                  _tablesHookRef = null;
+                  _hookAttempts = 0;
+                } else {
+                  /* Same queue, just update reference */
+                  _tablesHookRef = currentHook;
+                  _hookedHook = currentHook;
+                }
+             } else if (!currentHook && fiber) {
+                /* Old hook is gone, fiber tree rebuilt but tables not ready yet */
+                console.log('[S6] Hook lost (file change?), resetting...');
+                _hooked = false;
+                _hookedHook = null;
+                _tablesHookRef = null;
+                _hookAttempts = 0;
+             }
+          }
+          if (!_hooked && _hookAttempts < 100) tryHookDispatch();
           enableNoTopRun();
         }, 300);
       }).observe(document.body, { childList: true, subtree: true });

@@ -137,6 +137,15 @@ v && typeof v === 'object' && !Array.isArray(v)
 - แต่ละ condition เลือกได้หลาย source code (OR logic)
 - inject ตัวแปรใหม่ลง dataset state โดยตรง
 
+### Script 6 — TB/T2B/Mean injection into results + Run without TOP
+- หลัง Run All / Run single: augment result ด้วย TB/T2B/BB/B2B summary rows + Mean row
+- เรียก `__cxAddSummary(result, varName)` สำหรับ single-var SIDE
+- เรียก `__cxAugmentStackedTable(result, ...)` สำหรับ multi-var SIDE
+- คำนวณ Mean จาก weights (manual หรือ auto จาก TB preset)
+- รองรับ Run โดยไม่มี TOP (colVar): สร้าง frequency table (คอลัมน์ Total เดียว)
+- ใช้ MutationObserver + fiber dispatch เพื่อ augment result หลังการคำนวณ
+- ป้องกัน infinite loop ด้วย `__cxAugmented` flag
+
 ---
 
 ## 7. Variable Type System (จาก bundle)
