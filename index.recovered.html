@@ -165,8 +165,30 @@
           }
           console.log('[TB_Setting] Loaded from', filename, '-> mapped presets:', newStore);
           
+          /* Extract Sig Settings from Output sheet */
+          var outSheet = wb.worksheets.find(function(w) { return w.name === 'Output'; });
+          var sigSettings = {};
+          if (outSheet && outSheet.rowCount >= 1) {
+            for (var ro = 1; ro <= outSheet.rowCount; ro++) {
+              var cA = outSheet.getCell(ro, 1);
+              var cB = outSheet.getCell(ro, 2);
+              var kStr = cA && cA.value ? String(cA.value).trim() : '';
+              var vStr = cB && cB.value ? String(cB.value).trim() : '';
+              if (kStr === 'Sig Enabled') sigSettings.enabled = (vStr.toLowerCase() === 'true' || vStr === '1' || vStr.toLowerCase() === 'yes');
+              if (kStr === 'Sig Level') sigSettings.level = Number(vStr) || 95;
+              if (kStr === 'Sig Letters') sigSettings.sigLetters = vStr;
+            }
+          }
+
           /* The app resets state shortly after reading the file. We wait 800ms then apply our presets. */
           setTimeout(function() {
+            if (Object.keys(sigSettings).length > 0 && typeof window.__cxSaveSigSettings === 'function') {
+              var currSig = window.__cxLoadSigSettings ? window.__cxLoadSigSettings() : {};
+              var nextSig = Object.assign({}, currSig, sigSettings);
+              window.__cxSaveSigSettings(nextSig);
+              console.log('[TB_Setting] ✅ Restored Sig Settings from Output sheet!', nextSig);
+            }
+
             var currentStore = (typeof window.__cxGetTbPresetStore === 'function') ? window.__cxGetTbPresetStore() : {};
             var merged = Object.assign({}, currentStore, newStore);
             if (typeof window.__cxSetTbPresetStore === 'function') {
@@ -298,6 +320,26 @@
           if (toDelete.length > 0) {
             console.log('[TB_Setting] wiped ' + toDelete.length + ' rows for T2B vars from VariableSettings');
           }
+        }
+
+        /* 3. Sync Sig Settings to Output sheet */
+        var outSheet = wb.worksheets.find(function(w) { return w.name === 'Output'; });
+        if (outSheet) {
+          var sigSet = window.__cxGlobalSettingsState && window.__cxGlobalSettingsState.sigSettings || {};
+          var sigKeys = { 'Sig Enabled': sigSet.enabled ? 'Yes' : 'No', 'Sig Level': sigSet.level || 95, 'Sig Letters': sigSet.sigLetters || '' };
+          var existingRows = {};
+          for (var ri = 1; ri <= outSheet.rowCount; ri++) {
+            var cA = outSheet.getCell(ri, 1);
+            if (cA && cA.value) existingRows[String(cA.value).trim()] = ri;
+          }
+          Object.keys(sigKeys).forEach(function(k) {
+            var rowIdx = existingRows[k];
+            if (!rowIdx) {
+               rowIdx = outSheet.rowCount + 1;
+               outSheet.getCell(rowIdx, 1).value = k;
+            }
+            outSheet.getCell(rowIdx, 2).value = sigKeys[k];
+          });
         }
       }
 
@@ -5402,7 +5444,322 @@
         var results = [];
         varNames.forEach(function(vName) {
           var vInfo = dataset.variables.find(function(v) { return v.name === vName; });
-          if (!vInfo) return;
+
+          /* ── MA group support (unified handler) ── */
+          /* Replicate the EXACT bundle logic from variableGrouping.ts:
+             parseGroupedName regex: /^(.*?)(?:[$&](\d+)|_O(\d+))$/i
+             buildGroupedName: parsed.base + '_O'
+             So for member longName "SQ12_O1" → base="SQ12", group="SQ12_O"
+             For member shortName "SQ12_O$1" → base="SQ12_O", group="SQ12_O_O" (wrong!)
+             Therefore: always prefer longName for grouping detection. */
+
+          function _cxParseGroupedName(name) {
+            if (!name) return null;
+            var m = name.trim().match(/^(.*?)(?:[\$\x26](\d+)|_O(\d+))$/i);
+            if (!m) return null;
+            var base = m[1].trim();
+            var idx = parseInt(m[2] != null ? m[2] : m[3], 10);
+            if (!base || !isFinite(idx)) return null;
+            return { base: base, index: idx, groupName: base + '_O' };
+          }
+
+          function _cxGetGroupingSource(v) {
+            var longSrc = v.longName || v.name;
+            if (_cxParseGroupedName(longSrc)) return longSrc;
+            if (v.name && v.name !== longSrc && _cxParseGroupedName(v.name)) return v.name;
+            return longSrc;
+          }
+
+          var _isMA = false;
+          if (vInfo) {
+            _isMA = !!(vInfo.isGroupedMA || vInfo.isGroupedMa || vInfo.isMA);
+          } else {
+            /* Variable not found — check if group name ends with _O (MA convention) */
+            _isMA = /_O$/i.test(vName);
+            /* Also try: any variable whose grouping produces this name */
+            if (!_isMA) {
+              for (var _vi = 0; _vi < dataset.variables.length; _vi++) {
+                var _gn = _cxParseGroupedName(_cxGetGroupingSource(dataset.variables[_vi]));
+                if (_gn && _gn.groupName.toLowerCase() === vName.toLowerCase()) { _isMA = true; break; }
+              }
+            }
+          }
+
+          if (_isMA) {
+            var maMembers = [];
+
+            /* Strategy 1: use memberNames property if available (catalog-processed dataset) */
+            if (vInfo && Array.isArray(vInfo.memberNames) && vInfo.memberNames.length > 0) {
+              console.log('[S6] MA Strategy 1: memberNames=', vInfo.memberNames);
+              vInfo.memberNames.forEach(function(mn) {
+                var mv = dataset.variables.find(function(v) { return v.name === mn; });
+                if (mv) maMembers.push({ variable: mv, index: maMembers.length + 1 });
+              });
+              console.log('[S6] Strategy 1 found:', maMembers.length, 'members');
+            }
+
+            /* Strategy 2: parse every variable's grouping source and match group name */
+            if (!maMembers.length) {
+              var groupNameLC = vName.toLowerCase();
+              /* Debug: log sample variable names to understand naming */
+              var _dbgSamples = [];
+              var _dbgPartialMatch = [];
+              dataset.variables.forEach(function(v, vi) {
+                var src = _cxGetGroupingSource(v);
+                var parsed = _cxParseGroupedName(src);
+                if (parsed && parsed.groupName.toLowerCase() === groupNameLC) {
+                  maMembers.push({ variable: v, index: parsed.index });
+                }
+                /* Collect variables whose name contains the group base for debugging */
+                var base = vName.replace(/_O$/i, '');
+                if (v.name.indexOf(base) >= 0 || (v.longName && v.longName.indexOf(base) >= 0)) {
+                  if (_dbgPartialMatch.length < 20) {
+                    _dbgPartialMatch.push({
+                      name: v.name, longName: v.longName,
+                      src: src, parsed: parsed ? JSON.stringify(parsed) : 'null'
+                    });
+                  }
+                }
+                if (vi < 5 && _dbgSamples.length < 5) {
+                  _dbgSamples.push({ name: v.name, longName: v.longName });
+                }
+              });
+              maMembers.sort(function(a, b) { return a.index - b.index; });
+              console.log('[S6] MA Strategy 2: total vars=', dataset.variables.length,
+                'matched=', maMembers.length, 'groupName=', vName);
+              console.log('[S6] First 5 vars:', JSON.stringify(_dbgSamples));
+              console.log('[S6] Partial name match (' + vName.replace(/_O$/i, '') + '):', JSON.stringify(_dbgPartialMatch));
+            }
+
+            /* Strategy 3: memberNames exist but members not in dataset.variables
+               (catalog replaced them) — scan case keys to find member short names */
+            if (!maMembers.length && vInfo && Array.isArray(vInfo.memberNames) && vInfo.memberNames.length > 0) {
+              /* The cases array uses short names as keys. memberNames from catalog
+                 are short names. Create virtual members from case data. */
+              var firstCase = dataset.cases[0] || {};
+              vInfo.memberNames.forEach(function(mn, idx) {
+                if (mn in firstCase) {
+                  maMembers.push({
+                    variable: { name: mn, longName: mn, label: '', valueLabels: {} },
+                    index: idx + 1
+                  });
+                }
+              });
+            }
+
+            if (maMembers.length) {
+              var ovMA = overrides[vName] || overrides[vName.toLowerCase()] || {};
+              var memberKeys = maMembers.map(function(item) { return item.variable.name; });
+
+              /* ── Detect MA type: dichotomy vs code-aggregation ── */
+              /* Dichotomy: members have only codes 0/1 (or 0/1/2) in valueLabels.
+                 Code-aggregation: members have multiple code values (1=Dog, 2=Cat, etc.)
+                 Replicate isLikelyDichotomySet from variableGrouping.ts */
+              var _isDichotomy = true;
+              if (maMembers.length > 0) {
+                var allCodesUnion = {};
+                maMembers.forEach(function(item) {
+                  var vl = item.variable.valueLabels || {};
+                  Object.keys(vl).forEach(function(k) {
+                    var nk = String(Math.round(Number(k) * 1e8) / 1e8);
+                    if (nk) allCodesUnion[nk] = true;
+                  });
+                });
+                var unionKeys = Object.keys(allCodesUnion);
+                if (unionKeys.length > 3) {
+                  _isDichotomy = false;
+                } else if (unionKeys.length > 0) {
+                  _isDichotomy = unionKeys.every(function(k) {
+                    return k === '0' || k === '1' || k === '2';
+                  });
+                }
+                /* Also check actual data: if most values are 0/1, it's dichotomy */
+                if (_isDichotomy && unionKeys.length === 0) {
+                  /* No value labels — check actual data values */
+                  var sampleCodes = {};
+                  var checked = 0;
+                  for (var si = 0; si < Math.min(100, dataset.cases.length); si++) {
+                    memberKeys.forEach(function(mk) {
+                      var sv = dataset.cases[si][mk];
+                      if (sv != null && sv !== '') {
+                        sampleCodes[String(Math.round(Number(sv) * 1e8) / 1e8)] = true;
+                      }
+                    });
+                    checked++;
+                  }
+                  var sck = Object.keys(sampleCodes);
+                  if (sck.length > 3 || sck.some(function(k) { return k !== '0' && k !== '1' && k !== '2'; })) {
+                    _isDichotomy = false;
+                  }
+                }
+              }
+
+              console.log('[S6] MA type:', _isDichotomy ? 'DICHOTOMY' : 'CODE-AGGREGATION',
+                'members:', maMembers.length);
+
+              var groupVL = (vInfo && vInfo.valueLabels) ? vInfo.valueLabels : {};
+              var maLabelsSource = ovMA.labels || {};
+
+              if (!_isDichotomy) {
+                /* ═══ CODE-AGGREGATION MA ═══
+                   Each member stores a code value (e.g. 1=Dog, 2=Cat).
+                   Each ROW = one code value.
+                   Count = cases where ANY member has that code. */
+
+                /* Collect all possible codes from member valueLabels + data */
+                var allCodes = {};
+                maMembers.forEach(function(item) {
+                  var vl = item.variable.valueLabels || {};
+                  Object.keys(vl).forEach(function(k) {
+                    var nk = String(Math.round(Number(k) * 1e8) / 1e8);
+                    if (nk) allCodes[nk] = vl[k];
+                  });
+                });
+                /* Also scan data for codes not in valueLabels */
+                dataset.cases.forEach(function(c) {
+                  memberKeys.forEach(function(mk) {
+                    var v = c[mk];
+                    if (v == null || v === '') return;
+                    var nk = String(Math.round(Number(v) * 1e8) / 1e8);
+                    if (nk && nk !== '0' && !allCodes[nk]) allCodes[nk] = nk;
+                  });
+                });
+
+                /* Sort codes numerically */
+                var codeList = Object.keys(allCodes).sort(function(a, b) {
+                  return Number(a) - Number(b);
+                });
+
+                /* Override labels if available */
+                if (Object.keys(maLabelsSource).length) {
+                  codeList.forEach(function(code) {
+                    if (maLabelsSource[code]) allCodes[code] = maLabelsSource[code];
+                  });
+                }
+
+                /* Count per code: how many cases have this code in ANY member */
+                var codeRows = codeList.map(function(code) {
+                  var codeNum = Number(code);
+                  var count = 0;
+                  dataset.cases.forEach(function(c) {
+                    for (var mi = 0; mi < memberKeys.length; mi++) {
+                      var v = c[memberKeys[mi]];
+                      if (v == null || v === '') continue;
+                      if (Math.round(Number(v) * 1e8) / 1e8 === codeNum) { count++; break; }
+                    }
+                  });
+                  var label = allCodes[code] || code;
+                  return { code: code, label: label, count: count };
+                });
+
+                /* Apply custom order */
+                var orderMA = Array.isArray(ovMA.order) ? ovMA.order.slice() : [];
+                orderMA = cxFilterOutSummaryCodes(orderMA);
+                if (orderMA.length) {
+                  codeRows.sort(function(a, b) {
+                    var ai = orderMA.indexOf(a.code), bi = orderMA.indexOf(b.code);
+                    if (ai === -1) ai = orderMA.length;
+                    if (bi === -1) bi = orderMA.length;
+                    return ai - bi;
+                  });
+                }
+
+                var maLabelsMap = {}, maOrderArr = [], maCntMap = {};
+                codeRows.forEach(function(r) {
+                  maLabelsMap[r.code] = r.label;
+                  maOrderArr.push(r.code);
+                  maCntMap[r.code] = r.count;
+                });
+
+                /* Base = cases where any member has a non-empty non-zero value */
+                var maBase = 0;
+                dataset.cases.forEach(function(c) {
+                  for (var mi = 0; mi < memberKeys.length; mi++) {
+                    var v = c[memberKeys[mi]];
+                    if (v != null && v !== '' && Number(v) !== 0) { maBase++; break; }
+                  }
+                });
+
+                var groupLabel3 = (vInfo && (vInfo.label || vInfo.longName)) || vName;
+                console.log('[S6] freq built OK, rows:', maOrderArr.length);
+                results.push({
+                  vName: vName,
+                  vInfo: { name: vName, label: groupLabel3, longName: groupLabel3, valueLabels: maLabelsMap },
+                  labels: maLabelsMap, order: maOrderArr, cnt: maCntMap,
+                  tot: maBase || dataset.cases.length, isMA: true
+                });
+                return;
+
+              } else {
+                /* ═══ DICHOTOMY MA ═══
+                   Each member is a binary variable (1=selected, 0=not).
+                   Each ROW = one member variable.
+                   Count = cases where member == 1. */
+
+                if (!Object.keys(maLabelsSource).length) maLabelsSource = groupVL;
+
+                var maRows3 = maMembers.map(function(item, idx) {
+                  var mem = item.variable;
+                  var memberIdx = item.index;
+                  var suffix = String(memberIdx);
+
+                  var rowLabel = '';
+                  if (maLabelsSource[suffix]) {
+                    rowLabel = maLabelsSource[suffix];
+                  } else if (maLabelsSource[String(idx + 1)]) {
+                    rowLabel = maLabelsSource[String(idx + 1)];
+                  } else if (mem.label) {
+                    rowLabel = mem.label;
+                  } else {
+                    rowLabel = mem.longName || suffix;
+                  }
+
+                  var count = 0;
+                  var caseKey = mem.name;
+                  dataset.cases.forEach(function(c) {
+                    var val = c[caseKey];
+                    if (val == null || val === '') return;
+                    if (Number(val) === 1) count++;
+                  });
+                  return { code: suffix, label: rowLabel, count: count };
+                });
+
+                /* Apply custom order */
+                var orderMA2 = Array.isArray(ovMA.order) ? ovMA.order.slice() : [];
+                orderMA2 = cxFilterOutSummaryCodes(orderMA2);
+                if (orderMA2.length) {
+                  maRows3.sort(function(a, b) {
+                    var ai = orderMA2.indexOf(a.code), bi = orderMA2.indexOf(b.code);
+                    if (ai === -1) ai = orderMA2.length;
+                    if (bi === -1) bi = orderMA2.length;
+                    return ai - bi;
+                  });
+                }
+
+                var maLabelsMap2 = {}, maOrderArr2 = [], maCntMap2 = {};
+                maRows3.forEach(function(r) {
+                  maLabelsMap2[r.code] = r.label;
+                  maOrderArr2.push(r.code);
+                  maCntMap2[r.code] = r.count;
+                });
+
+                var groupLabel4 = (vInfo && (vInfo.label || vInfo.longName)) || vName;
+                console.log('[S6] freq built OK, rows:', maOrderArr2.length);
+                results.push({
+                  vName: vName,
+                  vInfo: { name: vName, label: groupLabel4, longName: groupLabel4, valueLabels: maLabelsMap2 },
+                  labels: maLabelsMap2, order: maOrderArr2, cnt: maCntMap2,
+                  tot: dataset.cases.length, isMA: true
+                });
+                return;
+              }
+            }
+
+            /* If no members found and no vInfo, skip entirely */
+            if (!vInfo) return;
+          }
+
+          /* ── Standard (non-MA) variable ── */
           /* Try both original and lowercase keys for overrides */
           var ov = overrides[vName] || overrides[vName.toLowerCase()] || {};
           var labels = ov.labels || vInfo.valueLabels || {};
