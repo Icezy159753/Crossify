@@ -511,10 +511,14 @@ export const DesignCanvas = memo(function DesignCanvas({
               onModeChange={setSideMode}
             />
             <div className="flex min-h-[110px] min-w-0 flex-1 items-center justify-center rounded-lg border border-dashed border-gray-200 bg-gray-50/60">
-              {rowVars.length > 0 && colVars.length > 0 ? (
+              {rowVars.length > 0 || colVars.length > 0 ? (
                 <div className="text-center px-3">
                   <p className="text-xs text-gray-600 font-medium">
-                    {rowVars.map(getVarLabel).join(' + ')} x {colVars.map(getVarLabel).join(' + ')}
+                    {rowVars.length > 0 && colVars.length > 0
+                      ? `${rowVars.map(getVarLabel).join(' + ')} x ${colVars.map(getVarLabel).join(' + ')}`
+                      : rowVars.length > 0
+                        ? `Side: ${rowVars.map(getVarLabel).join(' + ')}`
+                        : `Top: ${colVars.map(getVarLabel).join(' + ')}`}
                   </p>
                   <p className="text-[10px] text-gray-400 mt-0.5">Press Run to generate the table</p>
                 </div>

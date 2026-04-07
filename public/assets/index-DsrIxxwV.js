@@ -10582,11 +10582,11 @@ const Wl = bt("X", [["path", {
               onModeChange: ge
             }), l.jsx("div", {
               className: "flex-1 border border-dashed border-gray-200 rounded-lg bg-gray-50/60 flex items-center justify-center min-h-[110px]",
-              children: Z.length > 0 && fe.length > 0 ? l.jsxs("div", {
+              children: Z.length > 0 || fe.length > 0 ? l.jsxs("div", {
                 className: "text-center px-3",
-                children: [l.jsxs("p", {
+                children: [l.jsx("p", {
                   className: "text-xs text-gray-600 font-medium",
-                  children: [Z.map(p).join(" + "), " x ", fe.map(p).join(" + ")]
+                  children: Z.length > 0 && fe.length > 0 ? [Z.map(p).join(" + "), " x ", fe.map(p).join(" + ")] : Z.length > 0 ? ["Side: ", Z.map(p).join(" + ")] : ["Top: ", fe.map(p).join(" + ")]
                 }), l.jsx("p", {
                   className: "text-[10px] text-gray-400 mt-0.5",
                   children: "Press Run to generate the table"
@@ -13864,9 +13864,9 @@ function ux() {
     }));
   }
   const Vr = De ? zt(De.id).size : 1,
-    Ii = !!(De && Xe(ct(De.rowVar)).length > 0 && Xe(ct(De.colVar)).length > 0 && ($.showCount || $.showPercent)),
+    Ii = !!(De && (Xe(ct(De.rowVar)).length > 0 || Xe(ct(De.colVar)).length > 0)),
     $o = fi(De?.filter),
-    Oi = Y.some(i => i.rowVar && i.colVar),
+    Oi = Y.some(i => i.rowVar || i.colVar),
     Vi = Y.some(i => i.result),
     Uo = [...q].filter(i => Y.find(f => f.id === i)?.result).length,
     da = Se ? Tn.byName.get(Se) : null,
