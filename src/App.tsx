@@ -1440,9 +1440,13 @@ export default function App() {
       const rawCodes = [...new Set(dataset.cases.map(c => normalizeCode(c[name])).filter(Boolean))]
       const labelMap = item.valueLabels
       const existingOrder = override?.order ?? []
-      const allCodes = existingOrder.length > 0
-        ? [...existingOrder, ...rawCodes.filter(c => !existingOrder.includes(c))]
-        : rawCodes.sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }))
+      // ตัวแปร numeric (#) = ไม่ใช่ string และไม่มี value labels → บังคับเรียง code น้อย→มากเสมอ
+      const isNumeric = !item.isString && Object.keys(labelMap).length === 0
+      const allCodes = isNumeric
+        ? [...rawCodes].sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }))
+        : existingOrder.length > 0
+          ? [...existingOrder, ...rawCodes.filter(c => !existingOrder.includes(c))]
+          : rawCodes.sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }))
       const total = dataset.cases.filter(c => normalizeCode(c[name])).length
       baseRows = allCodes.map(code => {
         const count = dataset.cases.filter(c => normalizeCode(c[name]) === code).length

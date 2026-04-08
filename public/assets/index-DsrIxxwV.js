@@ -12538,10 +12538,10 @@ function ux() {
         ...ve,
         autoFactor: Pn(i) && !w?.weights[ve.key]
       })), ...xe],
-      Ee = w?.order?.length ? (() => {
+      Ee = Pn(i) ? [...ye].sort((Fe, Le) => Fe.code.localeCompare(Le.code, void 0, { numeric: !0, sensitivity: "base" })) : (w?.order?.length ? (() => {
         const ve = new Map(w.order.map((Fe, Le) => [Fe, Le]));
         return [...ye].sort((Fe, Le) => (ve.get(Fe.key) ?? Number.MAX_SAFE_INTEGER) - (ve.get(Le.key) ?? Number.MAX_SAFE_INTEGER));
-      })() : ye;
+      })() : ye);
     return mo(Ee, w?.groups ?? []);
   }
   function ji(i) {
@@ -13002,7 +13002,11 @@ function ux() {
     }
     if (!p) return;
     const N = p.variables.find(T => T.name === i || T.longName === i);
-    if (!N || Object.keys(N.valueLabels).length === 0) return;
+    if (!N) return;
+    if (Object.keys(N.valueLabels).length === 0) {
+      // Numeric variable (#): always return codes sorted ascending from data
+      return [...new Set(p.cases.map(T => ht(T[N.name])).filter(Boolean))].sort((T, X) => T.localeCompare(X, void 0, { numeric: !0, sensitivity: "base" }));
+    }
     const F = Object.entries(N.valueLabels).sort(([T], [X]) => Number(T) - Number(X)).map(([T, X], xe) => ({
       key: ht(T),
       label: X,
@@ -13196,10 +13200,11 @@ function ux() {
       T = yn(f),
       X = cn(f, w);
     if (!T) return i;
+    const __isNumT = !T.isString && Object.keys(T.valueLabels).length === 0 && !T.isGroupedMA;
     const xe = Object.entries(X?.weights ?? {}).filter(([, L]) => String(L).trim() !== "" && String(L).trim() !== "-").map(([L, we]) => [ht(L), Number(we)]).filter(([, L]) => Number.isFinite(L)),
-      ye = xe.length > 0 ? xe : Pn(f) ? [...new Set(F.map(L => ht(L[T.name])).filter(Boolean))].map(L => [L, Number(L)]).filter(([, L]) => Number.isFinite(L)) : [];
+      ye = xe.length > 0 ? xe : (Pn(f) || __isNumT) ? [...new Set(F.map(L => ht(L[T.name])).filter(Boolean))].map(L => [L, Number(L)]).filter(([, L]) => Number.isFinite(L)) : [];
     if (ye.length === 0) return i;
-    const Ee = Pn(f) ? X?.numericStats?.length ? X.numericStats : ["mean"] : ["mean"],
+    const Ee = (Pn(f) || __isNumT) ? X?.numericStats?.length ? X.numericStats : ["mean"] : ["mean"],
       ve = new Map(ye),
       Fe = Jn(g, O, w),
       Le = new Map(Fe.map((L, we) => [L.key, we])),
@@ -13352,10 +13357,11 @@ function ux() {
       T = yn(f),
       X = cn(f, w);
     if (!T) return i;
+    const __isNumT = !T.isString && Object.keys(T.valueLabels).length === 0 && !T.isGroupedMA;
     const xe = Object.entries(X?.weights ?? {}).filter(([, L]) => String(L).trim() !== "" && String(L).trim() !== "-").map(([L, we]) => [ht(L), Number(we)]).filter(([, L]) => Number.isFinite(L)),
-      ye = xe.length > 0 ? xe : Pn(f) ? [...new Set(F.map(L => ht(L[T.name])).filter(Boolean))].map(L => [L, Number(L)]).filter(([, L]) => Number.isFinite(L)) : [];
+      ye = xe.length > 0 ? xe : (Pn(f) || __isNumT) ? [...new Set(F.map(L => ht(L[T.name])).filter(Boolean))].map(L => [L, Number(L)]).filter(([, L]) => Number.isFinite(L)) : [];
     if (ye.length === 0) return i;
-    const Ee = Pn(f) ? X?.numericStats?.length ? X.numericStats : ["mean"] : ["mean"],
+    const Ee = (Pn(f) || __isNumT) ? X?.numericStats?.length ? X.numericStats : ["mean"] : ["mean"],
       ve = new Map(ye),
       Fe = Jn(g, O, w),
       Le = new Map(Fe.map((L, we) => [L.key, we])),
@@ -13419,8 +13425,8 @@ function ux() {
       showPercent: f.showPercent,
       percentType: f.percentType
     };
-    if (ye) return Lr(await Up(F.raw, F.labeled, ve, ye, "row", tt(i.colVar), Sn(i.colVar, g)), f.hideZeroRows);
-    if (Ee) return Lr(await Up(F.raw, F.labeled, ve, Ee, "column", tt(i.rowVar), Sn(i.rowVar, g)), f.hideZeroRows);
+    if (ye) return Lr(Qn(await Up(F.raw, F.labeled, ve, ye, "row", tt(i.colVar), Sn(i.colVar, g)), i.rowVar, g), f.hideZeroRows);
+    if (Ee) return Lr(Qn(await Up(F.raw, F.labeled, ve, Ee, "column", tt(i.rowVar), Sn(i.rowVar, g)), i.rowVar, g), f.hideZeroRows);
     const Fe = await Li(await Bh(F.labeled, ve, tt(i.rowVar), tt(i.colVar), Sn(i.rowVar, g), Sn(i.colVar, g)), i.rowVar, T, g, F.labeled, F.raw);
     return Lr(Qn(Fe, i.rowVar, g), f.hideZeroRows);
   }
@@ -13446,22 +13452,32 @@ function ux() {
       showPercent: f.showPercent,
       percentType: f.percentType
     };
-    if (ye) return Lr($p(F.raw, F.labeled, ve, ye, "row", tt(i.colVar), Sn(i.colVar, g)), f.hideZeroRows);
-    if (Ee) return Lr($p(F.raw, F.labeled, ve, Ee, "column", tt(i.rowVar), Sn(i.rowVar, g)), f.hideZeroRows);
+    if (ye) return Lr(Qn($p(F.raw, F.labeled, ve, ye, "row", tt(i.colVar), Sn(i.colVar, g)), i.rowVar, g), f.hideZeroRows);
+    if (Ee) return Lr(Qn($p(F.raw, F.labeled, ve, Ee, "column", tt(i.rowVar), Sn(i.rowVar, g)), i.rowVar, g), f.hideZeroRows);
     const Fe = Ti(Ah(F.labeled, ve, tt(i.rowVar), tt(i.colVar), Sn(i.rowVar, g), Sn(i.colVar, g)), i.rowVar, T, g, F.labeled, F.raw);
     return Lr(Qn(Fe, i.rowVar, g), f.hideZeroRows);
   }
   function Ri(i) {
-    if (!(!i.rowVar || !i.colVar || (p?.cases.length ?? 0) === 0)) {
-      z(null);
-      try {
-        const f = Pi(i);
-        f && (un(i.id, {
-          result: f
-        }), H("results"));
-      } catch (f) {
-        z(f instanceof Error ? f.message : String(f));
+    if (!i.rowVar || !i.colVar) {
+      z("กรุณาเลือกตัวแปรทั้ง Top (Column) และ Side (Row) ก่อนกด Run Table");
+      return;
+    }
+    if ((p?.cases.length ?? 0) === 0) {
+      z("ยังไม่ได้โหลดข้อมูล SPSS — กรุณาเปิดไฟล์ก่อน");
+      return;
+    }
+    z(null);
+    try {
+      const f = Pi(i);
+      if (!f) {
+        z("ไม่สามารถคำนวณตารางได้ — ตรวจสอบตัวแปร / ตัวกรองอีกครั้ง");
+        return;
       }
+      un(i.id, {
+        result: f
+      }), H("results");
+    } catch (f) {
+      z(f instanceof Error ? f.message : String(f));
     }
   }
   function es() {

@@ -25,7 +25,10 @@ const C = {
 
 async function loadExcelJs() {
   const module = await import('exceljs')
-  return module.default
+  const EJS = module.default;
+  // Cache on window for inline scripts (Sig/TB_Setting interceptors)
+  (window as unknown as Record<string, unknown>).__cxExcelJSModule = EJS
+  return EJS
 }
 
 function mkBorder(s: ExcelJS.BorderStyle = 'thin'): Partial<ExcelJS.Borders> {
