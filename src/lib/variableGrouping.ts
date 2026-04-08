@@ -440,6 +440,59 @@ export function buildVariableCatalog(
     groupedByName.set(groupName, customDef)
   }
 
+  // ── Apply user-created Grid variables ────────────────────────────────────
+  // Grid variables from the "สร้าง Grid" UI have isGridUserCreated=true,
+  // isGroupedMA=true, and memberNames[]. Each member is a dichotomy option.
+  for (const variable of variables) {
+    const v = variable as SpssVariable & { isGridUserCreated?: boolean; isGroupedMA?: boolean; memberNames?: string[]; gridMembers?: Array<{ name: string; label: string }> }
+    if (!v.isGridUserCreated || !v.isGroupedMA || !v.memberNames || v.memberNames.length < 2) continue
+    const gridName = v.name
+
+    // Skip if already registered (from auto-detect or custom MRSET)
+    if (groupedByName.has(gridName)) continue
+
+    const resolvedMemberNames = v.memberNames
+    const memberVars = resolvedMemberNames.map(mn => varByAnyName.get(mn)).filter(Boolean) as SpssVariable[]
+    if (memberVars.length < 2) continue
+
+    // Grid members are always dichotomy: each member is an option
+    const gridMemberLabels = v.gridMembers || resolvedMemberNames.map((mn) => ({ name: mn, label: mn }))
+    const optionEntries: GroupedOption[] = memberVars.map((mv, idx) => ({
+      memberName: mv.name,
+      label: gridMemberLabels[idx]?.label || mv.label || mv.name,
+      order: idx + 1,
+      selectedCodes: inferSelectedCodes(mv),
+    }))
+
+    const gridItem: VariableListItem = {
+      name: gridName,
+      label: v.label || gridName,
+      longName: v.longName || gridName,
+      isString: false,
+      valueLabels: Object.fromEntries(optionEntries.map((opt, idx) => [String(idx + 1), opt.label])),
+      isGroupedMA: true,
+      memberNames: resolvedMemberNames,
+    }
+    const gridDef: GroupedVariableDef = {
+      name: gridName,
+      label: v.label || gridName,
+      longName: v.longName || gridName,
+      options: optionEntries,
+      memberNames: resolvedMemberNames,
+      aggregateByCode: false, // Grid members are dichotomy
+    }
+
+    // Override or append
+    if (byName.has(gridName)) {
+      const existingIdx = list.findIndex(item => item.name === gridName)
+      if (existingIdx >= 0) list[existingIdx] = gridItem
+    } else {
+      list.push(gridItem)
+    }
+    byName.set(gridName, gridItem)
+    groupedByName.set(gridName, gridDef)
+  }
+
   return { list, byName, groupedByName }
 }
 

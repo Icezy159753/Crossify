@@ -2113,7 +2113,7 @@
 
 var _gridPanelEl = null;
       var _gridMembers = [];
-      function renderGridMembers() { if(!_gridPanelEl)return; var c=document.getElementById('cx-grid-mem-list'); if(!c)return; c.innerHTML=''; _gridMembers.forEach(function(m,i){ var r=document.createElement('div'); r.style.cssText='padding:8px 12px;background:#fff;border:1px solid #e2e8f0;border-radius:8px;display:flex;justify-content:space-between;margin-bottom:6px'; var t=document.createElement('div'); t.innerHTML='<div style="font-weight:bold;font-size:12px">'+m.name+'</div><div style="font-size:11px;color:#64748b">'+(m.label||'')+'</div>'; var x=document.createElement('button'); x.textContent='×'; x.style.cssText='background:none;border:none;cursor:pointer;font-size:16px;color:#94a3b8'; x.onclick=function(){_gridMembers.splice(i,1);renderGridMembers();}; r.appendChild(t); r.appendChild(x); c.appendChild(r); }); if(_gridMembers.length===0){c.innerHTML='<div style="text-align:center;padding:20px;color:#94a3b8;font-size:12px;border:2px dashed #cbd5e1;border-radius:8px">ลากตัวแปรที่มีสเกลเดียวกันมาวางที่นี่</div>';} else { var vl=_gridMembers[0].valueLabels; if(vl){ var vv=document.createElement('div'); vv.style.cssText='margin-top:10px;font-size:10px;color:#64748b;border-top:1px solid #e2e8f0;padding-top:10px'; vv.textContent="Scale Reference: "+Object.keys(vl).map(k=>k+'='+vl[k]).join(', '); c.appendChild(vv); } } }
+      function renderGridMembers() { if(!_gbEl)return; var c=document.getElementById('cx-grid-mem-list'); if(!c)return; c.innerHTML=''; _gridMembers.forEach(function(m,i){ var r=document.createElement('div'); r.style.cssText='padding:8px 12px;background:#fff;border:1px solid #e2e8f0;border-radius:8px;display:flex;justify-content:space-between;margin-bottom:6px'; var t=document.createElement('div'); t.innerHTML='<div style="font-weight:bold;font-size:12px">'+m.name+'</div><div style="font-size:11px;color:#64748b">'+(m.label||'')+'</div>'; var x=document.createElement('button'); x.textContent='×'; x.style.cssText='background:none;border:none;cursor:pointer;font-size:16px;color:#94a3b8'; x.onclick=function(){_gridMembers.splice(i,1);renderGridMembers();}; r.appendChild(t); r.appendChild(x); c.appendChild(r); }); if(_gridMembers.length===0){c.innerHTML='<div style="text-align:center;padding:20px;color:#94a3b8;font-size:12px;border:2px dashed #cbd5e1;border-radius:8px">ลากตัวแปรที่มีสเกลเดียวกันมาวางที่นี่</div>';} else { var vl=_gridMembers[0].valueLabels; if(vl){ var vv=document.createElement('div'); vv.style.cssText='margin-top:10px;font-size:10px;color:#64748b;border-top:1px solid #e2e8f0;padding-top:10px'; vv.textContent="Scale Reference: "+Object.keys(vl).map(k=>k+'='+vl[k]).join(', '); c.appendChild(vv); } } }
       var _tabBarEl = null;
       var _createPanelEl = null;
       var _managePanelEl = null;
@@ -2211,10 +2211,22 @@ var _gridPanelEl = null;
         _editingVarName = editVarName || null;
         if (_editingVarName && byName[_editingVarName]) {
           var ev = byName[_editingVarName];
-          _rules = (ev._derivedRules && ev._derivedRules.length > 0)
-            ? ev._derivedRules.map(function(r){ return JSON.parse(JSON.stringify(r)); })
-            : [{ id: uid(), conditions: [], expression: '', newCode: '1', newLabel: '' }];
-          _activeTab = 'create';
+          if (ev.isGridUserCreated && ev.gridRole) {
+            /* Grid variable → open Grid tab */
+            _activeTab = 'grid';
+            _gridMembers = [];
+            var gm = ev.gridMembers || [];
+            gm.forEach(function(m) {
+              var found = _allVars.find(function(v) { return v.name === m.name; });
+              if (found) _gridMembers.push(found);
+            });
+            _rules = [{ id: uid(), conditions: [], expression: '', newCode: '1', newLabel: '' }];
+          } else {
+            _rules = (ev._derivedRules && ev._derivedRules.length > 0)
+              ? ev._derivedRules.map(function(r){ return JSON.parse(JSON.stringify(r)); })
+              : [{ id: uid(), conditions: [], expression: '', newCode: '1', newLabel: '' }];
+            _activeTab = 'create';
+          }
         } else {
           _rules = [{ id: uid(), conditions: [], expression: '', newCode: '1', newLabel: '' }];
           _activeTab = editVarName === '__manage__' ? 'manage' : 'create';
@@ -2294,15 +2306,6 @@ var _gridPanelEl = null;
           if (tab === 'manage') renderManageList();
         }
       }
-        if (_createPanelEl) _createPanelEl.style.display = tab === 'create' ? 'flex' : 'none';
-        if (_gridPanelEl) _gridPanelEl.style.display = tab === 'grid' ? 'flex' : 'none';
-        if (_createFooterEl) _createFooterEl.style.display = tab === 'create' ? 'flex' : 'none';
-        if (_gridFooterEl) _gridFooterEl.style.display = tab === 'grid' ? 'flex' : 'none';
-        if (_managePanelEl) {
-          _managePanelEl.style.display = tab === 'manage' ? '' : 'none';
-          if (tab === 'manage') renderManageList();
-        }
-      }
 
       /* โ•โ• Build Manage Panel โ•โ• */
       function buildManagePanel() {
@@ -2325,7 +2328,7 @@ var _gridPanelEl = null;
         container.innerHTML = '';
         var hook = _hook || getDatasetHook();
         if (!hook) { container.innerHTML = '<div style="text-align:center;padding:40px;font-size:13px;color:#94a3b8">ไม่พบข้อมูล</div>'; return; }
-        var vars = (hook.data.variables || []).filter(function(v){ return v._derived === true; });
+        var vars = (hook.data.variables || []).filter(function(v){ return v._derived === true && v.gridRole !== 'side'; });
         if (vars.length === 0) {
           container.innerHTML = '<div style="text-align:center;padding:40px;font-size:13px;color:#94a3b8">ยังไม่มีตัวแปรที่สร้างไว้</div>';
           return;
@@ -2393,10 +2396,23 @@ var _gridPanelEl = null;
         if (!hook) return;
         hook.dispatch(function(prev) {
           if (!prev) return prev;
-          var newVars = prev.variables.filter(function(v){ return v.name !== varName; });
-          var newCases = prev.cases.map(function(row){
+          /* Check if this is a Grid TOP variable with a paired SIDE */
+          var theVar = prev.variables.find(function(v){ return v.name === varName; });
+          var pairName = theVar && theVar.gridPairName ? theVar.gridPairName : null;
+          var namesToRemove = [varName];
+          if (pairName) namesToRemove.push(pairName);
+          var newVars = prev.variables.filter(function(v){ return namesToRemove.indexOf(v.name) < 0; });
+          /* Remove Grid-only rows (rows that have the TOP key but lack common data keys) */
+          var newCases = prev.cases.filter(function(row){
+            if (row[varName] !== undefined) {
+              /* If this row ONLY has Grid variables (very few keys), it's a Grid-only row */
+              var keys = Object.keys(row);
+              if (keys.length <= 2 && row[varName] !== undefined) return false;
+            }
+            return true;
+          }).map(function(row){
             var copy = Object.assign({}, row);
-            delete copy[varName];
+            namesToRemove.forEach(function(n){ delete copy[n]; });
             return copy;
           });
           return Object.assign({}, prev, { variables: newVars, cases: newCases });
@@ -2509,20 +2525,78 @@ var _gridPanelEl = null;
         var gfn = document.createElement('div'); gfn.style.cssText='font-size:11px;color:#94a3b8'; gfn.textContent='ดับเบิ้ลคลิกซ้าย หรือ ลากวางเพื่อเพิ่มสมาชิก Grid';
         var gfb = document.createElement('div'); gfb.style.cssText='display:flex;gap:10px';
         var gcB = mkBtn('ยกเลิก','#fff','#374151','1.5px solid #e2e8f0'); gcB.addEventListener('click', closeModal);
-        var gCr = mkBtn('สร้าง Grid','#1d4ed8','#fff','none'); gCr.style.fontWeight='700';
+        var isEditingGrid = _editingVarName && _activeTab === 'grid';
+        var gCr = mkBtn(isEditingGrid ? 'บันทึก Grid' : 'สร้าง Grid','#1d4ed8','#fff','none'); gCr.style.fontWeight='700';
         gCr.addEventListener('click', function(){
            var vn=document.getElementById('cx-grid-name').value.trim().toUpperCase(); var vl=document.getElementById('cx-grid-label').value.trim();
            if(!vn) return alert('ใส่ชื่อตัวแปร');
            if(_gridMembers.length<2) return alert('เลือกอย่างน้อย 2 ตัวแปร');
-           var vLabels = _gridMembers[0].valueLabels || {};
-           var newVar={name:vn,longName:vn,label:vl,isString:false,isGroupedMA:false,valueLabels:vLabels,isGridUserCreated:true,gridMembers:_gridMembers.map(m=>({name:m.name,label:m.label||m.name})),_derived:true};
-           var ds=_hook.data; var newCases=ds.cases; 
+           var scaleLabels = _gridMembers[0].valueLabels || {};
+           var membersList = _gridMembers.map(function(m,i){ return {name:m.name, label:m.label||m.name}; });
+           var memberNames = membersList.map(function(m){ return m.name; });
+
+           /* ── Create TOP variable (member/attribute index) ── */
+           var topName = vn;
+           var topValueLabels = {};
+           membersList.forEach(function(m, i) { topValueLabels[String(i+1)] = m.label; });
+           var topVar = {
+             name: topName, longName: topName, label: vl || 'Grid Attributes',
+             isString: false, isGroupedMA: false,
+             valueLabels: topValueLabels,
+             isGridUserCreated: true, gridRole: 'top',
+             gridMembers: membersList,
+             gridScaleLabels: scaleLabels,
+             gridPairName: vn + '_SIDE',
+             _derived: true
+           };
+
+           /* ── Create SIDE variable (scale value) ── */
+           var sideName = vn + '_SIDE';
+           var sideVar = {
+             name: sideName, longName: sideName, label: 'Scale: ' + (vl || vn),
+             isString: false, isGroupedMA: false,
+             valueLabels: scaleLabels,
+             isGridUserCreated: true, gridRole: 'side',
+             gridMembers: membersList,
+             gridScaleLabels: scaleLabels,
+             gridPairName: topName,
+             _derived: true
+           };
+
            _hook.dispatch(function(prev){ if(!prev)return prev;
-             var nvs = prev.variables.filter(v=>v.name!==vn);
-             return Object.assign({},prev,{variables:nvs.concat([newVar])});
+             var nvs = prev.variables.filter(function(v){ return v.name!==topName && v.name!==sideName; });
+             /*
+              * Explode cases: each original case → N rows (one per member with a value).
+              * Grid-only rows contain ONLY TOP+SIDE values — this way:
+              *   - Grid table (TOP × SIDE): Grid rows pass filter → correct counts
+              *   - Non-Grid table (q1 × q2): Grid rows lack q1/q2 → auto-filtered out
+              * Original rows are kept intact (without TOP/SIDE) for non-Grid tables.
+              */
+             var updatedCases = [];
+             for (var ci = 0; ci < prev.cases.length; ci++) {
+               var row = prev.cases[ci];
+               /* Keep original row without Grid values */
+               updatedCases.push(row);
+               /* Add one Grid-only row per member that has a valid value */
+               for (var mi = 0; mi < membersList.length; mi++) {
+                 var mName = membersList[mi].name;
+                 var v = row[mName];
+                 if (v === undefined) {
+                   var lower = mName.toLowerCase();
+                   for (var k in row) { if (k.toLowerCase() === lower) { v = row[k]; break; } }
+                 }
+                 if (v != null && v !== '') {
+                   var gridRow = {};
+                   gridRow[topName] = mi + 1;
+                   gridRow[sideName] = (typeof v === 'number') ? v : (!isNaN(Number(v)) ? Number(v) : v);
+                   updatedCases.push(gridRow);
+                 }
+               }
+             }
+             return Object.assign({},prev,{variables:nvs.concat([topVar, sideVar]), cases: updatedCases});
            });
            closeModal();
-           var t=document.createElement('div'); t.style.cssText='position:fixed;bottom:24px;left:50%;transform:translateX(-50%);z-index:2147483647;background:#166534;color:#fff;padding:9px 22px;border-radius:20px;font-size:12px;font-family:inherit;box-shadow:0 4px 20px rgba(0,0,0,0.2)'; t.textContent='สร้าง Grid ' + vn + ' เรียบร้อยแล้ว'; document.body.appendChild(t); setTimeout(function(){ t.remove(); }, 3500);
+           var t=document.createElement('div'); t.style.cssText='position:fixed;bottom:24px;left:50%;transform:translateX(-50%);z-index:2147483647;background:#166534;color:#fff;padding:9px 22px;border-radius:20px;font-size:12px;font-family:inherit;box-shadow:0 4px 20px rgba(0,0,0,0.2)'; t.textContent='สร้าง Grid เรียบร้อย: ' + topName + ' (TOP) + ' + sideName + ' (SIDE)'; document.body.appendChild(t); setTimeout(function(){ t.remove(); }, 3500);
         });
         gfb.appendChild(gcB); gfb.appendChild(gCr);
         gridFooter.appendChild(gfn); gridFooter.appendChild(gfb);
@@ -2559,6 +2633,10 @@ var _gridPanelEl = null;
         managePanel.style.display = 'none';
         _managePanelEl = managePanel;
 
+        box.appendChild(tb); box.appendChild(tabBar); box.appendChild(createPanel); box.appendChild(managePanel); box.appendChild(footer); box.appendChild(gridFooter);
+        bd.appendChild(box); document.body.appendChild(bd);
+        _modal = bd;
+
         
         /* pre-fill if editing */
         if (_editingVarName) {
@@ -2566,16 +2644,26 @@ var _gridPanelEl = null;
           if (hook) {
             var ev = (hook.data.variables || []).find(function(v){ return v.name === _editingVarName; });
             if (ev) {
-              ni.value = ev.name;
-              li.value = ev.label || '';
-              ni.readOnly = true;
-              ni.style.background = '#f1f5f9'; ni.style.color = '#64748b';
+              if (ev.isGridUserCreated && ev.gridRole) {
+                /* Pre-fill Grid tab */
+                var gridNameEl = document.getElementById('cx-grid-name');
+                var gridLabelEl = document.getElementById('cx-grid-label');
+                if (gridNameEl) { gridNameEl.value = ev.name; gridNameEl.readOnly = true; gridNameEl.style.background = '#f1f5f9'; gridNameEl.style.color = '#64748b'; }
+                if (gridLabelEl) gridLabelEl.value = ev.label || '';
+                renderGridMembers();
+              } else {
+                ni.value = ev.name;
+                li.value = ev.label || '';
+                ni.readOnly = true;
+                ni.style.background = '#f1f5f9'; ni.style.color = '#64748b';
+              }
             }
           }
         }
 
         switchTab(_activeTab);
         if (_activeTab === 'create') ni.focus();
+        if (_activeTab === 'grid') { var _gn = document.getElementById('cx-grid-name'); if(_gn) _gn.focus(); }
       }
 
       /* โ•โ• Left Panel โ•โ• */
@@ -6021,11 +6109,20 @@ var _gridPanelEl = null;
       }
 
       
+      function getCaseValue(c, name) {
+        if (c[name] !== undefined) return c[name];
+        var lower = name.toLowerCase();
+        for (var k in c) {
+          if (k.toLowerCase() === lower) return c[k];
+        }
+        return undefined;
+      }
+
       function buildGridMatrix(origResult, varObj, dataset, overrides) {
         if (!varObj || !varObj.isGridUserCreated || !varObj.gridMembers) return null;
         var members = varObj.gridMembers;
         var ov = overrides[varObj.name] || {};
-        var labels = ov.labels || varObj.valueLabels || {};
+        var labels = ov.labels || varObj.gridScaleLabels || varObj.valueLabels || {};
         var scaleCodes = Array.isArray(ov.order) ? ov.order.slice() : Object.keys(labels);
         var filteredScale = cxFilterOutSummaryCodes(scaleCodes);
 
@@ -6041,7 +6138,7 @@ var _gridPanelEl = null;
         
         dataset.cases.forEach(c => {
            members.forEach((m, cIdx) => {
-              var v = c[m.name];
+              var v = getCaseValue(c, m.name);
               if (v == null || v === '') return;
               var k = String(v);
               var colKey = colValues[cIdx];
@@ -6055,7 +6152,7 @@ var _gridPanelEl = null;
         members.forEach((m, cIdx) => {
            var colTot = 0;
            dataset.cases.forEach(c => {
-              var v = c[m.name];
+              var v = getCaseValue(c, m.name);
               if (v != null && v !== '') colTot++;
            });
            colTotalsN.push(colTot);
@@ -6180,12 +6277,41 @@ var _gridPanelEl = null;
         return res;
       }
 
+      function checkGridVar(tVar, ds) {
+        if (!tVar) return null;
+        if (tVar.isGridUserCreated && tVar.gridMembers) return tVar;
+        if (ds && ds.variables) {
+          var found = ds.variables.find(function(v) { return v.name === tVar.name; });
+          if (found && found.isGridUserCreated && found.gridMembers) return found;
+        }
+        return null;
+      }
+
       function augmentTablesArray(tables) {
         var ov = findOverrides(resolveLiveTablesHook());
         return tables.map(function(t) {
           if (t.result && !t.result.__cxAugmented) {
-            var h=_hookedHook||resolveLiveTablesHook(); var aug = t.rowVar && t.rowVar.isGridUserCreated && (!t.colVar) ? buildGridMatrix(t.result, t.rowVar, h?h.data:null, ov) : augmentResult(t.result, t.rowVar, ov);
-            return Object.assign({}, t, { result: aug });
+            var h=_hookedHook||resolveLiveTablesHook();
+            var ds = h ? h.data : null;
+
+            var gRow = checkGridVar(t.rowVar, ds);
+            var gCol = checkGridVar(t.colVar, ds);
+
+            /* Grid pair cross-tab: colVar(TOP) + rowVar(SIDE) are grid pair */
+            if (gRow && gCol) {
+              var gridVar = gCol.gridRole === 'top' ? gCol : gRow;
+              var aug = buildGridMatrix(t.result, gridVar, ds, ov);
+              if (aug) return Object.assign({}, t, { result: aug });
+            }
+
+            /* Grid single (SIDE only, no TOP) */
+            if (gRow && !gCol && ds) {
+              var aug2 = buildGridMatrix(t.result, gRow, ds, ov);
+              if (aug2) return Object.assign({}, t, { result: aug2 });
+            }
+
+            var aug3 = augmentResult(t.result, t.rowVar, ov);
+            return Object.assign({}, t, { result: aug3 });
           }
           return t;
         });
@@ -6207,14 +6333,23 @@ var _gridPanelEl = null;
         return null;
       }
 
+      function isGridPairTable(t, ds) {
+        if (!t || !t.rowVar || !t.colVar) return false;
+        return checkGridVar(t.rowVar, ds) && checkGridVar(t.colVar, ds);
+      }
+
       function getNoTopTable(seedEl) {
         /* Strategy 1: fiber walk from element */
         var fiber = seedEl ? fiberOf(seedEl) : null;
         var td = fiber ? getTableFromFiber(fiber) : null;
         if (td && td.rowVar && !td.colVar) return td;
+        /* Grid pair: both TOP and SIDE are grid vars */
+        var h = resolveLiveTablesHook(seedEl);
+        var ds = h ? h.data : null;
+        if (td && isGridPairTable(td, ds)) return td;
 
         /* Strategy 2: fresh hook resolution */
-        var freshHook = resolveLiveTablesHook(seedEl);
+        var freshHook = h;
         if (freshHook) {
           var tables = freshHook.memoizedState;
           if (Array.isArray(tables)) {
@@ -6225,13 +6360,13 @@ var _gridPanelEl = null;
               if (af) {
                 var activeTable = getTableFromFiber(af);
                 if (activeTable) {
-                  var match = tables.find(function(t) { return t.id === activeTable.id && t.rowVar && !t.colVar; });
+                  var match = tables.find(function(t) { return t.id === activeTable.id && ((!t.colVar && t.rowVar) || isGridPairTable(t, ds)); });
                   if (match) return match;
                 }
               }
             }
-            /* Fallback: any table with rowVar and no colVar */
-            var found = tables.find(function(t) { return t.rowVar && !t.colVar; });
+            /* Fallback: any table with rowVar and no colVar, or a Grid pair */
+            var found = tables.find(function(t) { return (t.rowVar && !t.colVar) || isGridPairTable(t, ds); });
             if (found) return found;
           }
         }
@@ -6319,6 +6454,49 @@ var _gridPanelEl = null;
         if (!dataset) { console.warn('[S6] no dataset'); return; }
 
         var ov = findOverrides(freshHook);
+
+        /* ── Grid variable interception (single or pair) ── */
+        var gridVar = null;
+        if (isGridPairTable(tableData, dataset)) {
+          /* Grid pair: find the one with gridRole='top' or use colVar */
+          var gRow = checkGridVar(tableData.rowVar, dataset);
+          var gCol = checkGridVar(tableData.colVar, dataset);
+          if (gRow && gCol) {
+            gridVar = gCol.gridRole === 'top' ? gCol : gRow;
+          }
+        } else {
+          var gRow = checkGridVar(tableData.rowVar, dataset);
+          if (gRow && !tableData.colVar) gridVar = gRow;
+        }
+        if (gridVar) {
+          var gridResult = buildGridMatrix(null, gridVar, dataset, ov);
+          if (gridResult) {
+            gridResult.__cxAugmented = true;
+            var gridTableId = tableData.id;
+            rawDispatch(function(prev) {
+              if (!Array.isArray(prev)) return prev;
+              return prev.map(function(t) {
+                if (t && t.id === gridTableId) return Object.assign({}, t, { result: gridResult });
+                return t;
+              });
+            });
+            console.log('[S6] Grid matrix dispatched, cols:', gridResult.colValues.length, 'rows:', gridResult.rowValues.length);
+
+            function switchToResultsGrid() {
+              var th = resolveLiveTablesHook(triggerEl) || freshHook;
+              var tabHook = findTabsHook(th);
+              if (tabHook && tabHook.queue && typeof tabHook.queue.dispatch === 'function') {
+                try { tabHook.queue.dispatch('results'); } catch(e2) { showResultsTabFallback(); }
+              } else { showResultsTabFallback(); }
+            }
+            if (typeof queueMicrotask === 'function') queueMicrotask(switchToResultsGrid);
+            else setTimeout(switchToResultsGrid, 0);
+            setTimeout(showResultsTabFallback, 50);
+            setTimeout(showResultsTabFallback, 200);
+            return;
+          }
+        }
+
         var freq = buildFreqTable(tableData, dataset, ov);
         if (!freq) { console.warn('[S6] could not build freq table'); return; }
 
@@ -6438,6 +6616,11 @@ var _gridPanelEl = null;
           var needUpdate = false;
           var updated = tables.map(function(t) {
             if (t.rowVar && !t.colVar && !t.result) {
+              /* Grid variable → build matrix */
+              if (t.rowVar.isGridUserCreated && t.rowVar.gridMembers) {
+                var gridRes = buildGridMatrix(null, t.rowVar, dataset, ov);
+                if (gridRes) { gridRes.__cxAugmented = true; needUpdate = true; return Object.assign({}, t, { result: gridRes }); }
+              }
               var freq = buildFreqTable(t, dataset, ov);
               if (freq) {
                 needUpdate = true;
