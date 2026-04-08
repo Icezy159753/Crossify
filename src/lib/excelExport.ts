@@ -718,3 +718,57 @@ export async function exportMultipleCrosstabsToExcel(
   const buf = await wb.xlsx.writeBuffer()
   saveAs(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), filename)
 }
+
+/**
+ * High-level wrapper called by App.tsx handleExportTable.
+ * Bridges the TableDef + GlobalSettings API to the low-level export functions.
+ */
+export async function exportTableToExcel(
+  table: { name: string; rowVar: string | null; colVar: string | null; result: CrosstabResult | null; filter?: { description?: string } },
+  _dataset: unknown,
+  _variableOverrides: unknown,
+  settings: { showCount: boolean; showPercent: boolean; percentType: 'row' | 'column' | 'total'; hideZeroRows?: boolean },
+) {
+  if (!table.result) throw new Error('No result to export')
+  const config: CrosstabConfig = {
+    rowVar: table.result.rowVar,
+    colVar: table.result.colVar,
+    showCount: settings.showCount,
+    showPercent: settings.showPercent,
+    percentType: settings.percentType,
+    hideZeroRows: settings.hideZeroRows,
+  }
+  const filterSummary = table.filter?.description || undefined
+  const filename = `${table.name || 'crosstab'}.xlsx`
+  await exportCrosstabToExcel(table.result, config, table.name, filterSummary, filename)
+}
+
+/**
+ * High-level wrapper called by App.tsx batch export flow.
+ * Exports multiple tables into a single workbook.
+ */
+export async function exportAllTablesToExcel(
+  tables: Array<{ name: string; rowVar: string | null; colVar: string | null; result: CrosstabResult | null; filter?: { description?: string } }>,
+  _dataset: unknown,
+  _variableOverrides: unknown,
+  settings: { showCount: boolean; showPercent: boolean; percentType: 'row' | 'column' | 'total'; hideZeroRows?: boolean },
+  settingsName?: string,
+) {
+  const items = tables
+    .filter(t => t.result != null)
+    .map(t => ({
+      result: t.result!,
+      config: {
+        rowVar: t.result!.rowVar,
+        colVar: t.result!.colVar,
+        showCount: settings.showCount,
+        showPercent: settings.showPercent,
+        percentType: settings.percentType,
+        hideZeroRows: settings.hideZeroRows,
+      } as CrosstabConfig,
+      tableName: t.name,
+      filterSummary: t.filter?.description || undefined,
+    }))
+  const filename = settingsName ? `${settingsName}.xlsx` : 'crosstab_all.xlsx'
+  await exportMultipleCrosstabsToExcel(items, filename)
+}
