@@ -6098,11 +6098,30 @@
           var order = Array.isArray(ov.order) ? ov.order.slice() : Object.keys(labels);
           order = cxFilterOutSummaryCodes(order);
 
+          /* Resolve actual data key by probing case object — try vName, vInfo.name, longName, lowercase */
+          var _dataKey = vName;
+          if (dataset.cases.length > 0) {
+            var _sample = dataset.cases[0] || {};
+            var _candidates = [vName, vInfo && vInfo.name, vInfo && vInfo.longName,
+                               String(vName).toLowerCase(),
+                               vInfo && vInfo.name && String(vInfo.name).toLowerCase()];
+            for (var _ki = 0; _ki < _candidates.length; _ki++) {
+              if (_candidates[_ki] && _candidates[_ki] in _sample) { _dataKey = _candidates[_ki]; break; }
+            }
+            if (!(_dataKey in _sample)) {
+              var _vnLC2 = String(vName).toLowerCase();
+              var _keys = Object.keys(_sample);
+              for (var _kj = 0; _kj < _keys.length; _kj++) {
+                if (_keys[_kj].toLowerCase() === _vnLC2) { _dataKey = _keys[_kj]; break; }
+              }
+            }
+          }
+
           /* If no order, collect from data */
           if (!order.length) {
             var seen = {};
             dataset.cases.forEach(function (c) {
-              var v = c[vName]; if (v == null || v === '') return;
+              var v = c[_dataKey]; if (v == null || v === '') return;
               var k = String(v); if (!seen[k]) { seen[k] = true; order.push(k); }
             });
             order.sort(function (a, b) { var an = Number(a), bn = Number(b); return isFinite(an) && isFinite(bn) ? an - bn : a.localeCompare(b); });
@@ -6111,11 +6130,10 @@
           var cnt = {}; order.forEach(function (k) { cnt[k] = 0; });
           var tot = 0;
           dataset.cases.forEach(function (c) {
-            var v = c[vName]; if (v == null || v === '') return;
+            var v = c[_dataKey]; if (v == null || v === '') return;
             var k = String(v);
             if (cnt[k] != null) { cnt[k]++; tot++; }
             else {
-              /* Try by label */
               var found = false;
               for (var code in labels) {
                 if (isSummaryKey(String(code == null ? '' : code).trim())) continue;
@@ -6125,6 +6143,11 @@
             }
           });
 
+          if (tot === 0) {
+            console.warn('[S6] buildFreqTable: 0 cases for', vName,
+              '— resolved dataKey=', _dataKey,
+              ', sample keys count=', dataset.cases[0] ? Object.keys(dataset.cases[0]).length : 0);
+          }
           results.push({ vName: vName, vInfo: vInfo, labels: labels, order: order, cnt: cnt, tot: tot });
         });
 
