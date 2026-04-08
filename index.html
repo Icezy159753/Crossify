@@ -5593,8 +5593,25 @@
          result.rowValues are label strings, so we map via override.labels / vInfo. */
       function cxInjectNetGroups(result, vn, overrides) {
         if (!result || !result.rowValues || !result.rowValues.length) return result;
-        var ov = (overrides && (overrides[vn] || overrides[String(vn).toLowerCase()])) || null;
+        /* Try multiple key variants for the override lookup */
+        var ov = null;
+        if (overrides) {
+          var _keys = [vn, String(vn).toLowerCase(), String(vn).toUpperCase()];
+          for (var _ki = 0; _ki < _keys.length && !ov; _ki++) {
+            if (overrides[_keys[_ki]]) ov = overrides[_keys[_ki]];
+          }
+          /* Last resort: case-insensitive scan of override keys */
+          if (!ov) {
+            var _vnLC = String(vn).toLowerCase();
+            var _ovKeys = Object.keys(overrides);
+            for (var _kj = 0; _kj < _ovKeys.length; _kj++) {
+              if (_ovKeys[_kj].toLowerCase() === _vnLC) { ov = overrides[_ovKeys[_kj]]; break; }
+            }
+          }
+        }
         var groups = ov && Array.isArray(ov.groups) ? ov.groups : null;
+        console.log('[S6] injectNet:', vn, '— ov?', !!ov, ', groups=', groups ? groups.length : 0,
+          ', overrideKeys=', overrides ? Object.keys(overrides).length : 0);
         if (!groups || !groups.length) return result;
         var labels = (ov && ov.labels) || {};
         /* Build code → rowIndex map (try label match, then raw code match) */
