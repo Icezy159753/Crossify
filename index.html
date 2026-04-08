@@ -4198,6 +4198,25 @@
             labels = Object.assign({}, labels, info.memberLabels || {});
           }
         }
+        /* Numeric (#) variable fallback: build weights from numeric row labels themselves
+           so that Mean appears automatically without needing TB preset or Save Variable */
+        if (!weights || !Object.keys(weights).length) {
+          var _numW = {}, _allNum = true, _seenAny = false;
+          for (var _ri = lo; _ri < hi; _ri++) {
+            var _t0 = (result.rowTypes && result.rowTypes[_ri]) || 'data';
+            if (_t0 !== 'data') continue;
+            var _rv = result.rowValues[_ri];
+            var _key = String(_rv == null ? '' : _rv).trim();
+            if (!_key) continue;
+            var _num = Number(_key);
+            if (!isFinite(_num)) { _allNum = false; break; }
+            _numW[_key] = _num;
+            _seenAny = true;
+          }
+          if (_allNum && _seenAny) {
+            weights = _numW;
+          }
+        }
 
         var labelToIdx = {};
         for (var ri = lo; ri < hi; ri++) {
@@ -5569,6 +5588,108 @@
       }
 
       /* ── T2B/Mean augmentation ── */
+      /* Inject Net group rows from override.groups for a single-var result.
+         Groups: [{id, name, members:[code], parentId}]. Members are code keys;
+         result.rowValues are label strings, so we map via override.labels / vInfo. */
+      function cxInjectNetGroups(result, vn, overrides) {
+        if (!result || !result.rowValues || !result.rowValues.length) return result;
+        var ov = (overrides && (overrides[vn] || overrides[String(vn).toLowerCase()])) || null;
+        var groups = ov && Array.isArray(ov.groups) ? ov.groups : null;
+        if (!groups || !groups.length) return result;
+        var labels = (ov && ov.labels) || {};
+        /* Build code → rowIndex map (try label match, then raw code match) */
+        var codeToIdx = {};
+        for (var ri = 0; ri < result.rowValues.length; ri++) {
+          var rt = (result.rowTypes && result.rowTypes[ri]) || 'data';
+          if (rt !== 'data') continue;
+          var rv = String(result.rowValues[ri] == null ? '' : result.rowValues[ri]).trim();
+          var path = (result.rowPaths && result.rowPaths[ri]) || [rv];
+          var last = String(path[path.length - 1] || rv).trim();
+          codeToIdx[rv] = ri;
+          codeToIdx[last] = ri;
+        }
+        /* Reverse map labels[code]=label → code for lookup */
+        var labelToCode = {};
+        Object.keys(labels || {}).forEach(function (c) {
+          var l = String(labels[c] == null ? '' : labels[c]).trim();
+          if (l) labelToCode[l] = c;
+        });
+
+        function memberToIdx(memberCode) {
+          /* Try direct match first */
+          if (codeToIdx[memberCode] != null) return codeToIdx[memberCode];
+          /* Try label-of-code */
+          var lab = labels[memberCode];
+          if (lab != null && codeToIdx[String(lab).trim()] != null) return codeToIdx[String(lab).trim()];
+          return null;
+        }
+
+        function depthOf(g) {
+          var d = 0, cur = g, guard = 0;
+          while (cur && cur.parentId && guard++ < 16) {
+            var par = groups.find(function (x) { return x.id === cur.parentId; });
+            if (!par) break;
+            d++; cur = par;
+          }
+          return d;
+        }
+
+        var colCount = (result.colValues || []).length;
+        var netRows = [];
+        groups.forEach(function (g) {
+          var idxs = (g.members || []).map(memberToIdx).filter(function (x) { return x != null; });
+          if (!idxs.length) return;
+          idxs.sort(function (a, b) { return a - b; });
+          var counts = [];
+          for (var ci = 0; ci < colCount; ci++) {
+            var s = 0;
+            idxs.forEach(function (rix) { s += (result.counts[rix] || [])[ci] || 0; });
+            counts.push(s);
+          }
+          var totalN = idxs.reduce(function (a, rix) { return a + (result.rowTotalsN[rix] || 0); }, 0);
+          var d = depthOf(g);
+          var indent = '';
+          for (var ii = 0; ii < d + 1; ii++) indent += '   ';
+          netRows.push({
+            insertBefore: idxs[0],
+            depth: d,
+            label: indent + (g.name || 'Net'),
+            counts: counts,
+            totalN: totalN
+          });
+        });
+        if (!netRows.length) return result;
+        netRows.sort(function (a, b) { return a.insertBefore - b.insertBefore || a.depth - b.depth; });
+
+        var rv = [], rt = [], rp = [], ct = [], rtn = [];
+        var rawTypes = result.rowTypes || result.rowValues.map(function () { return 'data'; });
+        var rawPaths = result.rowPaths || result.rowValues.map(function (v) { return [v]; });
+        var ni = 0;
+        for (var i = 0; i < result.rowValues.length; i++) {
+          while (ni < netRows.length && netRows[ni].insertBefore === i) {
+            var n = netRows[ni];
+            rv.push(n.label); rt.push('net'); rp.push([n.label]);
+            ct.push(n.counts); rtn.push(n.totalN);
+            ni++;
+          }
+          rv.push(result.rowValues[i]);
+          rt.push(rawTypes[i]);
+          rp.push(rawPaths[i]);
+          ct.push(result.counts[i]);
+          rtn.push(result.rowTotalsN[i]);
+        }
+        while (ni < netRows.length) {
+          var n2 = netRows[ni];
+          rv.push(n2.label); rt.push('net'); rp.push([n2.label]);
+          ct.push(n2.counts); rtn.push(n2.totalN);
+          ni++;
+        }
+        return Object.assign({}, result, {
+          rowValues: rv, rowTypes: rt, rowPaths: rp, counts: ct, rowTotalsN: rtn
+        });
+      }
+      window.__cxInjectNetGroups = cxInjectNetGroups;
+
       function augmentResult(result, rowVarStr, overrides) {
         if (!result || !result.rowValues || !result.rowValues.length) return result;
         if (result.__cxAugmented) return result;
@@ -5596,6 +5717,8 @@
           if (typeof window.__cxEnsureSingleVarMean === 'function') {
             try { aug = window.__cxEnsureSingleVarMean(aug, vn, overrides); } catch (e2) { console.warn('[S6] addMean err', e2); }
           }
+          /* Inject Net group rows from override.groups (run-without-Top path) */
+          try { aug = cxInjectNetGroups(aug, vn, overrides); } catch (eN) { console.warn('[S6] injectNet err', eN); }
         }
 
         return Object.assign({}, aug, { __cxAugmented: true });

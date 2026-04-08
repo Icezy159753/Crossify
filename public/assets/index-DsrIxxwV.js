@@ -12562,10 +12562,10 @@ function ux() {
         numericStats: Pn(i) ? _n : void 0,
         groups: ut
       }
-    })), ne(N => N.map(F => ({
-      ...F,
-      result: null
-    }))), Ce(null);
+    })), ne(N => N.map(F => {
+      const __refs = Xe(ct(F.rowVar)).indexOf(i) >= 0 || Xe(ct(F.colVar)).indexOf(i) >= 0;
+      return __refs ? { ...F, result: null } : F;
+    })), Ce(null);
   }
   function Ei(i, f) {
     const g = ze.filter(N => N.rowKind !== "net"),
