@@ -93,6 +93,7 @@ export function PreviewTable({ result, config }: Props) {
   const displayResult = filterZeroRows(result, config.hideZeroRows ?? false)
   const { rowValues, colValues, counts, rowTotalsN, colTotalsN, grandTotal } = displayResult
   const { showCount, showPercent, percentType } = config
+  const hideTotal = config.hideTotal ?? false
 
   const rawRowPaths = displayResult.rowPaths ?? rowValues.map(value => [value])
   const colPaths = displayResult.colPaths ?? colValues.map(value => [value])
@@ -125,9 +126,11 @@ export function PreviewTable({ result, config }: Props) {
         >
           Base
         </td>
-        <td className="px-2 py-1.5 text-center text-gray-800 border border-[#BDD7EE] tabular-nums">
-          {totalN === 0 ? <span className="text-gray-300">-</span> : totalN}
-        </td>
+        {!hideTotal && (
+          <td className="px-2 py-1.5 text-center text-gray-800 border border-[#BDD7EE] tabular-nums">
+            {totalN === 0 ? <span className="text-gray-300">-</span> : totalN}
+          </td>
+        )}
         {baseColTotalsN.map((cn, ci) => (
           <td key={ci} className="px-2 py-1.5 text-center text-gray-800 border border-[#BDD7EE] tabular-nums">
             {cn === 0 ? <span className="text-gray-300">-</span> : cn}
@@ -138,11 +141,11 @@ export function PreviewTable({ result, config }: Props) {
   }
 
   function buildTSV(): string {
-    const header = [...rowLevelLabels, 'Total', ...colPaths.map(path => path.join(' / '))].join('\t')
+    const header = [...rowLevelLabels, ...(hideTotal ? [] : ['Total']), ...colPaths.map(path => path.join(' / '))].join('\t')
     const baseRow = [
       'Base',
       ...Array.from({ length: Math.max(0, rowLevelLabels.length - 1) }, () => ''),
-      String(grandTotal),
+      ...(hideTotal ? [] : [String(grandTotal)]),
       ...colTotalsN.map(cn => cn === 0 ? '-' : String(cn)),
     ].join('\t')
     const dataRows = rowValues.map((_, ri) => [
@@ -204,7 +207,7 @@ export function PreviewTable({ result, config }: Props) {
             {rowLevelLabels.map((_, idx) => (
               <col key={`row-col-${idx}`} className={idx === 0 ? rowLabelWidthClass : categoryWidthClass} />
             ))}
-            <col className={metricWidthClass} />
+            {!hideTotal && <col className={metricWidthClass} />}
             {colValues.map((_, idx) => (
               <col key={`data-col-${idx}`} className={metricWidthClass} />
             ))}
@@ -216,9 +219,11 @@ export function PreviewTable({ result, config }: Props) {
                 rowSpan={colHeaderGroups.length + 1}
                 className="border-0 bg-transparent p-0"
               />
-              <th className="bg-[#1F4E78] text-white px-2 py-1.5 text-center border border-[#BDD7EE] font-bold whitespace-nowrap">
-                Total
-              </th>
+              {!hideTotal && (
+                <th className="bg-[#1F4E78] text-white px-2 py-1.5 text-center border border-[#BDD7EE] font-bold whitespace-nowrap">
+                  Total
+                </th>
+              )}
               <th
                 colSpan={colValues.length}
                 className="bg-[#1F4E78] text-white px-2 py-1.5 text-center border border-[#BDD7EE] font-bold"
@@ -230,17 +235,13 @@ export function PreviewTable({ result, config }: Props) {
             </tr>
             {colHeaderGroups.map((groups, level) => (
               <tr key={colLevelLabels[level] ?? level}>
-                {level === colHeaderGroups.length - 1 ? (
-                  <>
-                    <th className="bg-[#2E75B6] border border-[#BDD7EE] px-2 py-1.5 text-white text-center text-[10px] font-normal opacity-70">
-                      n={grandTotal.toLocaleString()}
-                    </th>
-                  </>
+                {!hideTotal && (level === colHeaderGroups.length - 1 ? (
+                  <th className="bg-[#2E75B6] border border-[#BDD7EE] px-2 py-1.5 text-white text-center text-[10px] font-normal opacity-70">
+                    n={grandTotal.toLocaleString()}
+                  </th>
                 ) : (
-                  <>
-                    <th className="bg-[#2E75B6] border border-[#BDD7EE]" />
-                  </>
-                )}
+                  <th className="bg-[#2E75B6] border border-[#BDD7EE]" />
+                ))}
                 {groups.map((group, idx) => (
                   <th
                     key={`${level}-${idx}-${group.label}`}
@@ -302,11 +303,13 @@ export function PreviewTable({ result, config }: Props) {
                       {segment || <span className="text-transparent">.</span>}
                     </td>
                   ))}
-                  <td className={`px-2 py-1.5 text-center font-semibold border border-[#BDD7EE] tabular-nums ${isMeanRow ? 'bg-red-100 text-red-700' : isNetRow ? 'bg-emerald-100 text-emerald-800' : 'text-gray-800 bg-[#D6E4F0]'}`}>
-                    {isMeanRow
-                      ? fmtMean(rowTotalsN[ri])
-                      : fmt(rowTotalsN[ri], totalPct(rowTotalsN[ri]), showCount, showPercent)}
-                  </td>
+                  {!hideTotal && (
+                    <td className={`px-2 py-1.5 text-center font-semibold border border-[#BDD7EE] tabular-nums ${isMeanRow ? 'bg-red-100 text-red-700' : isNetRow ? 'bg-emerald-100 text-emerald-800' : 'text-gray-800 bg-[#D6E4F0]'}`}>
+                      {isMeanRow
+                        ? fmtMean(rowTotalsN[ri])
+                        : fmt(rowTotalsN[ri], totalPct(rowTotalsN[ri]), showCount, showPercent)}
+                    </td>
+                  )}
                   {colValues.map((_, ci) => {
                     const n = counts[ri][ci]
                     const pct = getPct(n, ri, ci, displayResult, percentType)

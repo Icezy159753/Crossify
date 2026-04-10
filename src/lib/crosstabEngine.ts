@@ -19,6 +19,7 @@ export interface CrosstabConfig {
   showPercent: boolean
   percentType: 'row' | 'column' | 'total'
   hideZeroRows?: boolean
+  hideTotal?: boolean
 }
 
 export type CrosstabRowType = 'data' | 'stat' | 'net' | 'summary'

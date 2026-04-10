@@ -312,6 +312,7 @@ function addCrosstabSheet(
   const displayResult = filterZeroRows(result, config.hideZeroRows ?? false)
   const { rowValues, colValues, counts, rowTotalsN, colTotalsN, grandTotal } = displayResult
   const { showCount, showPercent, percentType } = config
+  const hideTotal = config.hideTotal ?? false
   const showBoth = showCount && showPercent
   const rawRowPaths = displayResult.rowPaths ?? rowValues.map(value => [value])
   const colPaths = displayResult.colPaths ?? colValues.map(value => [value])
@@ -327,10 +328,12 @@ function addCrosstabSheet(
   const rowSectionBases = normalizedRows.rowSectionBases
   const rowSectionMeta = buildRowSectionMeta(rowSectionBases, rowValues.length)
   const subCols = showBoth ? 2 : 1
-  const totalNCol = rowLabelCols + 1
-  const totalPCol = showBoth ? totalNCol + 1 : -1
-  const dataStartCol = totalNCol + subCols
-  const totalCols = rowLabelCols + subCols + colValues.length * subCols
+  const totalNCol = hideTotal ? -1 : rowLabelCols + 1
+  const totalPCol = hideTotal ? -1 : (showBoth ? (rowLabelCols + 2) : -1)
+  const dataStartCol = hideTotal ? rowLabelCols + 1 : rowLabelCols + 1 + subCols
+  const totalCols = hideTotal
+    ? rowLabelCols + colValues.length * subCols
+    : rowLabelCols + subCols + colValues.length * subCols
 
   const ws = wb.addWorksheet(sheetName, { views: [{ showGridLines: false }] })
   const pendingRowMerges: Array<{ startRow: number; endRow: number; col: number }> = []
@@ -359,10 +362,12 @@ function addCrosstabSheet(
   const topHeaderRow = ws.addRow([])
   topHeaderRow.height = 22
   for (let col = 1; col <= rowLabelCols; col++) topHeaderRow.getCell(col).value = ''
-  const totalTopCell = topHeaderRow.getCell(totalNCol)
-  totalTopCell.value = 'Total'
-  styleHeader(totalTopCell)
-  if (showBoth) safeMergeCells(ws, topHeaderRow.number, totalNCol, topHeaderRow.number, totalNCol + 1)
+  if (!hideTotal) {
+    const totalTopCell = topHeaderRow.getCell(totalNCol)
+    totalTopCell.value = 'Total'
+    styleHeader(totalTopCell)
+    if (showBoth) safeMergeCells(ws, topHeaderRow.number, totalNCol, topHeaderRow.number, totalNCol + 1)
+  }
   const colTitleCell = topHeaderRow.getCell(dataStartCol)
   colTitleCell.value = displayResult.colLabel
   styleHeader(colTitleCell)
@@ -379,13 +384,17 @@ function addCrosstabSheet(
         const cell = headerRow.getCell(idx + 1)
         cell.value = ''
       })
-      const totalCell = headerRow.getCell(totalNCol)
-      totalCell.value = `N=${grandTotal.toLocaleString()}`
-      styleSubHeader(totalCell)
-      if (showBoth) safeMergeCells(ws, headerRow.number, totalNCol, headerRow.number, totalNCol + 1)
+      if (!hideTotal) {
+        const totalCell = headerRow.getCell(totalNCol)
+        totalCell.value = `N=${grandTotal.toLocaleString()}`
+        styleSubHeader(totalCell)
+        if (showBoth) safeMergeCells(ws, headerRow.number, totalNCol, headerRow.number, totalNCol + 1)
+      }
     } else {
       for (let col = 1; col <= rowLabelCols; col++) headerRow.getCell(col).value = ''
-      for (let col = totalNCol; col < dataStartCol; col++) styleSubHeader(headerRow.getCell(col))
+      if (!hideTotal) {
+        for (let col = totalNCol; col < dataStartCol; col++) styleSubHeader(headerRow.getCell(col))
+      }
     }
 
     let startCol = dataStartCol
@@ -411,13 +420,15 @@ function addCrosstabSheet(
   }]
 
   if (showBoth) {
-    const totalNHeader = metricRow.getCell(totalNCol)
-    totalNHeader.value = 'N'
-    styleSubHeader(totalNHeader)
+    if (!hideTotal) {
+      const totalNHeader = metricRow.getCell(totalNCol)
+      totalNHeader.value = 'N'
+      styleSubHeader(totalNHeader)
 
-    const totalPctHeader = metricRow.getCell(totalPCol)
-    totalPctHeader.value = '%'
-    styleSubHeader(totalPctHeader)
+      const totalPctHeader = metricRow.getCell(totalPCol)
+      totalPctHeader.value = '%'
+      styleSubHeader(totalPctHeader)
+    }
 
     for (let ci = 0; ci < colValues.length; ci++) {
       const startCol = dataStartCol + ci * subCols
@@ -431,9 +442,11 @@ function addCrosstabSheet(
     }
   } else {
     const metricLabel = showCount ? 'N' : '%'
-    const totalMetric = metricRow.getCell(totalNCol)
-    totalMetric.value = metricLabel
-    styleSubHeader(totalMetric)
+    if (!hideTotal) {
+      const totalMetric = metricRow.getCell(totalNCol)
+      totalMetric.value = metricLabel
+      styleSubHeader(totalMetric)
+    }
 
     for (let ci = 0; ci < colValues.length; ci++) {
       const startCol = dataStartCol + ci * subCols
@@ -463,22 +476,24 @@ function addCrosstabSheet(
       if (rowLabelCols > 1) safeMergeCells(ws, baseRow.number, 1, baseRow.number, rowLabelCols)
     }
 
-    if (showBoth) {
-      const totalNCell = baseRow.getCell(totalNCol)
-      totalNCell.value = totalN
-      styleBase(totalNCell)
+    if (!hideTotal) {
+      if (showBoth) {
+        const totalNCell = baseRow.getCell(totalNCol)
+        totalNCell.value = totalN
+        styleBase(totalNCell)
 
-      const totalPctCell = baseRow.getCell(totalPCol)
-      setPctValue(totalPctCell, 1)
-      styleBase(totalPctCell)
-    } else if (showCount) {
-      const totalNCell = baseRow.getCell(totalNCol)
-      totalNCell.value = totalN
-      styleBase(totalNCell)
-    } else {
-      const totalPctCell = baseRow.getCell(totalNCol)
-      totalPctCell.value = totalN
-      styleBase(totalPctCell)
+        const totalPctCell = baseRow.getCell(totalPCol)
+        setPctValue(totalPctCell, 1)
+        styleBase(totalPctCell)
+      } else if (showCount) {
+        const totalNCell = baseRow.getCell(totalNCol)
+        totalNCell.value = totalN
+        styleBase(totalNCell)
+      } else {
+        const totalPctCell = baseRow.getCell(totalNCol)
+        totalPctCell.value = totalN
+        styleBase(totalPctCell)
+      }
     }
 
     for (let ci = 0; ci < colValues.length; ci++) {
@@ -562,44 +577,46 @@ function addCrosstabSheet(
     const rowTotal = rowTotalsN[ri]
     const rowPct = grandTotal > 0 ? rowTotal / grandTotal : 0
 
-    if (showBoth) {
-      const nCell = row.getCell(totalNCol)
-      const pctCell = row.getCell(totalPCol)
-      if (isMeanRow) {
-        styleMean(nCell)
-        styleMean(pctCell)
-      } else if (isNetRow) {
-        styleNet(nCell)
-        styleNet(pctCell)
+    if (!hideTotal) {
+      if (showBoth) {
+        const nCell = row.getCell(totalNCol)
+        const pctCell = row.getCell(totalPCol)
+        if (isMeanRow) {
+          styleMean(nCell)
+          styleMean(pctCell)
+        } else if (isNetRow) {
+          styleNet(nCell)
+          styleNet(pctCell)
+        } else {
+          styleTotal(nCell)
+          styleTotal(pctCell)
+        }
+        if (isMeanRow) {
+          setMeanValue(nCell, rowTotal)
+          pctCell.value = ''
+        } else if (rowTotal === 0) {
+          nCell.value = '-'
+          pctCell.value = '-'
+        } else {
+          nCell.value = rowTotal
+          setPctValue(pctCell, rowPct)
+        }
+      } else if (showCount) {
+        const nCell = row.getCell(totalNCol)
+        if (isMeanRow) styleMean(nCell)
+        else if (isNetRow) styleNet(nCell)
+        else styleTotal(nCell)
+        if (isMeanRow) setMeanValue(nCell, rowTotal)
+        else nCell.value = rowTotal === 0 ? '-' : rowTotal
       } else {
-        styleTotal(nCell)
-        styleTotal(pctCell)
+        const pctCell = row.getCell(totalNCol)
+        if (isMeanRow) styleMean(pctCell)
+        else if (isNetRow) styleNet(pctCell)
+        else styleTotal(pctCell)
+        if (isMeanRow) setMeanValue(pctCell, rowTotal)
+        else if (rowTotal === 0) pctCell.value = '-'
+        else setPctValue(pctCell, rowPct)
       }
-      if (isMeanRow) {
-        setMeanValue(nCell, rowTotal)
-        pctCell.value = ''
-      } else if (rowTotal === 0) {
-        nCell.value = '-'
-        pctCell.value = '-'
-      } else {
-        nCell.value = rowTotal
-        setPctValue(pctCell, rowPct)
-      }
-    } else if (showCount) {
-      const nCell = row.getCell(totalNCol)
-      if (isMeanRow) styleMean(nCell)
-      else if (isNetRow) styleNet(nCell)
-      else styleTotal(nCell)
-      if (isMeanRow) setMeanValue(nCell, rowTotal)
-      else nCell.value = rowTotal === 0 ? '-' : rowTotal
-    } else {
-      const pctCell = row.getCell(totalNCol)
-      if (isMeanRow) styleMean(pctCell)
-      else if (isNetRow) styleNet(pctCell)
-      else styleTotal(pctCell)
-      if (isMeanRow) setMeanValue(pctCell, rowTotal)
-      else if (rowTotal === 0) pctCell.value = '-'
-      else setPctValue(pctCell, rowPct)
     }
 
     for (let ci = 0; ci < colValues.length; ci++) {
@@ -730,7 +747,7 @@ export async function exportTableToExcel(
   table: { name: string; rowVar: string | null; colVar: string | null; result: CrosstabResult | null; filter?: { description?: string } },
   _dataset: unknown,
   _variableOverrides: unknown,
-  settings: { showCount: boolean; showPercent: boolean; percentType: 'row' | 'column' | 'total'; hideZeroRows?: boolean },
+  settings: { showCount: boolean; showPercent: boolean; percentType: 'row' | 'column' | 'total'; hideZeroRows?: boolean; hideTotal?: boolean },
 ) {
   if (!table.result) throw new Error('No result to export')
   const config: CrosstabConfig = {
@@ -740,6 +757,7 @@ export async function exportTableToExcel(
     showPercent: settings.showPercent,
     percentType: settings.percentType,
     hideZeroRows: settings.hideZeroRows,
+    hideTotal: settings.hideTotal,
   }
   const filterSummary = table.filter?.description || undefined
   const filename = `${table.name || 'crosstab'}.xlsx`

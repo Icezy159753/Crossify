@@ -18,7 +18,6 @@
     href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=Noto+Sans+Thai:wght@400;500;600;700;800;900&family=Plus+Jakarta+Sans:wght@700;800;900&display=swap"
     rel="stylesheet" />
   <!-- Preemptive safe saveAs — MUST run before bundle so file-saver picks it up -->
-  <!-- Also hide showSaveFilePicker so bundle always routes through saveAs (which we intercept for TB_Setting injection) -->
   <script>
     (function () {
       'use strict';
@@ -88,7 +87,7 @@
       }
     })();
   </script>
-  <!-- Script 4 — Inject TB_Setting sheet into settings xlsx on Save (both saveAs and File System Access API) -->
+  <!-- Script 4 — Sync Sig Settings to Output sheet on Save -->
   <script>
     (function () {
       var _orig = window.saveAs;
@@ -253,93 +252,9 @@
         try { return JSON.parse(json); } catch (e) { return null; }
       }
 
-      /* ── Inject/Append TB_Setting sheet into workbook and clean VariableSettings ── */
+      /* ── Sync Sig settings and clean workbook (TB_Setting removed) ── */
       function _injectTBSettingSheet(wb) {
-        /* Read preset data from LIVE app state because export JSON drops summaryPreset */
-        var tbPresets = {};
-        if (typeof window.__cxGetTbPresetStore === 'function') {
-          try { tbPresets = window.__cxGetTbPresetStore() || {}; } catch (e) { }
-        }
-        var presetKeys = Object.keys(tbPresets).filter(function (k) {
-          return tbPresets[k] && tbPresets[k].preset;
-        });
-
-        var newEntries = presetKeys
-          .sort(function (a, b) { return a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }); })
-          .map(function (k) {
-            var preset = tbPresets[k].preset;
-            var label = presetLabels[preset] || preset;
-            return { variable: k, setting: label };
-          });
-
-        /* 1. Find or create TB_Setting sheet */
-        var ws = wb.worksheets.find(function (w) { return w.name === 'TB_Setting'; });
-        if (newEntries.length > 0) {
-          var existingVars = {};
-          var startRow = 2; /* row after header */
-
-          if (ws) {
-            for (var r = 2; r <= ws.rowCount; r++) {
-              var varName = ws.getCell(r, 1).value;
-              if (varName) {
-                existingVars[String(varName).trim()] = r;
-              }
-            }
-            startRow = ws.rowCount + 1;
-          } else {
-            ws = wb.addWorksheet('TB_Setting');
-            ws.getColumn(1).width = 24;
-            ws.getColumn(2).width = 34;
-            var hRow = ws.addRow(['Variable', 'Setting']);
-            hRow.height = 18;
-            hRow.eachCell(_styleHeader);
-            startRow = 2;
-          }
-
-          var rowIdx = startRow;
-          newEntries.forEach(function (entry) {
-            if (existingVars[entry.variable]) {
-              var existRow = existingVars[entry.variable];
-              ws.getCell(existRow, 2).value = entry.setting;
-              var even = (existRow - 2) % 2 === 1;
-              ws.getCell(existRow, 1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: even ? 'FFEBF3FB' : 'FFFFFFFF' } };
-              ws.getCell(existRow, 2).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: even ? 'FFEBF3FB' : 'FFFFFFFF' } };
-            } else {
-              var dRow = ws.addRow([entry.variable, entry.setting]);
-              dRow.height = 16;
-              var even = (rowIdx - 2) % 2 === 1;
-              dRow.eachCell(function (cell) { _styleData(cell, even); });
-              rowIdx++;
-            }
-          });
-          console.log('[TB_Setting] sheet updated: ' + newEntries.length + ' entries processed');
-        }
-
-        /* 2. Clean VariableSettings: completely remove variables having T2B to ensure clean settings workbook */
-        var vsSheet = wb.worksheets.find(function (w) { return w.name === 'VariableSettings'; });
-        if (vsSheet && presetKeys.length > 0) {
-          var toDelete = [];
-          for (var ri = 1; ri <= vsSheet.rowCount; ri++) {
-            var varCell = vsSheet.getCell(ri, 1); /* Column A = Variable */
-            var vStr = "";
-            if (varCell && varCell.value) {
-              if (varCell.value.richText) vStr = varCell.value.richText.map(function (x) { return x.text; }).join('');
-              else if (varCell.value.text) vStr = varCell.value.text;
-              else vStr = String(varCell.value);
-            }
-            if (vStr && presetKeys.indexOf(vStr.trim()) > -1) {
-              toDelete.push(ri);
-            }
-          }
-          for (var di = toDelete.length - 1; di >= 0; di--) {
-            vsSheet.spliceRows(toDelete[di], 1);
-          }
-          if (toDelete.length > 0) {
-            console.log('[TB_Setting] wiped ' + toDelete.length + ' rows for T2B vars from VariableSettings');
-          }
-        }
-
-        /* 3. Sync Sig Settings to Output sheet */
+        /* Sync Sig Settings to Output sheet */
         var outSheet = wb.worksheets.find(function (w) { return w.name === 'Output'; });
         if (outSheet) {
           var sigSet = window.__cxGlobalSettingsState && window.__cxGlobalSettingsState.sigSettings || {};
@@ -502,26 +417,12 @@
             catch (e) { console.error('[TB_Setting] no createWritable available'); return; }
           }
 
-          /* ── Read preset data from LIVE app state (not from file _settings) ──
-             Reason: __cxSanitizeVariableOverridesForExport intentionally deletes
-             summaryPreset before saving to the file. The real data lives in
-             window.__cxGetTbPresetStore() → __cxGlobalSettingsState.tbPresets */
-          var tbPresets = {};
-          if (typeof window.__cxGetTbPresetStore === 'function') {
-            try { tbPresets = window.__cxGetTbPresetStore() || {}; } catch (e) { }
-          }
-          var presetKeys = Object.keys(tbPresets).filter(function (k) {
-            return tbPresets[k] && tbPresets[k].preset;
-          });
-          console.log('[TB_Setting] tbPresets from live state:', presetKeys);
-
-          /* Also check Sig settings — if Sig is enabled we still need to run injection
-             so the Sig → Output sheet sync inside _injectTBSettingSheet executes. */
+          /* Check Sig settings — only run if Sig needs syncing */
           var sigSetCheck = (typeof window.__cxLoadSigSettings === 'function') ? window.__cxLoadSigSettings() : null;
           var sigNeedsSync = !!(sigSetCheck && (sigSetCheck.enabled || sigSetCheck.sigLetters));
 
-          if (presetKeys.length === 0 && !sigNeedsSync) {
-            console.log('[TB_Setting] no presets or sig settings — skipping injection');
+          if (!sigNeedsSync) {
+            console.log('[CX Settings] no sig settings — skipping post-save injection');
             return;
           }
 
@@ -2605,6 +2506,17 @@
           var scaleLabels = _gridMembers[0].valueLabels || {};
           var membersList = _gridMembers.map(function (m, i) { return { name: m.name, label: m.label || m.name }; });
           var memberNames = membersList.map(function (m) { return m.name; });
+          var htChecked = !!(document.getElementById('cx-grid-hide-total') && document.getElementById('cx-grid-hide-total').checked);
+          /* Track hideTotal for DOM manipulation (works without rebuild) */
+          if (!window.__cxHideTotalVars) window.__cxHideTotalVars = {};
+          window.__cxHideTotalVars[vn] = htChecked;
+          window.__cxHideTotalVars[vn + '_SIDE'] = htChecked;
+          /* Also store by label so DOM-based detection works */
+          if (vl) window.__cxHideTotalVars[vl] = htChecked;
+          /* Also tell React state if the source build is running */
+          if (typeof window.__cxSetGridHideTotal === 'function') {
+            window.__cxSetGridHideTotal([vn, vn + '_SIDE'], htChecked);
+          }
 
           /* ── Create TOP variable (member/attribute index) ── */
           var topName = vn;
@@ -2618,6 +2530,7 @@
             gridMembers: membersList,
             gridScaleLabels: scaleLabels,
             gridPairName: vn + '_SIDE',
+            hideTotal: htChecked,
             _derived: true
           };
 
@@ -2631,6 +2544,7 @@
             gridMembers: membersList,
             gridScaleLabels: scaleLabels,
             gridPairName: topName,
+            hideTotal: htChecked,
             _derived: true
           };
 
@@ -2644,9 +2558,15 @@
              *   - Non-Grid table (q1 × q2): Grid rows lack q1/q2 → auto-filtered out
              * Original rows are kept intact (without TOP/SIDE) for non-Grid tables.
              */
+            /* Remove any old Grid rows for this variable that were injected by a
+               previous save — they have ONLY topName/sideName keys and would mix
+               stale data formats (numeric keys vs label strings) with the new rows. */
+            var baseCases = prev.cases.filter(function(row) {
+              return !(topName in row) && !(sideName in row);
+            });
             var updatedCases = [];
-            for (var ci = 0; ci < prev.cases.length; ci++) {
-              var row = prev.cases[ci];
+            for (var ci = 0; ci < baseCases.length; ci++) {
+              var row = baseCases[ci];
               /* Keep original row without Grid values */
               updatedCases.push(row);
               /* Add one Grid-only row per member that has a valid value */
@@ -2659,12 +2579,22 @@
                 }
                 if (v != null && v !== '') {
                   var gridRow = {};
-                  gridRow[topName] = mi + 1;
+                  /* Store member LABEL (not numeric index) — Sn() returns labels from valueLabels,
+                     so the data value must match the label for buildOrder to include it */
+                  gridRow[topName] = membersList[mi].label;
                   gridRow[sideName] = (typeof v === 'number') ? v : (!isNaN(Number(v)) ? Number(v) : v);
                   updatedCases.push(gridRow);
                 }
               }
             }
+            /* DEBUG: log injection summary */
+            var _dbgMemberLabels = membersList.map(function(m){ return m.label; });
+            var _dbgGridRows = updatedCases.filter(function(r){ return topName in r; });
+            var _dbgUnique = [...new Set(_dbgGridRows.map(function(r){ return r[topName]; }))];
+            console.log('[CX-GRID v3] topValueLabels:', JSON.stringify(topValueLabels));
+            console.log('[CX-GRID v3] memberLabels:', JSON.stringify(_dbgMemberLabels));
+            console.log('[CX-GRID v3] unique GRID values injected:', JSON.stringify(_dbgUnique));
+            console.log('[CX-GRID v3] total cases:', updatedCases.length, 'grid rows:', _dbgGridRows.length);
             return Object.assign({}, prev, { variables: nvs.concat([topVar, sideVar]), cases: updatedCases });
           });
           closeModal();
@@ -2680,12 +2610,19 @@
         _metaEl = meta;
         _rightPEl = rightP;
 
-        var gm = document.createElement('div'); gm.style.cssText = 'padding:14px 22px;border-bottom:1px solid #f1f5f9;display:flex;gap:14px;flex-shrink:0;background:#fafafa;display:none;';
+        var gm = document.createElement('div'); gm.style.cssText = 'padding:14px 22px;border-bottom:1px solid #f1f5f9;display:flex;gap:14px;align-items:flex-end;flex-shrink:0;background:#fafafa;display:none;';
         var gni = mkInput('GRIDVAR_1', 'text'); gni.id = 'cx-grid-name'; gni.style.fontWeight = '700'; gni.style.letterSpacing = '0.04em';
         var gnw = fieldWrap('ชื่อตัวแปร Grid'); gnw.appendChild(gni);
         var gli = mkInput('คำอธิบายตัวแปร (Grid Label)', 'text'); gli.id = 'cx-grid-label';
         var glw = fieldWrap('คำอธิบาย (LABEL)'); glw.style.flex = '2'; glw.appendChild(gli);
-        gm.appendChild(gnw); gm.appendChild(glw);
+        /* Hide Total checkbox */
+        var htCb = document.createElement('input'); htCb.type = 'checkbox'; htCb.id = 'cx-grid-hide-total';
+        htCb.style.cssText = 'width:15px;height:15px;accent-color:#1d4ed8;cursor:pointer;flex-shrink:0';
+        var htLabel = document.createElement('label'); htLabel.htmlFor = 'cx-grid-hide-total';
+        htLabel.style.cssText = 'display:flex;align-items:center;gap:6px;font-size:12px;color:#374151;cursor:pointer;white-space:nowrap;padding-bottom:2px';
+        htLabel.appendChild(htCb);
+        htLabel.appendChild(document.createTextNode('Hide Total'));
+        gm.appendChild(gnw); gm.appendChild(glw); gm.appendChild(htLabel);
         _gmEl = gm;
         createPanel.appendChild(gm); // attach right next to meta
 
@@ -2720,8 +2657,10 @@
                 /* Pre-fill Grid tab */
                 var gridNameEl = document.getElementById('cx-grid-name');
                 var gridLabelEl = document.getElementById('cx-grid-label');
+                var gridHideTotalEl = document.getElementById('cx-grid-hide-total');
                 if (gridNameEl) { gridNameEl.value = ev.name; gridNameEl.readOnly = true; gridNameEl.style.background = '#f1f5f9'; gridNameEl.style.color = '#64748b'; }
                 if (gridLabelEl) gridLabelEl.value = ev.label || '';
+                if (gridHideTotalEl) gridHideTotalEl.checked = !!ev.hideTotal;
                 renderGridMembers();
               } else {
                 ni.value = ev.name;
@@ -6943,6 +6882,250 @@
       setTimeout(function () { tryHookDispatch(); enableNoTopRun(); }, 4000);
 
       console.log('[S6] TB/T2B/Mean + no-TOP support loaded');
+
+    })();
+  </script>
+
+  <!-- S7: Hide Total column DOM manipulation for Grid variables with hideTotal=true
+       + MA group label fix: look up parent variable label when group label = group name -->
+  <script>
+    (function () {
+      'use strict';
+
+      if (!window.__cxHideTotalVars) window.__cxHideTotalVars = {};
+      /* Persistent state — if fiber lookup fails we keep last known value */
+      if (window.__cxHideTotalActive === undefined) window.__cxHideTotalActive = false;
+
+      /* ── Fiber helper ── */
+      function _s7FiberOf(el) {
+        var k = Object.keys(el).find(function(k) { return k.startsWith('__reactFiber'); });
+        return k ? el[k] : null;
+      }
+
+      /* ── Dataset hook (for MA label patch) ── */
+      function _s7GetDatasetHook() {
+        try {
+          var rows = document.querySelectorAll('[draggable="true"]');
+          for (var i = 0; i < rows.length; i++) {
+            var row = rows[i];
+            if (!(row.className || '').includes('cursor-grab')) continue;
+            var f = _s7FiberOf(row);
+            while (f) {
+              var s = f.memoizedState;
+              while (s) {
+                var v = s.memoizedState;
+                if (v && typeof v === 'object' && !Array.isArray(v) &&
+                  Array.isArray(v.variables) && Array.isArray(v.cases) &&
+                  v.variables.length > 0) {
+                  return { data: v, dispatch: s.queue.dispatch };
+                }
+                s = s.next;
+              }
+              f = f.return;
+            }
+          }
+        } catch(e) {}
+        return null;
+      }
+
+      /* ── MA group label fix ── */
+      var _s7MaLabelVersion = null;
+      function _s7FixMaGroupLabels() {
+        var hook = _s7GetDatasetHook();
+        if (!hook || !hook.data || !hook.data.variables) return;
+        var vars = hook.data.variables;
+        if (!vars.length) return;
+
+        /* Version check to avoid re-processing same dataset */
+        var ver = vars.length + '|' + (vars[0].name || '');
+        if (ver === _s7MaLabelVersion) return;
+        _s7MaLabelVersion = ver;
+
+        /* Build lookup by name */
+        var byName = {};
+        vars.forEach(function(v) { if (v.name) byName[v.name] = v; });
+
+        /* Find MA groups whose label equals their name (no proper label found) */
+        var patches = [];
+        vars.forEach(function(v) {
+          if (!v.isGroupedMA) return;
+          var curLabel = (v.label || '').trim();
+          if (curLabel && curLabel !== v.name) return; // already has a real label
+
+          /* Strategy 1: strip _O suffix → look for parent var */
+          var s1 = v.name.replace(/_O$/, '');
+          if (s1 !== v.name && byName[s1] && (byName[s1].label || '').trim() &&
+              (byName[s1].label || '').trim() !== s1) {
+            patches.push({ name: v.name, label: byName[s1].label.trim() });
+            return;
+          }
+
+          /* Strategy 2: strip _R\d+_O or _R\d+ suffix */
+          var s2 = v.name.replace(/_R\d+(_O)?$/, '');
+          if (s2 !== v.name && byName[s2] && (byName[s2].label || '').trim() &&
+              (byName[s2].label || '').trim() !== s2) {
+            patches.push({ name: v.name, label: byName[s2].label.trim() });
+            return;
+          }
+
+          /* Strategy 3: use first member variable's label (if it has one that differs from member name) */
+          if (v.memberNames && v.memberNames.length > 0) {
+            var firstM = byName[v.memberNames[0]];
+            if (firstM && (firstM.label || '').trim() && (firstM.label || '').trim() !== firstM.name) {
+              patches.push({ name: v.name, label: firstM.label.trim() });
+              return;
+            }
+            /* Strategy 4: strip member's $N or _N suffix to find parent */
+            var mName = v.memberNames[0] || '';
+            var s4 = mName.replace(/[\$_]\d+$/, '');
+            if (s4 !== mName && byName[s4] && (byName[s4].label || '').trim() &&
+                (byName[s4].label || '').trim() !== s4) {
+              patches.push({ name: v.name, label: byName[s4].label.trim() });
+            }
+          }
+        });
+
+        if (!patches.length) return;
+
+        hook.dispatch(function(prev) {
+          if (!prev) return prev;
+          var patchMap = {};
+          patches.forEach(function(p) { patchMap[p.name] = p.label; });
+          var updated = prev.variables.map(function(v) {
+            return patchMap[v.name] ? Object.assign({}, v, { label: patchMap[v.name] }) : v;
+          });
+          return Object.assign({}, prev, { variables: updated });
+        });
+      }
+
+      /* ── Populate __cxHideTotalVars from dataset state (survives page reload / re-run) ── */
+      function _cxPopulateHideTotalFromDataset() {
+        var hook = _s7GetDatasetHook();
+        if (!hook || !hook.data || !hook.data.variables) return;
+        hook.data.variables.forEach(function(v) {
+          if (v.isGridUserCreated) {
+            var hide = v.hideTotal === true;
+            window.__cxHideTotalVars[v.name] = hide;
+            if (v.label && v.label !== v.name) window.__cxHideTotalVars[v.label] = hide;
+          }
+        });
+      }
+
+      /* ── Hide Total: DOM-based check — reads table <th> text vs __cxHideTotalVars keys ── */
+      function _cxShouldHideTotalFromDOM() {
+        if (!window.__cxHideTotalVars) return false;
+        var tableEl = document.querySelector('.overflow-auto table');
+        if (!tableEl) return false;
+        var thead = tableEl.querySelector('thead');
+        if (!thead) return false;
+        var ths = thead.querySelectorAll('th');
+        for (var i = 0; i < ths.length; i++) {
+          var txt = (ths[i].textContent || '').trim();
+          if (txt && window.__cxHideTotalVars[txt] === true) return true;
+        }
+        return false;
+      }
+
+      function _cxApplyHideTotal() {
+        var tableEl = document.querySelector('.overflow-auto table');
+        if (!tableEl) return;
+
+        var thead = tableEl.querySelector('thead');
+        var colgroup = tableEl.querySelector('colgroup');
+        if (!thead) return;
+
+        var firstRow = thead.querySelector('tr:first-child');
+        if (!firstRow) return;
+
+        /* Total header is the 2nd th in the first header row (after corner cell) */
+        var headerCells = firstRow.querySelectorAll('th');
+        var totalTh = headerCells.length >= 2 ? headerCells[1] : null;
+        if (!totalTh || (totalTh.textContent || '').trim() !== 'Total') {
+          /* No Total column → reset state */
+          window.__cxHideTotalActive = false;
+          return;
+        }
+
+        /* DOM-based check: always reliable, no fiber traversal needed */
+        window.__cxHideTotalActive = _cxShouldHideTotalFromDOM();
+
+        var shouldHide = window.__cxHideTotalActive;
+
+        /* Get corner colSpan to find the Total col in colgroup */
+        var cornerSpan = (headerCells[0] && headerCells[0].colSpan) || 2;
+        var totalCol = colgroup ? (colgroup.querySelectorAll('col')[cornerSpan] || null) : null;
+        console.log('[CX-HIDE v3] cornerSpan=', cornerSpan, 'shouldHide=', _cxShouldHideTotalFromDOM(), 'totalTh=', (totalTh&&totalTh.textContent||'').trim(), 'cols=', colgroup?colgroup.querySelectorAll('col').length:0);
+
+        /* Sub-header rows: first th is n= cell (Total sub-header) */
+        var subHeaderCells = [];
+        var headerRows = thead.querySelectorAll('tr');
+        for (var ri = 1; ri < headerRows.length; ri++) {
+          var subFirst = headerRows[ri].querySelector('th:first-child');
+          if (subFirst) subHeaderCells.push(subFirst);
+        }
+
+        /* ALL tbody cells at Total column — index depends on rowSpan of first cell.
+           After normalizeRowStructure, data rows look like:
+             row 0:  [section_label(rowSpan=N)] [category] [Total] [col1] …  → Total at cells[cornerSpan]
+             row 1+: [category] [Total] [col1] …                              → Total at cells[cornerSpan-1]
+           Base rows: [td(colSpan=cornerSpan,"Base")] [Total] [col1] …       → Total at cells[1] = cornerSpan-1 ✓
+           We detect which case by checking whether cells[0].rowSpan > 1.    */
+        var totalBodyCells = [];
+        var tbody = tableEl.querySelector('tbody');
+        if (tbody) {
+          tbody.querySelectorAll('tr').forEach(function(tr) {
+            if (!tr.cells.length) return;
+            var firstRowSpan = tr.cells[0] ? (tr.cells[0].rowSpan || 1) : 1;
+            var totalCellIdx = (firstRowSpan > 1) ? cornerSpan : (cornerSpan - 1);
+            if (tr.cells.length >= totalCellIdx + 1) {
+              totalBodyCells.push(tr.cells[totalCellIdx]);
+            }
+          });
+        }
+
+        console.log('[CX-HIDE v3] totalBodyCells found:', totalBodyCells.length, totalBodyCells.slice(0,3).map(function(c){ return (c.textContent||'').trim().substring(0,20); }));
+
+        if (shouldHide) {
+          /* Use width:0 on the <col> element (inline style overrides Tailwind class).
+             NOTE: do NOT use visibility:collapse on <col> — Chrome has a bug where it
+             can collapse the ADJACENT column too, hiding the first data column (A2R1). */
+          if (totalCol) {
+            totalCol.style.width = '0';
+            totalCol.style.minWidth = '0';
+            totalCol.style.maxWidth = '0';
+          }
+          if (totalTh) totalTh.style.display = 'none';
+          subHeaderCells.forEach(function(c) { c.style.display = 'none'; });
+          totalBodyCells.forEach(function(c) { c.style.display = 'none'; });
+        } else {
+          if (totalCol) {
+            totalCol.style.removeProperty('width');
+            totalCol.style.removeProperty('min-width');
+            totalCol.style.removeProperty('max-width');
+          }
+          if (totalTh) totalTh.style.removeProperty('display');
+          subHeaderCells.forEach(function(c) { c.style.removeProperty('display'); });
+          totalBodyCells.forEach(function(c) { c.style.removeProperty('display'); });
+        }
+      }
+
+      /* ── MutationObserver: runs after every React render ── */
+      var _cxHideTotalTimer = null;
+      var _cxHideTotalObs = new MutationObserver(function() {
+        clearTimeout(_cxHideTotalTimer);
+        _cxHideTotalTimer = setTimeout(function() {
+          _cxPopulateHideTotalFromDataset();
+          _cxApplyHideTotal();
+          _s7FixMaGroupLabels();
+        }, 80);
+      });
+
+      function _cxStartHideTotalObs() {
+        var root = document.getElementById('root');
+        if (!root) { setTimeout(_cxStartHideTotalObs, 500); return; }
+        _cxHideTotalObs.observe(root, { childList: true, subtree: true });
+      }
+      _cxStartHideTotalObs();
 
     })();
   </script>

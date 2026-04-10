@@ -462,6 +462,7 @@ export default function App() {
   const [settingsReadonlyLock, setSettingsReadonlyLock] = useState<SettingsLockInfo | null>(null)
   const [loadedSettingsName, setLoadedSettingsName] = useState<string | null>(null)
   const [settingsLockReleased, setSettingsLockReleased] = useState(false)
+  const [gridHideTotalVars, setGridHideTotalVars] = useState<Set<string>>(new Set())
 
   // Folders
   const [folders, setFolders] = useState<FolderDef[]>([])
@@ -645,6 +646,20 @@ export default function App() {
       setActiveTableId(tables[0].id)
     }
   }, [tables, activeTableId])
+
+  // Expose setter so inline scripts can trigger React state update for hideTotal
+  useEffect(() => {
+    ;(window as Record<string, unknown>)['__cxSetGridHideTotal'] = (names: string[], hide: boolean) => {
+      setGridHideTotalVars(prev => {
+        const next = new Set(prev)
+        names.forEach(n => hide ? next.add(n) : next.delete(n))
+        return next
+      })
+    }
+    return () => {
+      delete (window as Record<string, unknown>)['__cxSetGridHideTotal']
+    }
+  }, [])
 
   useEffect(() => {
     if (!toast) return
@@ -1281,13 +1296,13 @@ export default function App() {
     setExporting(true)
     try {
       const { exportTableToExcel } = await loadExcelExportModule()
-      await exportTableToExcel(activeTable, dataset, variableOverrides, settings)
+      await exportTableToExcel(activeTable, dataset, variableOverrides, activeConfig)
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     } finally {
       setExporting(false)
     }
-  }, [activeTable, dataset, variableOverrides, settings])
+  }, [activeTable, dataset, variableOverrides, activeConfig])
 
   // โ”€โ”€ Settings โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€
 
@@ -1685,6 +1700,27 @@ export default function App() {
   // โ”€โ”€ Return JSX โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€
 
   const activeResult = activeTable?.result ?? null
+
+  // Derive hideTotal: true if any variable in the active result has hideTotal set
+  const activeHideTotal = useMemo(() => {
+    const checkName = (name: string | null | undefined) => {
+      if (!name) return false
+      if (gridHideTotalVars.has(name)) return true
+      if (!dataset) return false
+      const v = dataset.variables.find(vv => vv.name === name || (vv as Record<string, unknown>)['longName'] === name) as Record<string, unknown> | undefined
+      return !!(v && v['isGridUserCreated'] && v['hideTotal'])
+    }
+    // Check from result (most reliable — actual variable names used in computation)
+    if (activeResult) {
+      return checkName(activeResult.rowVar) || checkName(activeResult.colVar)
+    }
+    // Fallback: check from table axis spec before result is available
+    if (!activeTable) return false
+    return flattenAxisSpec(parseAxisSpec(activeTable.rowVar)).some(checkName) ||
+           flattenAxisSpec(parseAxisSpec(activeTable.colVar)).some(checkName)
+  }, [dataset, activeTable, activeResult, gridHideTotalVars])
+
+  const activeConfig = useMemo(() => ({ ...settings, hideTotal: activeHideTotal }), [settings, activeHideTotal])
 
   const getFilterSummary = (table: TableDef): string | null => {
     if (!hasActiveFilter(table.filter)) return null
@@ -2322,7 +2358,7 @@ export default function App() {
                 </div>
               )}
               {activeTab === 'results' && activeResult && (
-                <PreviewTable result={activeResult} config={settings} />
+                <PreviewTable result={activeResult} config={activeConfig} />
               )}
               {activeTab === 'results' && !activeResult && (
                 <div className="flex h-full items-center justify-center text-sm text-gray-400">

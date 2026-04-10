@@ -95,48 +95,6 @@ interface VariableNetSheetRow {
   depth?: number
 }
 
-interface TbSettingSheetRow {
-  variable: string
-  setting: string
-}
-
-function getScalePresetLabel(preset: string) {
-  switch (preset) {
-    case 'tb_low_good':
-      return '1.สร้างTB(Scale น้อยดี)'
-    case 'tb_high_good':
-      return '2.สร้างTB(Scale มากดี)'
-    case 't2b_low_good':
-      return '3.สร้างT2B(Scale น้อยดี)'
-    case 't2b_high_good':
-      return '4.สร้างT2B(Scale มากดี)'
-    default:
-      return preset
-  }
-}
-
-function getScalePresetDisplayLabel(preset: string) {
-  switch (preset) {
-    case 'tb_low_good':
-      return '1.Create TB (Low scale = good)'
-    case 'tb_high_good':
-      return '2.Create TB (High scale = good)'
-    case 't2b_low_good':
-      return '3.Create T2B (Low scale = good)'
-    case 't2b_high_good':
-      return '4.Create T2B (High scale = good)'
-    case 't3b_low_good':
-      return '5.Create T3B (Low scale = good)'
-    case 't3b_high_good':
-      return '6.Create T3B (High scale = good)'
-    case 'justright_code':
-      return '7.Justright (By code)'
-    case 'justright_centered':
-      return '8.Justright (-2 -1 0 1 2)'
-    default:
-      return getScalePresetLabel(preset)
-  }
-}
 
 function parseScalePresetLabel(value: string) {
   const normalized = value.trim()
@@ -610,24 +568,6 @@ export async function buildSettingsWorkbookBuffer({
   styleHeaderRow(wsNet.addRow(['Variable', 'Setting', 'Value', 'Code', 'Parent']))
   netRows.forEach((item, idx) => {
     styleDataRow(wsNet.addRow([item.variable, item.setting, item.value, item.code, item.parent ?? '']), idx % 2 === 1)
-  })
-
-  const wsTb = wb.addWorksheet('TB_Setting')
-  wsTb.getColumn(1).width = 24
-  wsTb.getColumn(2).width = 34
-  styleHeaderRow(wsTb.addRow(['Variable', 'Setting']))
-  const tbRows: TbSettingSheetRow[] = Object.entries(variableOverrides)
-    .map(([variable, overrideUnknown]) => {
-      const override = (overrideUnknown ?? {}) as { summaryPreset?: string }
-      if (!override.summaryPreset?.trim()) return null
-      return {
-        variable,
-        setting: getScalePresetDisplayLabel(override.summaryPreset),
-      }
-    })
-    .filter((item): item is TbSettingSheetRow => item !== null)
-  tbRows.forEach((item, idx) => {
-    styleDataRow(wsTb.addRow([item.variable, item.setting]), idx % 2 === 1)
   })
 
   // ── MRSET sheet ────────────────────────────────────────────────────────────
