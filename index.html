@@ -6172,6 +6172,9 @@
 
               var specs = [];
               var summaries = Array.isArray(ov.summaries) ? ov.summaries : [];
+              /* Net groups (ov.groups) — inject as column summary specs so Net
+                 appears as a column regardless of how many TOP variables exist. */
+              var netGroups = Array.isArray(ov.groups) ? ov.groups : [];
               function pushSummarySpecsFromMeta(metaList, groupPath) {
                 var groupIndexByCode = {};
                 var groupMin = metaList.length ? metaList[0].index : 0;
@@ -6195,6 +6198,35 @@
                     groupPath: (groupPath || []).slice(),
                     insertBoundary: placement.side === 'before' ? groupMin : (groupMax + 1),
                     insertOrder: placement.order
+                  });
+                });
+                /* Net groups: insert before first member column, order=0 (before all summaries) */
+                netGroups.forEach(function (g) {
+                  var netLabel = g.name || 'Net';
+                  /* Skip if this Net column already exists in result (e.g. injected by Qn for single-TOP) */
+                  if (result.colValues.some(function (cv) { return String(cv).trim() === netLabel; })) return;
+                  var memberIndexes = (g.members || []).map(function (member) {
+                    var idx = groupIndexByCode[String(member)];
+                    return typeof idx === 'number' ? idx : null;
+                  }).filter(function (idx) { return idx != null; });
+                  if (!memberIndexes.length) return;
+                  memberIndexes.sort(function (a, b) { return a - b; });
+                  var firstMember = memberIndexes[0];
+                  var base = memberIndexes.reduce(function (sum, idx) {
+                    return sum + (result.colTotalsN[idx] || 0);
+                  }, 0);
+                  /* Deduplicate within current specs */
+                  if (specs.some(function (s) {
+                    return s.kind === 'summary' && s.label === netLabel && s.insertBoundary === firstMember;
+                  })) return;
+                  specs.push({
+                    kind: 'summary',
+                    label: netLabel,
+                    memberIndexes: memberIndexes,
+                    base: base,
+                    groupPath: (groupPath || []).slice(),
+                    insertBoundary: firstMember,
+                    insertOrder: 0
                   });
                 });
               }
