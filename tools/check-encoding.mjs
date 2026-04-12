@@ -35,6 +35,7 @@ const excludedFiles = new Set([
   'vercel_bundle.js',
   'vercel_live_index.css',
   'vercel_live_index.js',
+  '__live_index_snapshot.html',  // dev snapshot — generated file, not source
 ])
 
 const excludedDirs = new Set([
@@ -43,6 +44,7 @@ const excludedDirs = new Set([
   '.npm-cache',
   '.vercel',
   '.vscode',
+  'assets',      // root-level compiled bundle directory
   'dist',
   'node_modules',
   'public',

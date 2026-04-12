@@ -18,7 +18,6 @@ function parseFolderVarListJson(raw: string): string[] | null {
 export function parseFolderVarListDrag(event: { dataTransfer: DataTransfer }): string[] | null {
   const mime = event.dataTransfer.getData(FOLDER_VAR_LIST_MIME)
   const plain = event.dataTransfer.getData('text/plain')
-  console.log('[parseFolderVarListDrag] mime=', JSON.stringify(mime), 'plain=', JSON.stringify(plain))
   if (mime) {
     const fromMime = parseFolderVarListJson(mime)
     if (fromMime) return fromMime

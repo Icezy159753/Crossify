@@ -534,6 +534,7 @@ export const DesignCanvas = memo(function DesignCanvas({
         <button
           onClick={onGenerate}
           disabled={!canRun}
+          title={!canRun ? 'Add at least one variable to Top or Side to run' : undefined}
           className="w-full py-2.5 bg-[#1F4E78] hover:bg-[#16375a] disabled:bg-gray-200 disabled:cursor-not-allowed text-white font-bold rounded-xl transition-colors text-sm shadow"
         >
           Run Table

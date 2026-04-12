@@ -143,7 +143,7 @@ function safeMergeCells(ws: ExcelJS.Worksheet, startRow: number, startCol: numbe
   ws.mergeCells(startRow, startCol, endRow, endCol)
 }
 
-function excelColName(col: number): string {
+export function excelColName(col: number): string {
   let n = col
   let name = ''
   while (n > 0) {
@@ -154,11 +154,11 @@ function excelColName(col: number): string {
   return name
 }
 
-function sanitizeSheetName(raw: string): string {
+export function sanitizeSheetName(raw: string): string {
   return raw.replace(/[\\/*?[\]:]/g, '').substring(0, 31).trim() || 'Sheet'
 }
 
-function computeSheetNames(varNames: string[]): string[] {
+export function computeSheetNames(varNames: string[]): string[] {
   const used = new Set<string>()
   return varNames.map(name => {
     const base = sanitizeSheetName(name)
@@ -181,7 +181,7 @@ function computeSheetNames(varNames: string[]): string[] {
   })
 }
 
-function buildHeaderGroups(paths: string[][], levels: number) {
+export function buildHeaderGroups(paths: string[][], levels: number) {
   return Array.from({ length: levels }, (_, level) => {
     const groups: Array<{ label: string; span: number }> = []
     let currentKey = ''
@@ -201,7 +201,7 @@ function buildHeaderGroups(paths: string[][], levels: number) {
   })
 }
 
-function buildRowDisplayPaths(paths: string[][]) {
+export function buildRowDisplayPaths(paths: string[][]) {
   return paths.map((path, rowIndex) =>
     path.map((segment, level) => {
       if (rowIndex === 0) return segment
@@ -212,7 +212,7 @@ function buildRowDisplayPaths(paths: string[][]) {
   )
 }
 
-function buildRowSectionMeta(sectionBases: Array<{ startIndex: number; label: string }>, totalRows: number) {
+export function buildRowSectionMeta(sectionBases: Array<{ startIndex: number; label: string }>, totalRows: number) {
   const byStart = new Map<number, { label: string; span: number }>()
   const covered = new Set<number>()
 
@@ -225,7 +225,7 @@ function buildRowSectionMeta(sectionBases: Array<{ startIndex: number; label: st
   return { byStart, covered }
 }
 
-function normalizeRowStructure(
+export function normalizeRowStructure(
   result: CrosstabResult,
   rowPaths: string[][],
   rowLevelLabels: string[],

@@ -82,10 +82,10 @@ export function evaluateFilterCondition(
   const secondary = Number(condition.secondaryValue)
 
   if ((condition.operator === 'gt' || condition.operator === 'gte' || condition.operator === 'lt' || condition.operator === 'lte') && !Number.isFinite(primary)) {
-    return true
+    return false
   }
   if (condition.operator === 'between' && (!Number.isFinite(primary) || !Number.isFinite(secondary))) {
-    return true
+    return false
   }
 
   if (condition.operator === 'gt') return numericValue > primary

@@ -71,7 +71,6 @@
             var isSettings = fname.toLowerCase().indexOf('setting') > -1;
 
             if (!window.__cxTBInjecting && isSettings) {
-              console.log('[TB_Setting] file write closed (' + fname + ') — scheduling TB_Setting injection');
               setTimeout(function () {
                 if (typeof window.__cxInjectTBAfterWrite === 'function') {
                   window.__cxInjectTBAfterWrite();
@@ -83,7 +82,6 @@
 
           return writable;
         };
-        console.log('[TB_Setting] global createWritable hook installed');
       }
     })();
   </script>
@@ -105,7 +103,6 @@
 
       window.__cxMarkSettingsWorkbookLinked = function (source) {
         if (!window.__cxSettingsWorkbookLinked) {
-          console.log('[CX Settings] settings workbook linked via', source || 'unknown');
         }
         window.__cxSettingsWorkbookLinked = true;
         /* After save completes via File System API, inject TB_Setting into the saved file */
@@ -162,9 +159,7 @@
                 newStore[vName] = { preset: presetId };
               }
             }
-            console.log('[TB_Setting] Loaded from', filename, '-> mapped presets:', newStore);
           } else {
-            console.log('[TB_Setting] File read from', filename, '— no TB_Setting sheet (checking Output for Sig).');
           }
 
           /* Extract Sig Settings from Output sheet */
@@ -188,14 +183,12 @@
               var currSig = window.__cxLoadSigSettings ? window.__cxLoadSigSettings() : {};
               var nextSig = Object.assign({}, currSig, sigSettings);
               window.__cxSaveSigSettings(nextSig);
-              console.log('[TB_Setting] ✅ Restored Sig Settings from Output sheet!', nextSig);
             }
 
             var currentStore = (typeof window.__cxGetTbPresetStore === 'function') ? window.__cxGetTbPresetStore() : {};
             var merged = Object.assign({}, currentStore, newStore);
             if (typeof window.__cxSetTbPresetStore === 'function') {
               window.__cxSetTbPresetStore(merged);
-              console.log('[TB_Setting] ✅ Restored T2B presets back to app state!');
             }
           }, 800);
         } catch (e) { console.error('[TB_Setting] restore error:', e); }
@@ -315,7 +308,6 @@
 
       /* ═══ Path 1: Intercept saveAs (fallback browsers) ═══ */
       window.__cxInterceptSaveAs = function (blob, filename, originalAction) {
-        console.log('[TB_Setting] interceptedSaveAs called:', filename);
         if (typeof filename === 'string' && /\.xlsx$/i.test(filename)) {
           _processBlob(blob, filename, originalAction).catch(function (err) {
             console.error('[TB_Setting] inject failed:', err);
@@ -405,7 +397,6 @@
         /* Guard: prevent re-entrant calls */
         if (window.__cxTBInjecting) return;
         window.__cxTBInjecting = true;
-        console.log('[TB_Setting] post-save injection starting...');
         try {
           var handle = window.__cxSavedSettingsHandle;
           if (!handle) {
@@ -422,7 +413,6 @@
           var sigNeedsSync = !!(sigSetCheck && (sigSetCheck.enabled || sigSetCheck.sigLetters));
 
           if (!sigNeedsSync) {
-            console.log('[CX Settings] no sig settings — skipping post-save injection');
             return;
           }
 
@@ -436,7 +426,6 @@
           await wb.xlsx.load(buf);
 
           var existingSheets = wb.worksheets.map(function (w) { return w.name; });
-          console.log('[TB_Setting] sheets in file:', JSON.stringify(existingSheets));
 
           _injectTBSettingSheet(wb);
 
@@ -448,7 +437,6 @@
           }));
           await writable.close();
 
-          console.log('[TB_Setting] Finished saving settings back to file');
         } catch (err) {
           console.warn('[TB_Setting] post-save injection warning:', err);
         } finally {
@@ -456,7 +444,6 @@
         }
       }
 
-      console.log('[TB_Setting] Script 4 loaded (saveAs + post-save file handle injection)');
     })();
   </script>
   <script>
@@ -604,7 +591,6 @@
 
       /* ── cxTriggerWorkspaceSave: simulate Tables ▸ Save click ── */
       window.cxTriggerWorkspaceSave = function () {
-        console.log('[CX Settings] cxTriggerWorkspaceSave called');
 
         // Strategy 1: Find the "Tables" button reliably
         // The top bar has buttons: Workspace, Tables, Batch — all with rounded-xl bg-white/10
@@ -641,7 +627,6 @@
           return;
         }
 
-        console.log('[CX Settings] Found Tables button, opening dropdown...');
         tablesBtn.click();
 
         // Wait for the dropdown to appear, then click Save
@@ -658,7 +643,6 @@
               var sTxt = (saveBtns[s].textContent || '').replace(/\s+/g, ' ').trim();
               if (sTxt === 'Save') {
                 clearInterval(finder);
-                console.log('[CX Settings] Found Save button, clicking...');
                 saveBtns[s].click();
                 return;
               }
@@ -674,7 +658,6 @@
                 var bTxt = (ddBtns[b].textContent || '').replace(/\s+/g, ' ').trim();
                 if (bTxt === 'Save') {
                   clearInterval(finder);
-                  console.log('[CX Settings] Found Save button (broad), clicking...');
                   ddBtns[b].click();
                   return;
                 }
@@ -716,7 +699,6 @@
                 for (var ci = 0; ci < ch.length; ci++) {
                   var item = ch[ci];
                   if (item && typeof item === 'object' && item.props && item.props.children === 'Save') {
-                    console.log('[CX Settings] Found Save via fiber, invoking onClick...');
                     p.onClick();
                     return;
                   }
@@ -2578,11 +2560,13 @@
                   for (var k in row) { if (k.toLowerCase() === lower) { v = row[k]; break; } }
                 }
                 if (v != null && v !== '') {
-                  var gridRow = {};
-                  /* Store member LABEL (not numeric index) — Sn() returns labels from valueLabels,
-                     so the data value must match the label for buildOrder to include it */
+                  /* Copy ALL original row fields so nested-variable tables (e.g. Gender || Q1_SIDE)
+                     can still read the non-Grid fields from a Grid row. The _cxGridRow sentinel
+                     lets qn() know this is a Grid row and filter accordingly. */
+                  var gridRow = Object.assign({}, row);
                   gridRow[topName] = membersList[mi].label;
                   gridRow[sideName] = (typeof v === 'number') ? v : (!isNaN(Number(v)) ? Number(v) : v);
+                  gridRow['_cxGridRow'] = topName;
                   updatedCases.push(gridRow);
                 }
               }
@@ -2591,10 +2575,6 @@
             var _dbgMemberLabels = membersList.map(function(m){ return m.label; });
             var _dbgGridRows = updatedCases.filter(function(r){ return topName in r; });
             var _dbgUnique = [...new Set(_dbgGridRows.map(function(r){ return r[topName]; }))];
-            console.log('[CX-GRID v3] topValueLabels:', JSON.stringify(topValueLabels));
-            console.log('[CX-GRID v3] memberLabels:', JSON.stringify(_dbgMemberLabels));
-            console.log('[CX-GRID v3] unique GRID values injected:', JSON.stringify(_dbgUnique));
-            console.log('[CX-GRID v3] total cases:', updatedCases.length, 'grid rows:', _dbgGridRows.length);
             return Object.assign({}, prev, { variables: nvs.concat([topVar, sideVar]), cases: updatedCases });
           });
           closeModal();
@@ -3325,7 +3305,6 @@
       window._cxSettingSavedVars = {}; /* track which vars already saved */
 
       function cxTriggerWorkspaceSave() {
-        console.log('[TB] cxTriggerWorkspaceSave: looking for Tables button...');
         /* Find the "Tables" button in the top bar (NOT Workspace) */
         var headerBtns = document.querySelectorAll('button');
         var tablesBtn = null;
@@ -3359,7 +3338,6 @@
             var t = (items[j].textContent || '').trim();
             if (t === 'Save') {
               items[j].click();
-              console.log('[TB] triggered Save from Tables dropdown');
               /* Mark settings as linked so the popup won't appear again */
               if (typeof window.__cxMarkSettingsWorkbookLinked === 'function') {
                 /* Delay to let the save dialog finish */
@@ -5418,25 +5396,78 @@
         return null;
       }
 
+      function _scoreOverrideCandidate(v) {
+        if (!v || typeof v !== 'object' || Array.isArray(v) ||
+            v instanceof Set || v instanceof Map) return 0;
+        var keys = Object.keys(v);
+        if (!keys.length) return 0;
+        var score = 0;
+        keys.forEach(function (k) {
+          var val = v[k];
+          if (!val || typeof val !== 'object' || Array.isArray(val)) return;
+          if ('labels' in val) score += 2;
+          if ('order' in val) score += 2;
+          if ('weights' in val) score += 2;
+          if ('groups' in val) score += 2;
+          if ('summaries' in val) score += 3;
+          if ('numericStats' in val) score += 3;
+          if ('summaryPreset' in val) score += 2;
+        });
+        return score;
+      }
+
+      /* Scan ALL hooks in the fiber chain (all fibers up via .return, all
+         hooks from .memoizedState start) so variableOverrides is found even
+         when it lives BEFORE the tables hook in the hook list. */
+      function findOverridesFromFiber(startFiber) {
+        var best = null;
+        var bestScore = 0;
+        var f = startFiber;
+        var fCount = 0;
+        while (f && fCount < 60) {
+          var s = f.memoizedState;
+          var hCount = 0;
+          while (s && hCount < 320) {
+            var score = _scoreOverrideCandidate(s.memoizedState);
+            if (score > bestScore) { bestScore = score; best = s.memoizedState; }
+            s = s.next;
+            hCount++;
+          }
+          f = f.return;
+          fCount++;
+        }
+        return bestScore > 0 ? best : {};
+      }
+
+      /* Legacy: kept for runWithoutTop path which passes a hook node */
       function findOverrides(tablesHook) {
         if (!tablesHook) return {};
+        var best = null;
+        var bestScore = 0;
         var s = tablesHook;
         var count = 0;
-        while (s && count < 40) {
-          var v = s.memoizedState;
-          if (v && typeof v === 'object' && !Array.isArray(v) &&
-            !(v instanceof Set) && !(v instanceof Map) &&
-            Object.keys(v).length > 0) {
-            var looksLike = Object.keys(v).some(function (k) {
-              var val = v[k];
-              return val && typeof val === 'object' && ('labels' in val || 'order' in val || 'weights' in val);
-            });
-            if (looksLike) return v;
-          }
+        while (s && count < 320) {
+          var score = _scoreOverrideCandidate(s.memoizedState);
+          if (score > bestScore) { bestScore = score; best = s.memoizedState; }
           s = s.next;
           count++;
         }
-        return {};
+        return bestScore > 0 ? best : {};
+      }
+
+      /* Full fiber scan: used by augmentTablesArray to find overrides even when
+         variableOverrides hook is positioned before tables in the hook list. */
+      function resolveLiveOverrides(preferredEl) {
+        var seeds = getFiberSeeds(preferredEl);
+        for (var i = 0; i < seeds.length; i++) {
+          var fiber = fiberOf(seeds[i]);
+          if (!fiber) continue;
+          var ov = findOverridesFromFiber(fiber);
+          if (ov && Object.keys(ov).length > 0) return ov;
+        }
+        /* Fallback: scan from tables hook forward */
+        var hook = _tablesHookRef;
+        return hook ? findOverrides(hook) : {};
       }
 
       function findDataset(startFiber) {
@@ -5470,10 +5501,21 @@
         return null;
       }
 
+      function axisNameOf(value) {
+        if (value == null) return '';
+        if (typeof value === 'string') return value.trim();
+        if (typeof value === 'object') {
+          if (typeof value.name === 'string' && value.name.trim()) return value.name.trim();
+          if (typeof value.longName === 'string' && value.longName.trim()) return value.longName.trim();
+          if (typeof value.id === 'string' && value.id.trim()) return value.id.trim();
+        }
+        return String(value).trim();
+      }
+
       /* ── Axis parsing ── */
       function parseAxis(str) {
-        if (!str) return [];
-        var s = str.trim();
+        var s = axisNameOf(str);
+        if (!s) return [];
         if (s.startsWith(AXIS_PFX)) {
           try {
             var arr = JSON.parse(s.slice(AXIS_PFX.length));
@@ -5526,6 +5568,34 @@
         });
       }
 
+      var _s6StatLabelSet = {
+        MEAN: 1,
+        MIN: 1,
+        MAX: 1,
+        STDDEV: 1
+      };
+      function isStatOrSummaryLabel(label) {
+        var key = String(label == null ? '' : label).trim();
+        if (!key) return false;
+        if (isSummaryKey(key)) return true;
+        return !!_s6StatLabelSet[key.toUpperCase()];
+      }
+      function hasComputedColumns(result) {
+        if (!result || !Array.isArray(result.colValues) || !result.colValues.length) return false;
+        var colPaths = Array.isArray(result.colPaths) ? result.colPaths : null;
+        for (var i = 0; i < result.colValues.length; i++) {
+          var path = colPaths && Array.isArray(colPaths[i]) ? colPaths[i] : [result.colValues[i]];
+          for (var j = 0; j < path.length; j++) {
+            if (isStatOrSummaryLabel(path[j])) return true;
+          }
+          if (isStatOrSummaryLabel(result.colValues[i])) return true;
+        }
+        return false;
+      }
+      function cxReorderNestedSummaryColumns(result) {
+        return result;
+      }
+
       /* ── T2B/Mean augmentation ── */
       /* Inject Net group rows from override.groups for a single-var result.
          Groups: [{id, name, members:[code], parentId}]. Members are code keys;
@@ -5549,8 +5619,6 @@
           }
         }
         var groups = ov && Array.isArray(ov.groups) ? ov.groups : null;
-        console.log('[S6] injectNet:', vn, '— ov?', !!ov, ', groups=', groups ? groups.length : 0,
-          ', overrideKeys=', overrides ? Object.keys(overrides).length : 0);
         if (!groups || !groups.length) return result;
         var labels = (ov && ov.labels) || {};
         /* Build code → rowIndex map (try label match, then raw code match) */
@@ -5563,6 +5631,11 @@
           var last = String(path[path.length - 1] || rv).trim();
           codeToIdx[rv] = ri;
           codeToIdx[last] = ri;
+          /* Also index bare label after last ' / ' (for stacked multi-var prefixed rowValues) */
+          var _sp = rv.lastIndexOf(' / ');
+          if (_sp >= 0) codeToIdx[rv.slice(_sp + 3).trim()] = ri;
+          var _spL = last.lastIndexOf(' / ');
+          if (_spL >= 0) codeToIdx[last.slice(_spL + 3).trim()] = ri;
         }
         /* Reverse map labels[code]=label → code for lookup */
         var labelToCode = {};
@@ -5576,7 +5649,9 @@
           if (codeToIdx[memberCode] != null) return codeToIdx[memberCode];
           /* Try label-of-code */
           var lab = labels[memberCode];
-          if (lab != null && codeToIdx[String(lab).trim()] != null) return codeToIdx[String(lab).trim()];
+          var labKey = lab != null ? String(lab).trim() : null;
+          console.log('[NET-MBR] code=', memberCode, 'direct=', codeToIdx[memberCode], 'lab=', lab, 'labKey=', labKey, 'labIdx=', labKey != null ? codeToIdx[labKey] : 'N/A');
+          if (labKey != null && codeToIdx[labKey] != null) return codeToIdx[labKey];
           return null;
         }
 
@@ -5592,8 +5667,10 @@
 
         var colCount = (result.colValues || []).length;
         var netRows = [];
+        console.log('[NET-INJ] vn=', vn, 'groups=', JSON.stringify(groups.map(function(g){return{name:g.name,members:g.members};})), 'codeToIdx keys=', JSON.stringify(Object.keys(codeToIdx)), 'labels=', JSON.stringify(labels));
         groups.forEach(function (g) {
           var idxs = (g.members || []).map(memberToIdx).filter(function (x) { return x != null; });
+          console.log('[NET-INJ] group=', g.name, 'members=', g.members, 'resolvedIdxs=', idxs);
           if (!idxs.length) return;
           idxs.sort(function (a, b) { return a - b; });
           var counts = [];
@@ -5614,17 +5691,30 @@
             totalN: totalN
           });
         });
-        if (!netRows.length) return result;
+        if (!netRows.length) { console.log('[NET-INJ] no netRows produced for vn=', vn); return result; }
         netRows.sort(function (a, b) { return a.insertBefore - b.insertBefore || a.depth - b.depth; });
 
         var rv = [], rt = [], rp = [], ct = [], rtn = [];
         var rawTypes = result.rowTypes || result.rowValues.map(function () { return 'data'; });
         var rawPaths = result.rowPaths || result.rowValues.map(function (v) { return [v]; });
+        /* Find a data row with depth >= 2 to use as path prefix for Net rows
+           (stacked multi-var tables use rowPaths[i].slice(1) for label cells) */
+        var _netPathPrefix = null;
+        for (var _ppi = 0; _ppi < result.rowValues.length; _ppi++) {
+          var _pprt = rawTypes[_ppi] || 'data';
+          if (_pprt === 'data' && rawPaths[_ppi] && rawPaths[_ppi].length >= 2) {
+            _netPathPrefix = rawPaths[_ppi].slice(0, -1);
+            break;
+          }
+        }
+        function _netPath(label) {
+          return _netPathPrefix ? _netPathPrefix.concat([label]) : [label];
+        }
         var ni = 0;
         for (var i = 0; i < result.rowValues.length; i++) {
           while (ni < netRows.length && netRows[ni].insertBefore === i) {
             var n = netRows[ni];
-            rv.push(n.label); rt.push('net'); rp.push([n.label]);
+            rv.push(n.label); rt.push('net'); rp.push(_netPath(n.label));
             ct.push(n.counts); rtn.push(n.totalN);
             ni++;
           }
@@ -5636,7 +5726,7 @@
         }
         while (ni < netRows.length) {
           var n2 = netRows[ni];
-          rv.push(n2.label); rt.push('net'); rp.push([n2.label]);
+          rv.push(n2.label); rt.push('net'); rp.push(_netPath(n2.label));
           ct.push(n2.counts); rtn.push(n2.totalN);
           ni++;
         }
@@ -5646,7 +5736,670 @@
       }
       window.__cxInjectNetGroups = cxInjectNetGroups;
 
-      function augmentResult(result, rowVarStr, overrides) {
+      function getOverrideForVar(name, overrides) {
+        if (!name || !overrides) return null;
+        if (overrides[name]) return overrides[name];
+        var lower = String(name).toLowerCase();
+        if (overrides[lower]) return overrides[lower];
+        var keys = Object.keys(overrides);
+        for (var i = 0; i < keys.length; i++) {
+          if (String(keys[i]).toLowerCase() === lower) return overrides[keys[i]];
+        }
+        return null;
+      }
+
+      function buildOverrideNameCandidates(name, dataset) {
+        var out = [];
+        function add(v) {
+          if (!v) return;
+          var s = String(v).trim();
+          if (!s) return;
+          if (out.indexOf(s) === -1) out.push(s);
+        }
+        function addSideVariants(v) {
+          add(v);
+          var s = String(v || '');
+          if (/_SIDE$/i.test(s)) add(s.replace(/_SIDE$/i, ''));
+          else add(s + '_SIDE');
+        }
+
+        addSideVariants(name);
+        var dsVar = getDatasetVariable(name, dataset);
+        if (dsVar) {
+          addSideVariants(dsVar.name);
+          addSideVariants(dsVar.longName);
+        }
+        return out;
+      }
+
+      function getTbStoreSafe() {
+        try {
+          if (typeof window.__cxGetTbPresetStore === 'function') {
+            return window.__cxGetTbPresetStore() || {};
+          }
+        } catch (e) {}
+        return {};
+      }
+
+      function getTbInfoByVarName(varName, dataset) {
+        var store = getTbStoreSafe();
+        if (!store || typeof store !== 'object') return null;
+        var candidates = buildOverrideNameCandidates(varName, dataset);
+        for (var i = 0; i < candidates.length; i++) {
+          var key = candidates[i];
+          if (store[key]) return Object.assign({ __key: key }, store[key]);
+          var lower = String(key).toLowerCase();
+          var keys = Object.keys(store);
+          for (var j = 0; j < keys.length; j++) {
+            if (String(keys[j]).toLowerCase() === lower) {
+              return Object.assign({ __key: keys[j] }, store[keys[j]]);
+            }
+          }
+        }
+        return null;
+      }
+
+      function getDatasetVariable(name, dataset) {
+        if (!name || !dataset || !Array.isArray(dataset.variables)) return null;
+        var exact = dataset.variables.find(function (v) { return v.name === name || v.longName === name; });
+        if (exact) return exact;
+        var lower = String(name).toLowerCase();
+        return dataset.variables.find(function (v) {
+          return String(v.name || '').toLowerCase() === lower || String(v.longName || '').toLowerCase() === lower;
+        }) || null;
+      }
+
+      function normalizeAxisText(value) {
+        return String(value == null ? '' : value)
+          .trim()
+          .toLowerCase()
+          .replace(/^[0-9]+\s*[.)_-]?\s*/, '')
+          .replace(/\s+/g, ' ');
+      }
+
+      function axisTextMatches(left, right) {
+        var a = String(left == null ? '' : left).trim().toLowerCase();
+        var b = String(right == null ? '' : right).trim().toLowerCase();
+        if (!a || !b) return false;
+        if (a === b) return true;
+        var na = normalizeAxisText(a);
+        var nb = normalizeAxisText(b);
+        if (na && nb && na === nb) return true;
+        if (/^\d+$/.test(a) && b.indexOf(a) === 0) return true;
+        if (/^\d+$/.test(b) && a.indexOf(b) === 0) return true;
+        return false;
+      }
+
+      function buildColumnCodeMeta(result, colVarName, override, dataset) {
+        if (!result || !result.colValues || !result.colValues.length) return [];
+        var dsVar = getDatasetVariable(colVarName, dataset) || {};
+        var dsLabels = dsVar.valueLabels || {};
+        var ovLabels = override && override.labels ? override.labels : {};
+        var order = override && Array.isArray(override.order) ? cxFilterOutSummaryCodes(override.order.slice()) : [];
+        if (!order.length) {
+          order = Object.keys(dsLabels);
+        }
+
+        var rawLabels = (result.colPaths || result.colValues.map(function (v) { return [v]; }))
+          .map(function (path, idx) {
+            return String((path && path[path.length - 1]) || result.colValues[idx] || '').trim();
+          });
+        var used = {};
+        var meta = [];
+
+        function norm(value) {
+          return String(value == null ? '' : value).trim().toLowerCase();
+        }
+
+        function matchColumn(candidates) {
+          for (var ci = 0; ci < rawLabels.length; ci++) {
+            if (used[ci]) continue;
+            for (var cj = 0; cj < candidates.length; cj++) {
+              if (axisTextMatches(rawLabels[ci], candidates[cj])) {
+                used[ci] = true;
+                return ci;
+              }
+            }
+          }
+          return -1;
+        }
+
+        order.forEach(function (code) {
+          if (isSummaryKey(code)) return;
+          var idx = matchColumn([code, ovLabels[code], dsLabels[code]]);
+          if (idx >= 0) meta.push({ code: String(code), index: idx, label: rawLabels[idx] });
+        });
+
+        for (var i = 0; i < rawLabels.length; i++) {
+          if (used[i]) continue;
+          var label = rawLabels[i];
+          var guessedCode = null;
+          var dsKeys = Object.keys(dsLabels);
+          for (var di = 0; di < dsKeys.length; di++) {
+            var code = dsKeys[di];
+            if (axisTextMatches(dsLabels[code], label) || axisTextMatches(code, label)) {
+              guessedCode = code;
+              break;
+            }
+          }
+          if (!guessedCode) guessedCode = label;
+          meta.push({ code: String(guessedCode), index: i, label: label });
+        }
+
+        meta.sort(function (a, b) { return a.index - b.index; });
+        return meta;
+      }
+
+      function buildColumnCodeMetaFromMemberLabels(result, memberLabels) {
+        if (!result || !result.colValues || !result.colValues.length) return [];
+        var rawLabels = (result.colPaths || result.colValues.map(function (v) { return [v]; }))
+          .map(function (path, idx) {
+            return String((path && path[path.length - 1]) || result.colValues[idx] || '').trim();
+          });
+        var used = {};
+        var meta = [];
+
+        var codeKeys = Object.keys(memberLabels || {}).filter(function (k) {
+          return k && !isSummaryKey(k);
+        });
+        codeKeys.forEach(function (code) {
+          var label = memberLabels[code];
+          for (var ci = 0; ci < rawLabels.length; ci++) {
+            if (used[ci]) continue;
+            if (axisTextMatches(rawLabels[ci], code) || axisTextMatches(rawLabels[ci], label)) {
+              used[ci] = true;
+              meta.push({ code: String(code), index: ci, label: rawLabels[ci] });
+              break;
+            }
+          }
+        });
+
+        meta.sort(function (a, b) { return a.index - b.index; });
+        return meta;
+      }
+
+      function getColumnPathEntries(result) {
+        var rawPaths = (result.colPaths || result.colValues.map(function (v) { return [v]; }));
+        return rawPaths.map(function (path, idx) {
+          var safePath = Array.isArray(path) && path.length ? path.slice() : [String(result.colValues && result.colValues[idx] != null ? result.colValues[idx] : '')];
+          var lastLabel = String((safePath && safePath[safePath.length - 1]) || result.colValues[idx] || '').trim();
+          return {
+            index: idx,
+            path: safePath,
+            groupPath: safePath.slice(0, Math.max(0, safePath.length - 1)),
+            groupKey: safePath.slice(0, Math.max(0, safePath.length - 1)).join('\u001f'),
+            label: lastLabel
+          };
+        });
+      }
+
+      function buildGroupedColumnCodeMeta(result, orderedCodes, labelLookup) {
+        var entries = getColumnPathEntries(result).filter(function (entry) {
+          return !isStatOrSummaryLabel(entry.label);
+        });
+        if (!entries.length) return [];
+
+        var grouped = {};
+        var groupOrder = [];
+        entries.forEach(function (entry) {
+          var key = entry.groupKey;
+          if (!grouped[key]) {
+            grouped[key] = { groupKey: key, groupPath: entry.groupPath, entries: [] };
+            groupOrder.push(key);
+          }
+          grouped[key].entries.push(entry);
+        });
+
+        return groupOrder.map(function (groupKey) {
+          var group = grouped[groupKey];
+          var used = {};
+          var meta = [];
+
+          function matchColumn(candidates) {
+            for (var ci = 0; ci < group.entries.length; ci++) {
+              var entry = group.entries[ci];
+              if (used[entry.index]) continue;
+              for (var cj = 0; cj < candidates.length; cj++) {
+                if (axisTextMatches(entry.label, candidates[cj])) {
+                  used[entry.index] = true;
+                  return entry;
+                }
+              }
+            }
+            return null;
+          }
+
+          orderedCodes.forEach(function (code) {
+            if (isSummaryKey(code)) return;
+            var candidate = matchColumn([code, labelLookup[code]]);
+            if (candidate) {
+              meta.push({
+                code: String(code),
+                index: candidate.index,
+                label: candidate.label,
+                groupKey: group.groupKey,
+                groupPath: group.groupPath.slice()
+              });
+            }
+          });
+
+          group.entries.forEach(function (entry) {
+            if (used[entry.index]) return;
+            var guessedCode = null;
+            Object.keys(labelLookup || {}).some(function (code) {
+              if (axisTextMatches(labelLookup[code], entry.label) || axisTextMatches(code, entry.label)) {
+                guessedCode = code;
+                return true;
+              }
+              return false;
+            });
+            meta.push({
+              code: String(guessedCode || entry.label),
+              index: entry.index,
+              label: entry.label,
+              groupKey: group.groupKey,
+              groupPath: group.groupPath.slice()
+            });
+          });
+
+          meta.sort(function (a, b) { return a.index - b.index; });
+          return {
+            groupKey: group.groupKey,
+            groupPath: group.groupPath.slice(),
+            meta: meta
+          };
+        }).filter(function (group) {
+          return group.meta && group.meta.length;
+        });
+      }
+
+      var _cxNegativeSummaryOrder = { BB: 1, B2B: 2, B3B: 3 };
+      var _cxPositiveSummaryOrder = { TB: 1, T2B: 2, T3B: 3 };
+      function getSummaryBlockPlacement(label) {
+        var key = String(label == null ? '' : label).trim().toUpperCase();
+        if (_cxNegativeSummaryOrder[key]) return { side: 'before', order: _cxNegativeSummaryOrder[key] };
+        if (_cxPositiveSummaryOrder[key]) return { side: 'after', order: _cxPositiveSummaryOrder[key] };
+        if (key === 'MEAN') return { side: 'after', order: 99 };
+        return { side: 'after', order: 50 };
+      }
+
+      function inferWeightedIndexesFromCodeMeta(codeMeta, presetId) {
+        if (!Array.isArray(codeMeta) || codeMeta.length < 2) return [];
+        var lowGood = /_low_good$/i.test(String(presetId || ''));
+        var parsed = codeMeta.map(function (item) {
+          var n = Number(item.code);
+          if (!Number.isFinite(n)) {
+            var m = String(item.label || '').match(/-?\d+(?:\.\d+)?/);
+            n = m ? Number(m[0]) : NaN;
+          }
+          return { index: item.index, numericCode: Number.isFinite(n) ? n : null };
+        });
+
+        var usable = parsed.filter(function (p) { return p.numericCode != null; });
+        var ordered = null;
+        if (usable.length >= 2) {
+          ordered = usable.slice().sort(function (a, b) { return a.numericCode - b.numericCode; });
+        } else {
+          ordered = parsed.slice().sort(function (a, b) { return a.index - b.index; });
+        }
+
+        if (!ordered || ordered.length < 2) return [];
+        var len = ordered.length;
+        return ordered.map(function (item, i) {
+          return { index: item.index, weight: lowGood ? (len - i) : (i + 1) };
+        });
+      }
+
+      function buildSummariesFromPreset(memberKeys, presetId) {
+        if (!presetId || !memberKeys || !memberKeys.length) return [];
+        if (String(presetId).indexOf('justright') === 0) return [];
+        var sorted = memberKeys.slice().sort(function (a, b) {
+          var an = Number(a), bn = Number(b);
+          if (Number.isFinite(an) && Number.isFinite(bn)) return an - bn;
+          return String(a).localeCompare(String(b), undefined, { numeric: true, sensitivity: 'base' });
+        });
+        if (!sorted.length) return [];
+
+        var lowGood = /_low_good$/i.test(presetId);
+        var wantsT2B = /^t2b_/i.test(presetId) || /^t3b_/i.test(presetId);
+        var wantsT3B = /^t3b_/i.test(presetId);
+        var first = sorted[0];
+        var second = sorted.length > 1 ? sorted[1] : null;
+        var third = sorted.length > 2 ? sorted[2] : null;
+        var last = sorted[sorted.length - 1];
+        var penult = sorted.length > 1 ? sorted[sorted.length - 2] : null;
+        var ante = sorted.length > 2 ? sorted[sorted.length - 3] : null;
+
+        if (lowGood) {
+          return [
+            { code: 'TB', label: 'TB', members: [first] },
+            ...(wantsT2B && second ? [{ code: 'T2B', label: 'T2B', members: [first, second] }] : []),
+            ...(wantsT3B && second && third ? [{ code: 'T3B', label: 'T3B', members: [first, second, third] }] : []),
+            { code: 'BB', label: 'BB', members: [last] },
+            ...(wantsT2B && penult ? [{ code: 'B2B', label: 'B2B', members: [penult, last] }] : []),
+            ...(wantsT3B && ante && penult ? [{ code: 'B3B', label: 'B3B', members: [ante, penult, last] }] : []),
+          ];
+        }
+        return [
+          { code: 'TB', label: 'TB', members: [last] },
+          ...(wantsT2B && penult ? [{ code: 'T2B', label: 'T2B', members: [last, penult] }] : []),
+          ...(wantsT3B && ante && penult ? [{ code: 'T3B', label: 'T3B', members: [last, penult, ante] }] : []),
+          { code: 'BB', label: 'BB', members: [first] },
+          ...(wantsT2B && second ? [{ code: 'B2B', label: 'B2B', members: [first, second] }] : []),
+          ...(wantsT3B && second && third ? [{ code: 'B3B', label: 'B3B', members: [first, second, third] }] : []),
+        ];
+      }
+
+      function buildColumnAugmentFromTbInfo(result, varName, tbInfo, overrides) {
+        if (!tbInfo || !result) return null;
+        var memberLabels = tbInfo.memberLabels || {};
+        var codeMeta = buildColumnCodeMetaFromMemberLabels(result, memberLabels);
+        var groupedMeta = buildGroupedColumnCodeMeta(result, Object.keys(memberLabels || {}), memberLabels);
+        if (!codeMeta.length) return null;
+
+        var colIndexByCode = {};
+        codeMeta.forEach(function (item) { colIndexByCode[String(item.code)] = item.index; });
+
+        var summaries = Array.isArray(tbInfo.summaries) ? tbInfo.summaries.slice() : [];
+        if (!summaries.length && tbInfo.preset) {
+          summaries = buildSummariesFromPreset(Object.keys(memberLabels || {}), tbInfo.preset);
+        }
+
+        var specs = [];
+        function pushSummarySpecsFromMeta(metaList, groupPath) {
+          var indexByCode = {};
+          var groupMin = metaList.length ? metaList[0].index : 0;
+          var groupMax = metaList.length ? metaList[metaList.length - 1].index : 0;
+          metaList.forEach(function (item) { indexByCode[String(item.code)] = item.index; });
+          summaries.forEach(function (summary) {
+            var members = Array.isArray(summary.members) ? summary.members : [];
+            var memberIndexes = members.map(function (member) {
+              var idx = indexByCode[String(member)];
+              return typeof idx === 'number' ? idx : null;
+            }).filter(function (idx) { return idx != null; });
+            if (!memberIndexes.length) return;
+            var placement = getSummaryBlockPlacement(summary.label || summary.code || 'Summary');
+            specs.push({
+              kind: 'summary',
+              label: summary.label || summary.code || 'Summary',
+              memberIndexes: memberIndexes,
+              base: memberIndexes.reduce(function (sum, idx) { return sum + (result.colTotalsN[idx] || 0); }, 0),
+              groupPath: (groupPath || []).slice(),
+              insertBoundary: placement.side === 'before' ? groupMin : (groupMax + 1),
+              insertOrder: placement.order
+            });
+          });
+        }
+
+        if (groupedMeta.length > 1 || (groupedMeta[0] && groupedMeta[0].groupPath && groupedMeta[0].groupPath.length)) {
+          groupedMeta.forEach(function (group) {
+            pushSummarySpecsFromMeta(group.meta, group.groupPath);
+          });
+        } else {
+          pushSummarySpecsFromMeta(codeMeta, []);
+        }
+
+        if (!specs.length) return null;
+        return { varName: varName, specs: specs };
+      }
+
+      function buildColumnAugment(result, colVarStr, rowVarStr, overrides, dataset) {
+        if (!result || !result.colValues || !result.colValues.length || !colVarStr) return null;
+        if (hasComputedColumns(result)) return null;
+        var colVars = flatVars(parseAxis(colVarStr)).filter(Boolean);
+        if (!colVars.length) return null;
+        var uniqueNames = [];
+        colVars.forEach(function (name) {
+          buildOverrideNameCandidates(name, dataset).forEach(function (cand) {
+            if (uniqueNames.indexOf(cand) === -1) uniqueNames.push(cand);
+          });
+        });
+
+        for (var ci = 0; ci < uniqueNames.length; ci++) {
+          var vn = uniqueNames[ci];
+          var ov = getOverrideForVar(vn, overrides);
+          if (ov && typeof ov === 'object') {
+            var codeMeta = buildColumnCodeMeta(result, vn, ov, dataset);
+            var dsVar = getDatasetVariable(vn, dataset) || {};
+            var groupedMeta = buildGroupedColumnCodeMeta(
+              result,
+              (Array.isArray(ov.order) && ov.order.length ? ov.order.slice() : Object.keys(dsVar.valueLabels || {})),
+              Object.assign({}, dsVar.valueLabels || {}, ov.labels || {})
+            );
+            if (codeMeta.length) {
+              var colIndexByCode = {};
+              codeMeta.forEach(function (item) { colIndexByCode[String(item.code)] = item.index; });
+
+              var specs = [];
+              var summaries = Array.isArray(ov.summaries) ? ov.summaries : [];
+              function pushSummarySpecsFromMeta(metaList, groupPath) {
+                var groupIndexByCode = {};
+                var groupMin = metaList.length ? metaList[0].index : 0;
+                var groupMax = metaList.length ? metaList[metaList.length - 1].index : 0;
+                metaList.forEach(function (item) { groupIndexByCode[String(item.code)] = item.index; });
+                summaries.forEach(function (summary) {
+                  var memberIndexes = (summary.members || []).map(function (member) {
+                    var idx = groupIndexByCode[String(member)];
+                    return typeof idx === 'number' ? idx : null;
+                  }).filter(function (idx) { return idx != null; });
+                  if (!memberIndexes.length) return;
+                  var base = memberIndexes.reduce(function (sum, idx) {
+                    return sum + (result.colTotalsN[idx] || 0);
+                  }, 0);
+                  var placement = getSummaryBlockPlacement(summary.label || summary.code || 'Summary');
+                  specs.push({
+                    kind: 'summary',
+                    label: summary.label || summary.code || 'Summary',
+                    memberIndexes: memberIndexes,
+                    base: base,
+                    groupPath: (groupPath || []).slice(),
+                    insertBoundary: placement.side === 'before' ? groupMin : (groupMax + 1),
+                    insertOrder: placement.order
+                  });
+                });
+              }
+
+              if (groupedMeta.length > 1 || (groupedMeta[0] && groupedMeta[0].groupPath && groupedMeta[0].groupPath.length)) {
+                groupedMeta.forEach(function (group) {
+                  pushSummarySpecsFromMeta(group.meta, group.groupPath);
+                });
+              } else {
+                pushSummarySpecsFromMeta(codeMeta, []);
+              }
+
+              var tbInfoForOverride = getTbInfoByVarName(vn, dataset);
+              var tbAugForOverride = buildColumnAugmentFromTbInfo(result, vn, tbInfoForOverride, overrides);
+              if (tbAugForOverride && tbAugForOverride.specs && tbAugForOverride.specs.length) {
+                var seenSpecKeys = {};
+                specs.forEach(function (spec) {
+                  var gp = Array.isArray(spec.groupPath) ? spec.groupPath.join('\u001f') : '';
+                  seenSpecKeys[(spec.kind || '') + '|' + (spec.label || '') + '|' + gp + '|' + (spec.insertBoundary || 0)] = 1;
+                });
+                tbAugForOverride.specs.forEach(function (spec) {
+                  var gp = Array.isArray(spec.groupPath) ? spec.groupPath.join('\u001f') : '';
+                  var dedupeKey = (spec.kind || '') + '|' + (spec.label || '') + '|' + gp + '|' + (spec.insertBoundary || 0);
+                  if (seenSpecKeys[dedupeKey]) return;
+                  specs.push(spec);
+                  seenSpecKeys[dedupeKey] = 1;
+                });
+              }
+              if (specs.length) return { varName: vn, specs: specs };
+            }
+          }
+
+          var tbInfo = getTbInfoByVarName(vn, dataset);
+          var fromStore = buildColumnAugmentFromTbInfo(result, vn, tbInfo, overrides);
+          if (fromStore && fromStore.specs && fromStore.specs.length) return fromStore;
+        }
+
+        return null;
+      }
+
+      function materializeColumnAugment(result, colAug) {
+        if (!result || !colAug || !Array.isArray(colAug.specs) || !colAug.specs.length) return result;
+
+        var originalColValues = Array.isArray(result.colValues) ? result.colValues.slice() : [];
+        var originalColPaths = Array.isArray(result.colPaths)
+          ? result.colPaths.map(function (path, idx) {
+              return Array.isArray(path) && path.length ? path.slice() : [String(originalColValues[idx] != null ? originalColValues[idx] : '')];
+            })
+          : originalColValues.map(function (value) { return [String(value == null ? '' : value)]; });
+        var originalColTotalsN = Array.isArray(result.colTotalsN) ? result.colTotalsN.slice() : [];
+        var originalCounts = Array.isArray(result.counts)
+          ? result.counts.map(function (row) { return Array.isArray(row) ? row.slice() : []; })
+          : [];
+
+        var nextColValues = originalColValues.slice();
+        var nextColPaths = originalColPaths.map(function (path) { return path.slice(); });
+        var nextColTotalsN = originalColTotalsN.slice();
+        var nextCounts = originalCounts.map(function (row) { return row.slice(); });
+
+        var sortedSpecs = colAug.specs.slice().sort(function (a, b) {
+          var ai = typeof a.insertBoundary === 'number' ? a.insertBoundary : originalColValues.length;
+          var bi = typeof b.insertBoundary === 'number' ? b.insertBoundary : originalColValues.length;
+          if (ai !== bi) return ai - bi;
+          var ao = typeof a.insertOrder === 'number' ? a.insertOrder : 50;
+          var bo = typeof b.insertOrder === 'number' ? b.insertOrder : 50;
+          return ao - bo;
+        });
+
+        var inserted = 0;
+        sortedSpecs.forEach(function (spec) {
+          if (!spec || spec.kind !== 'summary' || !Array.isArray(spec.memberIndexes) || !spec.memberIndexes.length) return;
+
+          var boundary = typeof spec.insertBoundary === 'number' ? spec.insertBoundary : originalColValues.length;
+          var insertAt = Math.max(0, Math.min(nextColValues.length, boundary + inserted));
+          var path = (Array.isArray(spec.groupPath) ? spec.groupPath.slice() : []).concat([String(spec.label || 'Summary')]);
+          var total = spec.memberIndexes.reduce(function (sum, idx) {
+            return sum + (originalColTotalsN[idx] || 0);
+          }, 0);
+
+          nextColValues.splice(insertAt, 0, String(spec.label || 'Summary'));
+          nextColPaths.splice(insertAt, 0, path);
+          nextColTotalsN.splice(insertAt, 0, total);
+          nextCounts.forEach(function (row, rowIndex) {
+            var value = spec.memberIndexes.reduce(function (sum, idx) {
+              return sum + ((((originalCounts[rowIndex] || [])[idx]) || 0));
+            }, 0);
+            row.splice(insertAt, 0, value);
+          });
+          inserted += 1;
+        });
+
+        return Object.assign({}, result, {
+          colValues: nextColValues,
+          colPaths: nextColPaths,
+          colTotalsN: nextColTotalsN,
+          counts: nextCounts
+        });
+      }
+
+      function materializeScaleSummariesForGridResult(result, comboCodes, scaleLevelIndex, scaleOrder, summaryInfo) {
+        if (!result || !Array.isArray(result.colPaths) || !Array.isArray(comboCodes) || scaleLevelIndex < 0) return result;
+        if (!summaryInfo) return result;
+
+        var summaries = Array.isArray(summaryInfo.summaries) ? summaryInfo.summaries.slice() : [];
+        if (!summaries.length && summaryInfo.preset) {
+          summaries = buildSummariesFromPreset(Array.isArray(scaleOrder) ? scaleOrder.slice() : [], summaryInfo.preset);
+        }
+        if (!summaries.length) return result;
+
+        var originalColValues = Array.isArray(result.colValues) ? result.colValues.slice() : [];
+        var originalColPaths = result.colPaths.map(function (path, idx) {
+          return Array.isArray(path) && path.length ? path.slice() : [String(originalColValues[idx] != null ? originalColValues[idx] : '')];
+        });
+        var originalColTotalsN = Array.isArray(result.colTotalsN) ? result.colTotalsN.slice() : [];
+        var originalCounts = Array.isArray(result.counts)
+          ? result.counts.map(function (row) { return Array.isArray(row) ? row.slice() : []; })
+          : [];
+
+        var groups = [];
+        var groupMap = {};
+        comboCodes.forEach(function (combo, idx) {
+          if (!Array.isArray(combo) || combo.length <= scaleLevelIndex) return;
+          var groupKey = combo
+            .slice(0, scaleLevelIndex)
+            .concat(combo.slice(scaleLevelIndex + 1))
+            .join('\u001f');
+          var group = groupMap[groupKey];
+          if (!group) {
+            group = {
+              key: groupKey,
+              indexes: [],
+              samplePath: originalColPaths[idx] ? originalColPaths[idx].slice() : []
+            };
+            groupMap[groupKey] = group;
+            groups.push(group);
+          }
+          group.indexes.push(idx);
+        });
+
+        var inserts = [];
+        groups.forEach(function (group) {
+          summaries.forEach(function (summary) {
+            var members = Array.isArray(summary.members) ? summary.members : [];
+            if (!members.length) return;
+            var memberSet = {};
+            members.forEach(function (member) { memberSet[String(member)] = 1; });
+            var memberIndexes = group.indexes.filter(function (idx) {
+              var combo = comboCodes[idx] || [];
+              return memberSet[String(combo[scaleLevelIndex])] === 1;
+            });
+            if (!memberIndexes.length) return;
+            var placement = getSummaryBlockPlacement(summary.label || summary.code || 'Summary');
+            var path = group.samplePath.slice();
+            if (path.length <= scaleLevelIndex) path[scaleLevelIndex] = String(summary.label || summary.code || 'Summary');
+            else path[scaleLevelIndex] = String(summary.label || summary.code || 'Summary');
+            inserts.push({
+              label: String(summary.label || summary.code || 'Summary'),
+              path: path,
+              memberIndexes: memberIndexes,
+              boundary: placement.side === 'before' ? group.indexes[0] : (group.indexes[group.indexes.length - 1] + 1),
+              order: placement.order
+            });
+          });
+        });
+
+        if (!inserts.length) return result;
+
+        inserts.sort(function (a, b) {
+          if (a.boundary !== b.boundary) return a.boundary - b.boundary;
+          return a.order - b.order;
+        });
+
+        var nextColValues = originalColValues.slice();
+        var nextColPaths = originalColPaths.map(function (path) { return path.slice(); });
+        var nextColTotalsN = originalColTotalsN.slice();
+        var nextCounts = originalCounts.map(function (row) { return row.slice(); });
+        var inserted = 0;
+
+        inserts.forEach(function (spec) {
+          var insertAt = Math.max(0, Math.min(nextColValues.length, spec.boundary + inserted));
+          var total = spec.memberIndexes.reduce(function (sum, idx) {
+            return sum + (originalColTotalsN[idx] || 0);
+          }, 0);
+
+          nextColValues.splice(insertAt, 0, spec.label);
+          nextColPaths.splice(insertAt, 0, spec.path.slice());
+          nextColTotalsN.splice(insertAt, 0, total);
+          nextCounts.forEach(function (row, rowIndex) {
+            var value = spec.memberIndexes.reduce(function (sum, idx) {
+              return sum + ((((originalCounts[rowIndex] || [])[idx]) || 0));
+            }, 0);
+            row.splice(insertAt, 0, value);
+          });
+          inserted += 1;
+        });
+
+        return Object.assign({}, result, {
+          colValues: nextColValues,
+          colPaths: nextColPaths,
+          colTotalsN: nextColTotalsN,
+          counts: nextCounts
+        });
+      }
+
+      function augmentResult(result, rowVarStr, colVarStr, overrides, dataset) {
         if (!result || !result.rowValues || !result.rowValues.length) return result;
         if (result.__cxAugmented) return result;
 
@@ -5663,6 +6416,89 @@
           if (typeof window.__cxAugmentStackedTable === 'function') {
             try { aug = window.__cxAugmentStackedTable(aug, parsed, parseAxis(result.colVar), overrides); } catch (e) { console.warn('[S6] augStack err', e); }
           }
+          /* Inject Net groups per section — compiled bundle (Qn) skips multi-var SIDE.
+             Helper: enrich overrides[vn].labels with SPSS valueLabels so member code→label
+             lookup works (e.g. code '2' → 'Samut Prakan' → codeToIdx match). */
+          var _buildNetOv = function(ov, ds, vn) {
+            if (!ds || !ds.variables || !vn) return ov;
+            var vnLC = String(vn).toLowerCase(), spssVr = null;
+            for (var ki = 0; ki < ds.variables.length; ki++) {
+              var dv = ds.variables[ki];
+              if (String(dv.name).toLowerCase() === vnLC || (dv.longName && String(dv.longName).toLowerCase() === vnLC)) { spssVr = dv; break; }
+            }
+            if (!spssVr || !spssVr.valueLabels) return ov;
+            var labs = {};
+            Object.keys(spssVr.valueLabels).forEach(function(k) { var n = Number(k); labs[(isFinite(n) && !isNaN(n)) ? String(n) : k] = spssVr.valueLabels[k]; });
+            if (!Object.keys(labs).length) return ov;
+            var baseOv = (ov && ov[vn]) ? ov[vn] : (function() {
+              if (!ov) return {};
+              var _vnLow = String(vn).toLowerCase();
+              var _ovKeys = Object.keys(ov);
+              for (var _bki = 0; _bki < _ovKeys.length; _bki++) {
+                if (_ovKeys[_bki].toLowerCase() === _vnLow) return ov[_ovKeys[_bki]];
+              }
+              return {};
+            })();
+            var newOv = Object.assign({}, ov);
+            newOv[vn] = Object.assign({}, baseOv, { labels: Object.assign({}, labs, baseOv.labels || {}) });
+            return newOv;
+          };
+          var _augHasNets = aug.rowTypes && aug.rowTypes.some(function(t) { return t === 'net'; });
+          var _ovInfo = {};
+          if (overrides) { Object.keys(overrides).forEach(function(k){ var x=overrides[k]; _ovInfo[k]={hasGroups:!!(x&&x.groups&&x.groups.length),hasLabels:!!(x&&x.labels&&Object.keys(x.labels).length),groupCount:(x&&x.groups)?x.groups.length:0}; }); }
+          console.log('[NET-DBG] varNames=', JSON.stringify(varNames), 'hasNets=', _augHasNets, 'sections=', aug.rowSectionBases?aug.rowSectionBases.length:0, 'ovInfo=', JSON.stringify(_ovInfo));
+          if (!_augHasNets) {
+            var _njBranches = (function(a) { var used = Object.create(null), u = []; (a || []).forEach(function(d) { var p = d.filter(Boolean); if (!p.length) return; var m = p.join('\x1f'); if (used[m]) return; used[m] = true; u.push(p); }); return u; })(parsed);
+            var _njBranchVars = _njBranches.map(function(b) { return b[0]; });
+            var _njChainVars = _njBranches.length === 1 && _njBranches[0].length > 1 ? _njBranches[0] : null;
+            console.log('[NET-DBG] branches=', _njBranches, 'branchVars=', _njBranchVars, 'sectionCount=', aug.rowSectionBases ? aug.rowSectionBases.length : 0);
+            if (aug.rowSectionBases && aug.rowSectionBases.length > 1) {
+              /* Case A: distinct-label vars → multiple sections → inject per section */
+              try {
+                var _nRows = aug.rowValues.length;
+                var _rv = [], _rt = [], _rp = [], _ct = [], _rtn = [], _newBases = [];
+                for (var _si = 0; _si < aug.rowSectionBases.length; _si++) {
+                  var _sLo = aug.rowSectionBases[_si].startIndex;
+                  var _sHi = _si + 1 < aug.rowSectionBases.length ? aug.rowSectionBases[_si + 1].startIndex : _nRows;
+                  _newBases.push({ startIndex: _rv.length, label: aug.rowSectionBases[_si].label, totalN: aug.rowSectionBases[_si].totalN, colTotalsN: (aug.rowSectionBases[_si].colTotalsN || []).slice() });
+                  var _sVn = (_njChainVars && _njChainVars[_si]) || _njBranchVars[_si] || _njBranchVars[0];
+                  var _rawRt = aug.rowTypes || aug.rowValues.map(function() { return 'data'; });
+                  var _rawRp = aug.rowPaths || aug.rowValues.map(function(v) { return [v]; });
+                  var _sec = Object.assign({}, aug, {
+                    rowValues: aug.rowValues.slice(_sLo, _sHi),
+                    rowTypes: _rawRt.slice(_sLo, _sHi),
+                    rowPaths: _rawRp.slice(_sLo, _sHi),
+                    counts: aug.counts.slice(_sLo, _sHi),
+                    rowTotalsN: aug.rowTotalsN.slice(_sLo, _sHi)
+                  });
+                  var _enrichedOv = _buildNetOv(overrides, dataset, _sVn);
+                  var _eOvEntry = _enrichedOv && (_enrichedOv[_sVn] || (function(){var lc=String(_sVn).toLowerCase();var ks=Object.keys(_enrichedOv||{});for(var i=0;i<ks.length;i++){if(ks[i].toLowerCase()===lc)return _enrichedOv[ks[i]];}return null;})());
+                  console.log('[CASE-A-SEC] si=', _si, 'vn=', _sVn, 'sLo=', _sLo, 'sHi=', _sHi, 'secRV[:6]=', JSON.stringify(_sec.rowValues.slice(0,6)), 'secRT[:6]=', JSON.stringify((_sec.rowTypes||[]).slice(0,6)), 'eOv.groups=', _eOvEntry&&_eOvEntry.groups?_eOvEntry.groups.length:'NONE', 'eOv.labels keys=', JSON.stringify(Object.keys((_eOvEntry&&_eOvEntry.labels)||{}).slice(0,5)));
+                  var _preRV = _sec.rowValues.slice();
+                  try { _sec = cxInjectNetGroups(_sec, _sVn, _enrichedOv); } catch (_eN) { console.warn('[NET-DBG] inject err', _eN); }
+                  var _netIdxs = (_sec.rowTypes||[]).map(function(t,i){return t==='net'?i:-1;}).filter(function(i){return i>=0;});
+                  console.log('[NET-DBG2] section', _si, 'var=', _sVn, 'netIdxs=', _netIdxs, 'netValues=', _netIdxs.map(function(i){return _sec.rowValues[i];}), 'netCounts=', _netIdxs.map(function(i){return _sec.counts[i];}));
+                  for (var _ri = 0; _ri < _sec.rowValues.length; _ri++) {
+                    _rv.push(_sec.rowValues[_ri]);
+                    _rt.push((_sec.rowTypes || [])[_ri] || 'data');
+                    _rp.push((_sec.rowPaths || [])[_ri] || [_sec.rowValues[_ri]]);
+                    _ct.push(_sec.counts[_ri]); _rtn.push(_sec.rowTotalsN[_ri]);
+                  }
+                }
+                aug = Object.assign({}, aug, { rowValues: _rv, rowTypes: _rt, rowPaths: _rp, counts: _ct, rowTotalsN: _rtn, rowSectionBases: _newBases });
+              } catch (_eS) { console.warn('[S6] injectNet multi-var err', _eS); }
+            } else {
+              /* Case B: same-label vars (e.g. s1+s1_oth both 'S1.Province') collapse to 1 section,
+                 or no rowSectionBases at all — inject for first var on the whole result */
+              try {
+                var _allBvns = (_njChainVars && _njChainVars.length) ? _njChainVars : (_njBranchVars && _njBranchVars.length ? _njBranchVars : [varNames[0]]);
+                _allBvns.forEach(function(_fbVn) {
+                  if (!_fbVn) return;
+                  aug = cxInjectNetGroups(aug, _fbVn, _buildNetOv(overrides, dataset, _fbVn));
+                });
+              } catch (_eFb) {}
+            }
+          }
         }
         /* Single-var SIDE → __cxAddSummary + keep existing Mean */
         else {
@@ -5673,8 +6509,23 @@
           if (typeof window.__cxEnsureSingleVarMean === 'function') {
             try { aug = window.__cxEnsureSingleVarMean(aug, vn, overrides); } catch (e2) { console.warn('[S6] addMean err', e2); }
           }
-          /* Inject Net group rows from override.groups (run-without-Top path) */
-          try { aug = cxInjectNetGroups(aug, vn, overrides); } catch (eN) { console.warn('[S6] injectNet err', eN); }
+          /* Inject Net groups — skip if compiled bundle (Qn) already injected them */
+          var _hasNets = aug.rowTypes && aug.rowTypes.some(function(t) { return t === 'net'; });
+          if (!_hasNets) {
+            try { aug = cxInjectNetGroups(aug, vn, overrides); } catch (eN) { console.warn('[S6] injectNet err', eN); }
+          }
+        }
+
+        try { aug = cxReorderNestedSummaryColumns(aug); } catch (eR) { console.warn('[S6] reorder nested col summary err', eR); }
+
+        try {
+          var colAug = buildColumnAugment(aug, colVarStr || aug.colVar, rowVarStr || aug.rowVar, overrides, dataset);
+          if (colAug && colAug.specs && colAug.specs.length) {
+            aug = materializeColumnAugment(aug, colAug);
+          }
+          return Object.assign({}, aug, { __cxAugmented: true, __cxColAugment: null });
+        } catch (eC) {
+          console.warn('[S6] col augment err', eC);
         }
 
         return Object.assign({}, aug, { __cxAugmented: true });
@@ -5780,12 +6631,10 @@
 
             /* Strategy 1: use memberNames property if available (catalog-processed dataset) */
             if (vInfo && Array.isArray(vInfo.memberNames) && vInfo.memberNames.length > 0) {
-              console.log('[S6] MA Strategy 1: memberNames=', vInfo.memberNames);
               vInfo.memberNames.forEach(function (mn) {
                 var mv = dataset.variables.find(function (v) { return v.name === mn; });
                 if (mv) maMembers.push({ variable: mv, index: maMembers.length + 1 });
               });
-              console.log('[S6] Strategy 1 found:', maMembers.length, 'members');
             }
 
             /* Strategy 2: parse every variable's grouping source and match group name */
@@ -5815,10 +6664,6 @@
                 }
               });
               maMembers.sort(function (a, b) { return a.index - b.index; });
-              console.log('[S6] MA Strategy 2: total vars=', dataset.variables.length,
-                'matched=', maMembers.length, 'groupName=', vName);
-              console.log('[S6] First 5 vars:', JSON.stringify(_dbgSamples));
-              console.log('[S6] Partial name match (' + vName.replace(/_O$/i, '') + '):', JSON.stringify(_dbgPartialMatch));
             }
 
             /* Strategy 3: memberNames exist but members not in dataset.variables
@@ -5884,8 +6729,6 @@
                 }
               }
 
-              console.log('[S6] MA type:', _isDichotomy ? 'DICHOTOMY' : 'CODE-AGGREGATION',
-                'members:', maMembers.length);
 
               var groupVL = (vInfo && vInfo.valueLabels) ? vInfo.valueLabels : {};
               var maLabelsSource = ovMA.labels || {};
@@ -5971,7 +6814,6 @@
                 });
 
                 var groupLabel3 = (vInfo && (vInfo.label || vInfo.longName)) || vName;
-                console.log('[S6] freq built OK, rows:', maOrderArr.length);
                 results.push({
                   vName: vName,
                   vInfo: { name: vName, label: groupLabel3, longName: groupLabel3, valueLabels: maLabelsMap },
@@ -6034,7 +6876,6 @@
                 });
 
                 var groupLabel4 = (vInfo && (vInfo.label || vInfo.longName)) || vName;
-                console.log('[S6] freq built OK, rows:', maOrderArr2.length);
                 results.push({
                   vName: vName,
                   vInfo: { name: vName, label: groupLabel4, longName: groupLabel4, valueLabels: maLabelsMap2 },
@@ -6230,7 +7071,6 @@
           _hooked = true;
           _hookedHook = hook;
           _tablesHookRef = hook;
-          console.log('[S6] dispatch already wrapped, reusing');
           return true;
         }
 
@@ -6257,7 +7097,6 @@
 
         _hooked = true;
         _hookedHook = hook;
-        console.log('[S6] dispatch hooked successfully');
         return true;
       }
 
@@ -6272,8 +7111,24 @@
       }
 
       function buildGridMatrix(origResult, varObj, dataset, overrides) {
-        if (!varObj || !varObj.isGridUserCreated || !varObj.gridMembers) return null;
-        var members = varObj.gridMembers;
+        if (!varObj || !varObj.isGridUserCreated) return null;
+        var members = [];
+        if (Array.isArray(varObj.gridMembers) && varObj.gridMembers.length) {
+          members = varObj.gridMembers.map(function (m) {
+            return { name: axisNameOf(m && m.name), label: axisNameOf(m && (m.label || m.name)) };
+          }).filter(function (m) { return m.name; });
+        } else if (Array.isArray(varObj.memberNames) && varObj.memberNames.length) {
+          var byName = {};
+          if (dataset && Array.isArray(dataset.variables)) {
+            dataset.variables.forEach(function (v) { if (v && v.name) byName[String(v.name)] = v; });
+          }
+          members = varObj.memberNames.map(function (mn) {
+            var name = axisNameOf(mn);
+            var dv = byName[name] || null;
+            return { name: name, label: axisNameOf(dv && (dv.label || dv.longName || dv.name)) || name };
+          }).filter(function (m) { return m.name; });
+        }
+        if (!members.length) return null;
         var ov = overrides[varObj.name] || {};
         var labels = ov.labels || varObj.gridScaleLabels || varObj.valueLabels || {};
         var scaleCodes = Array.isArray(ov.order) ? ov.order.slice() : Object.keys(labels);
@@ -6430,18 +7285,512 @@
         return res;
       }
 
+      function hasPositiveCellInResult(result) {
+        if (!result || !Array.isArray(result.counts)) return false;
+        for (var ri = 0; ri < result.counts.length; ri++) {
+          var row = result.counts[ri] || [];
+          for (var ci = 0; ci < row.length; ci++) {
+            var n = Number(row[ci]);
+            if (Number.isFinite(n) && n > 0) return true;
+          }
+        }
+        return false;
+      }
+
+      function sortCodesNatural(codes) {
+        return (codes || []).slice().sort(function (a, b) {
+          var an = Number(a), bn = Number(b);
+          if (Number.isFinite(an) && Number.isFinite(bn)) return an - bn;
+          return String(a).localeCompare(String(b), undefined, { numeric: true, sensitivity: 'base' });
+        });
+      }
+
+      function varNameEq(a, b) {
+        return String(a || '').trim().toLowerCase() === String(b || '').trim().toLowerCase();
+      }
+
+      function buildGridSideNestedTopMatrix(origResult, rowVarStr, colVarStr, dataset, overrides) {
+        if (!rowVarStr || !colVarStr || !dataset || !Array.isArray(dataset.cases)) return null;
+
+        var rowVars = flatVars(parseAxis(rowVarStr));
+        if (!rowVars || rowVars.length !== 1) return null;
+        var rowVarName = axisNameOf(rowVars[0]);
+        if (!rowVarName || !/_SIDE$/i.test(rowVarName)) return null;
+        var rowGridVar = checkGridVar(rowVarStr, dataset) || checkGridVar(rowVarName, dataset);
+        var baseGridName = axisNameOf((rowGridVar && rowGridVar.gridPairName) || rowVarName.replace(/_SIDE$/i, ''));
+        if (!baseGridName) baseGridName = rowVarName.replace(/_SIDE$/i, '');
+        if (!baseGridName) return null;
+
+        var gridVar = null;
+        if (rowGridVar) {
+          gridVar = rowGridVar;
+        } else if (Array.isArray(dataset.variables)) {
+          var lowerBase = baseGridName.toLowerCase();
+          for (var gi = 0; gi < dataset.variables.length; gi++) {
+            var gv = dataset.variables[gi];
+            var gName = String(gv && gv.name || '').toLowerCase();
+            var gLong = String(gv && gv.longName || '').toLowerCase();
+            if ((gName === lowerBase || gLong === lowerBase) && gv && gv.isGridUserCreated && ((Array.isArray(gv.gridMembers) && gv.gridMembers.length) || (Array.isArray(gv.memberNames) && gv.memberNames.length))) {
+              gridVar = gv;
+              break;
+            }
+          }
+        }
+        if (!gridVar) return null;
+        var topGridName = axisNameOf(gridVar.gridPairName || baseGridName);
+
+        var gridMembers = [];
+        if (Array.isArray(gridVar.gridMembers) && gridVar.gridMembers.length) {
+          gridMembers = gridVar.gridMembers.map(function (m) {
+            return { name: axisNameOf(m && m.name), label: axisNameOf(m && (m.label || m.name)) };
+          }).filter(function (m) { return m.name; });
+        } else if (Array.isArray(gridVar.memberNames) && gridVar.memberNames.length) {
+          var byName = {};
+          if (Array.isArray(dataset.variables)) {
+            dataset.variables.forEach(function (v) { if (v && v.name) byName[String(v.name)] = v; });
+          }
+          gridMembers = gridVar.memberNames.map(function (mn) {
+            var name = axisNameOf(mn);
+            var dv = byName[name] || null;
+            return { name: name, label: axisNameOf(dv && (dv.label || dv.longName || dv.name)) || name };
+          }).filter(function (m) { return m.name; });
+        }
+        if (!gridMembers.length) return null;
+
+        var colBranches = parseAxis(colVarStr) || [];
+        if (!colBranches.length) return null;
+        var branch = null;
+        for (var bi = 0; bi < colBranches.length; bi++) {
+          var b = (colBranches[bi] || []).filter(Boolean);
+          if (!b.length) continue;
+          var hasGrid = b.some(function (name) {
+            return varNameEq(name, baseGridName) || varNameEq(name, topGridName) || varNameEq(name, rowVarName);
+          });
+          if (hasGrid) { branch = b; break; }
+        }
+        if (!branch || !branch.length) return null;
+
+        var levelMetas = [];
+        for (var li = 0; li < branch.length; li++) {
+          var levelVar = String(branch[li] || '').trim();
+          if (!levelVar) return null;
+
+          if (varNameEq(levelVar, baseGridName) || varNameEq(levelVar, topGridName) || varNameEq(levelVar, rowVarName)) {
+            var memberOrder = gridMembers.map(function (m) { return axisNameOf(m.name); }).filter(Boolean);
+            if (!memberOrder.length) return null;
+            var memberLabels = {};
+            gridMembers.forEach(function (m) {
+              var mk = axisNameOf(m.name);
+              if (!mk) return;
+              memberLabels[mk] = axisNameOf(m.label || m.name || mk);
+            });
+            var memberAllowed = {};
+            memberOrder.forEach(function (code) { memberAllowed[code] = 1; });
+            levelMetas.push({
+              name: levelVar,
+              kind: 'member',
+              label: (getDatasetVariable(levelVar, dataset) || {}).label || (getDatasetVariable(levelVar, dataset) || {}).longName || levelVar,
+              order: memberOrder,
+              labels: memberLabels,
+              allowed: memberAllowed
+            });
+            continue;
+          }
+
+          var dsVar = getDatasetVariable(levelVar, dataset) || {};
+          var ovVar = getOverrideForVar(levelVar, overrides) || {};
+          var labels = {};
+          Object.keys(dsVar.valueLabels || {}).forEach(function (k) { labels[String(k)] = String(dsVar.valueLabels[k]); });
+          Object.keys(ovVar.labels || {}).forEach(function (k) { labels[String(k)] = String(ovVar.labels[k]); });
+
+          var order = [];
+          if (Array.isArray(ovVar.order) && ovVar.order.length) {
+            order = ovVar.order.map(function (x) { return String(x); });
+          } else if (Object.keys(labels).length) {
+            order = Object.keys(labels).map(function (x) { return String(x); });
+          }
+          order = cxFilterOutSummaryCodes(order);
+
+          var observed = {};
+          for (var ci = 0; ci < dataset.cases.length; ci++) {
+            var rv = getCaseValue(dataset.cases[ci], levelVar);
+            if (rv == null || rv === '') continue;
+            observed[String(rv)] = 1;
+          }
+          Object.keys(observed).forEach(function (code) {
+            if (order.indexOf(code) === -1) order.push(code);
+          });
+          if (!order.length) order = sortCodesNatural(Object.keys(observed));
+          if (!order.length) return null;
+
+          var allowed = {};
+          order.forEach(function (code) { allowed[String(code)] = 1; });
+          levelMetas.push({
+            name: levelVar,
+            kind: 'var',
+            label: dsVar.label || dsVar.longName || levelVar,
+            order: order,
+            labels: labels,
+            allowed: allowed
+          });
+        }
+        if (!levelMetas.length) return null;
+
+        var rowDs = getDatasetVariable(rowVarName, dataset) || {};
+        var rowOv = getOverrideForVar(rowVarName, overrides) || {};
+        var rowLabels = {};
+        Object.keys(rowDs.valueLabels || {}).forEach(function (k) { rowLabels[String(k)] = String(rowDs.valueLabels[k]); });
+        Object.keys(gridVar.gridScaleLabels || {}).forEach(function (k) { rowLabels[String(k)] = String(gridVar.gridScaleLabels[k]); });
+        Object.keys(rowOv.labels || {}).forEach(function (k) { rowLabels[String(k)] = String(rowOv.labels[k]); });
+
+        var rowOrder = [];
+        if (Array.isArray(rowOv.order) && rowOv.order.length) {
+          rowOrder = rowOv.order.map(function (x) { return String(x); });
+        } else if (Object.keys(rowLabels).length) {
+          rowOrder = Object.keys(rowLabels).map(function (x) { return String(x); });
+        }
+        rowOrder = cxFilterOutSummaryCodes(rowOrder);
+
+        var observedRow = {};
+        for (var rci = 0; rci < dataset.cases.length; rci++) {
+          var rowCase = dataset.cases[rci];
+          for (var rmi = 0; rmi < gridMembers.length; rmi++) {
+            var sc = getCaseValue(rowCase, gridMembers[rmi].name);
+            if (sc == null || sc === '') continue;
+            observedRow[String(sc)] = 1;
+          }
+        }
+        Object.keys(observedRow).forEach(function (code) {
+          if (rowOrder.indexOf(code) === -1) rowOrder.push(code);
+        });
+        if (!rowOrder.length) rowOrder = sortCodesNatural(Object.keys(observedRow));
+        if (!rowOrder.length) return null;
+        var rowAllowed = {};
+        rowOrder.forEach(function (code) { rowAllowed[String(code)] = 1; });
+
+        var combos = [[]];
+        for (var lm = 0; lm < levelMetas.length; lm++) {
+          var next = [];
+          var codes = levelMetas[lm].order || [];
+          for (var p = 0; p < combos.length; p++) {
+            for (var cc = 0; cc < codes.length; cc++) {
+              next.push(combos[p].concat([String(codes[cc])]));
+            }
+          }
+          combos = next;
+        }
+        if (!combos.length) return null;
+
+        var delim = '\u001f';
+        var colIndexByKey = {};
+        var colPaths = [];
+        for (var cx = 0; cx < combos.length; cx++) {
+          var combo = combos[cx];
+          var key = combo.join(delim);
+          colIndexByKey[key] = cx;
+          colPaths.push(combo.map(function (code, idx) {
+            var lb = levelMetas[idx].labels[code];
+            return lb != null ? String(lb) : String(code);
+          }));
+        }
+
+        var rowValues = rowOrder.slice();
+        var rowPaths = rowValues.map(function (code) { return [rowLabels[code] != null ? String(rowLabels[code]) : String(code)]; });
+        var counts = rowValues.map(function () { return combos.map(function () { return 0; }); });
+        var rowTotalsN = rowValues.map(function () { return 0; });
+        var colTotalsN = combos.map(function () { return 0; });
+        var rowIndexByCode = {};
+        rowValues.forEach(function (code, idx) { rowIndexByCode[String(code)] = idx; });
+        var grandTotal = 0;
+
+        for (var di = 0; di < dataset.cases.length; di++) {
+          var raw = dataset.cases[di];
+          for (var mi = 0; mi < gridMembers.length; mi++) {
+            var member = gridMembers[mi];
+            var score = getCaseValue(raw, member.name);
+            if (score == null || score === '') continue;
+            var rowCode = String(score);
+            if (!rowAllowed[rowCode]) continue;
+            var ri = rowIndexByCode[rowCode];
+            if (ri == null) continue;
+
+            var pathCodes = [];
+            var ok = true;
+            for (var ll = 0; ll < levelMetas.length; ll++) {
+              var meta = levelMetas[ll];
+              var codeValue = null;
+              if (meta.kind === 'member') {
+                codeValue = String(member.name);
+              } else {
+                var v = getCaseValue(raw, meta.name);
+                if (v == null || v === '') { ok = false; break; }
+                codeValue = String(v);
+              }
+              if (!meta.allowed[codeValue]) { ok = false; break; }
+              pathCodes.push(codeValue);
+            }
+            if (!ok) continue;
+
+            var ck = pathCodes.join(delim);
+            var ci2 = colIndexByKey[ck];
+            if (ci2 == null) continue;
+
+            counts[ri][ci2] += 1;
+            rowTotalsN[ri] += 1;
+            colTotalsN[ci2] += 1;
+            grandTotal += 1;
+          }
+        }
+
+        return {
+          rowVar: rowVarName,
+          colVar: colVarStr,
+          rowLabel: (origResult && origResult.rowLabel) || ('Scale: ' + ((rowDs.label || rowDs.longName || rowVarName))),
+          colLabel: (origResult && origResult.colLabel) || levelMetas.map(function (m) { return m.label; }).join(' + '),
+          rowValues: rowValues,
+          colValues: colPaths.map(function (p) { return p[p.length - 1] || ''; }),
+          rowTypes: rowValues.map(function () { return 'data'; }),
+          rowLevelLabels: [rowDs.label || rowDs.longName || rowVarName],
+          colLevelLabels: levelMetas.map(function (m) { return m.label; }),
+          rowPaths: rowPaths,
+          colPaths: colPaths,
+          counts: counts,
+          rowTotalsN: rowTotalsN,
+          colTotalsN: colTotalsN,
+          grandTotal: grandTotal,
+          __cxGridSideNestedTop: true
+        };
+      }
+
+      function pickGridScaleVarOnTop(branchVars, gridVar) {
+        if (!Array.isArray(branchVars) || !gridVar || !gridVar.name) return null;
+        var target = String(gridVar.name);
+        var targetSide = (target + '_SIDE').toLowerCase();
+        for (var i = 0; i < branchVars.length; i++) {
+          var vn = String(branchVars[i] || '').trim();
+          if (!vn) continue;
+          if (vn.toLowerCase() === targetSide) return vn;
+        }
+        for (var j = 0; j < branchVars.length; j++) {
+          var v2 = String(branchVars[j] || '').trim();
+          if (!v2) continue;
+          if (/_SIDE$/i.test(v2) && v2.replace(/_SIDE$/i, '').toLowerCase() === target.toLowerCase()) return v2;
+        }
+        return null;
+      }
+
+      function buildGridNestedTopMatrix(origResult, gridVar, colVarStr, dataset, overrides) {
+        if (!gridVar || !gridVar.isGridUserCreated || !Array.isArray(gridVar.gridMembers) || !gridVar.gridMembers.length) return null;
+        if (!colVarStr || !dataset || !Array.isArray(dataset.cases)) return null;
+
+        var parsed = parseAxis(colVarStr);
+        if (!Array.isArray(parsed) || !parsed.length) return null;
+        var branch = (parsed[0] || []).filter(Boolean);
+        if (!branch.length) return null;
+
+        var scaleVarName = pickGridScaleVarOnTop(branch, gridVar);
+        if (!scaleVarName) return null;
+
+        var members = gridVar.gridMembers.slice();
+        var observedByVar = {};
+        for (var bi = 0; bi < branch.length; bi++) {
+          observedByVar[branch[bi]] = {};
+        }
+
+        for (var ci = 0; ci < dataset.cases.length; ci++) {
+          var row = dataset.cases[ci];
+          for (var mi = 0; mi < members.length; mi++) {
+            var scoreRaw = getCaseValue(row, members[mi].name);
+            if (scoreRaw == null || scoreRaw === '') continue;
+            var ok = true;
+            for (var li = 0; li < branch.length; li++) {
+              var varName = branch[li];
+              var code = null;
+              if (String(varName).toLowerCase() === String(scaleVarName).toLowerCase()) {
+                code = String(scoreRaw);
+              } else {
+                var raw = getCaseValue(row, varName);
+                if (raw == null || raw === '') { ok = false; break; }
+                code = String(raw);
+              }
+              if (!code) { ok = false; break; }
+              observedByVar[varName][code] = 1;
+            }
+            if (!ok) continue;
+          }
+        }
+
+        var levelMetas = [];
+        for (var lv = 0; lv < branch.length; lv++) {
+          var lvName = branch[lv];
+          var isScale = String(lvName).toLowerCase() === String(scaleVarName).toLowerCase();
+          var dsVar = getDatasetVariable(lvName, dataset) || {};
+          var ovVar = getOverrideForVar(lvName, overrides) || {};
+
+          var labels = {};
+          Object.keys(dsVar.valueLabels || {}).forEach(function (k) { labels[String(k)] = String(dsVar.valueLabels[k]); });
+          if (isScale) {
+            Object.keys(gridVar.gridScaleLabels || {}).forEach(function (k) { labels[String(k)] = String(gridVar.gridScaleLabels[k]); });
+          }
+          Object.keys(ovVar.labels || {}).forEach(function (k) { labels[String(k)] = String(ovVar.labels[k]); });
+
+          var order = [];
+          if (Array.isArray(ovVar.order)) {
+            order = ovVar.order.map(function (x) { return String(x); });
+          } else {
+            order = Object.keys(labels || {}).map(function (x) { return String(x); });
+          }
+          if (isScale) order = cxFilterOutSummaryCodes(order);
+
+          var observed = Object.keys(observedByVar[lvName] || {});
+          observed.forEach(function (code) {
+            if (order.indexOf(code) === -1) order.push(code);
+          });
+
+          order = order.filter(Boolean);
+          if (!order.length) order = sortCodesNatural(observed);
+          if (!order.length) return null;
+
+          var allowed = {};
+          order.forEach(function (code) { allowed[String(code)] = 1; });
+          levelMetas.push({
+            name: lvName,
+            label: dsVar.label || dsVar.longName || lvName,
+            isScale: isScale,
+            labels: labels,
+            order: order,
+            allowed: allowed
+          });
+        }
+        if (!levelMetas.length) return null;
+
+        var combos = [[]];
+        for (var lm = 0; lm < levelMetas.length; lm++) {
+          var next = [];
+          var codes = levelMetas[lm].order || [];
+          for (var p = 0; p < combos.length; p++) {
+            for (var cc = 0; cc < codes.length; cc++) {
+              next.push(combos[p].concat([String(codes[cc])]));
+            }
+          }
+          combos = next;
+        }
+        if (!combos.length) return null;
+
+        var keyDelim = '\u001f';
+        var colIndexByKey = {};
+        var colPaths = [];
+        for (var kx = 0; kx < combos.length; kx++) {
+          var key = combos[kx].join(keyDelim);
+          colIndexByKey[key] = kx;
+          colPaths.push(combos[kx].map(function (code, idx) {
+            var lb = levelMetas[idx].labels[code];
+            return lb != null ? String(lb) : String(code);
+          }));
+        }
+
+        var rowValues = members.map(function (m) { return m.label || m.name; });
+        var rowPaths = rowValues.map(function (v) { return [v]; });
+        var counts = rowValues.map(function () { return combos.map(function () { return 0; }); });
+        var rowTotalsN = rowValues.map(function () { return 0; });
+        var colTotalsN = combos.map(function () { return 0; });
+        var grandTotal = 0;
+
+        for (var ri = 0; ri < dataset.cases.length; ri++) {
+          var c = dataset.cases[ri];
+          for (var rmi = 0; rmi < members.length; rmi++) {
+            var score = getCaseValue(c, members[rmi].name);
+            if (score == null || score === '') continue;
+
+            var pathCodes = [];
+            var valid = true;
+            for (var ml = 0; ml < levelMetas.length; ml++) {
+              var meta = levelMetas[ml];
+              var codeValue = null;
+              if (meta.isScale) {
+                codeValue = String(score);
+              } else {
+                var rv = getCaseValue(c, meta.name);
+                if (rv == null || rv === '') { valid = false; break; }
+                codeValue = String(rv);
+              }
+              if (!meta.allowed[codeValue]) { valid = false; break; }
+              pathCodes.push(codeValue);
+            }
+            if (!valid) continue;
+
+            var comboKey = pathCodes.join(keyDelim);
+            var colIdx = colIndexByKey[comboKey];
+            if (colIdx == null) continue;
+
+            counts[rmi][colIdx] += 1;
+            rowTotalsN[rmi] += 1;
+            colTotalsN[colIdx] += 1;
+            grandTotal += 1;
+          }
+        }
+
+        var colLevelLabels = levelMetas.map(function (m) { return m.label; });
+        var colLabel = colLevelLabels.join(' + ');
+        if (colLabel && !/^scale:/i.test(colLabel)) colLabel = 'Scale: ' + colLabel;
+
+        var gridResult = {
+          rowVar: gridVar.name,
+          colVar: colVarStr,
+          rowLabel: gridVar.label || gridVar.name,
+          colLabel: colLabel || String(colVarStr),
+          rowValues: rowValues,
+          colValues: colPaths.map(function (p) { return p[p.length - 1] || ''; }),
+          rowTypes: rowValues.map(function () { return 'data'; }),
+          rowLevelLabels: [gridVar.label || gridVar.name],
+          colLevelLabels: colLevelLabels,
+          rowPaths: rowPaths,
+          colPaths: colPaths,
+          counts: counts,
+          rowTotalsN: rowTotalsN,
+          colTotalsN: colTotalsN,
+          grandTotal: grandTotal,
+          __cxGridNestedTop: true
+        };
+        var scaleLevelIndex = -1;
+        for (var smi = 0; smi < levelMetas.length; smi++) {
+          if (levelMetas[smi] && levelMetas[smi].isScale) {
+            scaleLevelIndex = smi;
+            break;
+          }
+        }
+        if (scaleLevelIndex >= 0) {
+          var scaleTbInfo = getTbInfoByVarName(scaleVarName, dataset);
+          gridResult = materializeScaleSummariesForGridResult(
+            gridResult,
+            combos,
+            scaleLevelIndex,
+            levelMetas[scaleLevelIndex].order || [],
+            scaleTbInfo
+          );
+        }
+        return gridResult;
+      }
+
       function checkGridVar(tVar, ds) {
         if (!tVar) return null;
-        if (tVar.isGridUserCreated && tVar.gridMembers) return tVar;
+        if (tVar.isGridUserCreated && ((tVar.gridMembers && tVar.gridMembers.length) || (tVar.memberNames && tVar.memberNames.length))) return tVar;
+        var tName = typeof tVar === 'string'
+          ? tVar
+          : (tVar.name || tVar.longName || null);
+        if (!tName) return null;
         if (ds && ds.variables) {
-          var found = ds.variables.find(function (v) { return v.name === tVar.name; });
-          if (found && found.isGridUserCreated && found.gridMembers) return found;
+          var lower = String(tName).toLowerCase();
+          var found = ds.variables.find(function (v) {
+            return String(v.name || '').toLowerCase() === lower || String(v.longName || '').toLowerCase() === lower;
+          });
+          if (found && found.isGridUserCreated && ((found.gridMembers && found.gridMembers.length) || (found.memberNames && found.memberNames.length))) return found;
         }
         return null;
       }
 
       function augmentTablesArray(tables) {
-        var ov = findOverrides(resolveLiveTablesHook());
+        var ov = resolveLiveOverrides();
         return tables.map(function (t) {
           if (t.result && !t.result.__cxAugmented) {
             var h = _hookedHook || resolveLiveTablesHook();
@@ -6449,21 +7798,32 @@
 
             var gRow = checkGridVar(t.rowVar, ds);
             var gCol = checkGridVar(t.colVar, ds);
+            var hasTopAxis = flatVars(parseAxis(t.colVar)).length > 0;
 
-            /* Grid pair cross-tab: colVar(TOP) + rowVar(SIDE) are grid pair */
-            if (gRow && gCol) {
-              var gridVar = gCol.gridRole === 'top' ? gCol : gRow;
-              var aug = buildGridMatrix(t.result, gridVar, ds, ov);
-              if (aug) return Object.assign({}, t, { result: aug });
+            if (hasTopAxis && ds && !hasPositiveCellInResult(t.result)) {
+              var sideNested = buildGridSideNestedTopMatrix(t.result, t.rowVar, t.colVar, ds, ov);
+              if (sideNested) {
+                var sideNestedAug = augmentResult(sideNested, t.rowVar, t.colVar, ov, ds);
+                return Object.assign({}, t, { result: sideNestedAug });
+              } else if (gRow) {
+              }
             }
 
-            /* Grid single (SIDE only, no TOP) */
-            if (gRow && !gCol && ds) {
+            if (hasTopAxis && gRow && ds && !hasPositiveCellInResult(t.result)) {
+              var nested = buildGridNestedTopMatrix(t.result, gRow, t.colVar, ds, ov);
+              if (nested) {
+                var nestedAug = augmentResult(nested, t.rowVar, t.colVar, ov, ds);
+                return Object.assign({}, t, { result: nestedAug });
+              }
+            }
+
+            /* Grid single (SIDE only, no TOP): do not override TOP/NEST results */
+            if (!hasTopAxis && gRow && !gCol && ds) {
               var aug2 = buildGridMatrix(t.result, gRow, ds, ov);
               if (aug2) return Object.assign({}, t, { result: aug2 });
             }
 
-            var aug3 = augmentResult(t.result, t.rowVar, ov);
+            var aug3 = augmentResult(t.result, t.rowVar, t.colVar, ov, ds);
             return Object.assign({}, t, { result: aug3 });
           }
           return t;
@@ -6496,10 +7856,7 @@
         var fiber = seedEl ? fiberOf(seedEl) : null;
         var td = fiber ? getTableFromFiber(fiber) : null;
         if (td && td.rowVar && !td.colVar) return td;
-        /* Grid pair: both TOP and SIDE are grid vars */
         var h = resolveLiveTablesHook(seedEl);
-        var ds = h ? h.data : null;
-        if (td && isGridPairTable(td, ds)) return td;
 
         /* Strategy 2: fresh hook resolution */
         var freshHook = h;
@@ -6513,13 +7870,13 @@
               if (af) {
                 var activeTable = getTableFromFiber(af);
                 if (activeTable) {
-                  var match = tables.find(function (t) { return t.id === activeTable.id && ((!t.colVar && t.rowVar) || isGridPairTable(t, ds)); });
+                  var match = tables.find(function (t) { return t.id === activeTable.id && (!t.colVar && t.rowVar); });
                   if (match) return match;
                 }
               }
             }
-            /* Fallback: any table with rowVar and no colVar, or a Grid pair */
-            var found = tables.find(function (t) { return (t.rowVar && !t.colVar) || isGridPairTable(t, ds); });
+            /* Fallback: any table with rowVar and no colVar */
+            var found = tables.find(function (t) { return (t.rowVar && !t.colVar); });
             if (found) return found;
           }
         }
@@ -6573,7 +7930,6 @@
 
       function runWithoutTop(tableData, triggerEl) {
         if (!tableData || !tableData.rowVar) return;
-        console.log('[S6] runWithoutTop:', tableData.id, 'rowVar:', tableData.rowVar);
         try {
 
           /* Always get a FRESH hook directly from fiber tree */
@@ -6600,7 +7956,6 @@
             console.warn('[S6] tables hook has no dispatch');
             return;
           }
-          console.log('[S6] freshHook found, queue ok, dispatch type:', typeof rawDispatch, 'wrapped:', !!rawDispatch.__cxWrapped);
 
           /* Find dataset */
           var dataset = resolveLiveDataset(triggerEl);
@@ -6608,18 +7963,11 @@
 
           var ov = findOverrides(freshHook);
 
-          /* ── Grid variable interception (single or pair) ── */
+          /* ── Grid variable interception (single SIDE only) ── */
           var gridVar = null;
-          if (isGridPairTable(tableData, dataset)) {
-            /* Grid pair: find the one with gridRole='top' or use colVar */
+          if (!tableData.colVar) {
             var gRow = checkGridVar(tableData.rowVar, dataset);
-            var gCol = checkGridVar(tableData.colVar, dataset);
-            if (gRow && gCol) {
-              gridVar = gCol.gridRole === 'top' ? gCol : gRow;
-            }
-          } else {
-            var gRow = checkGridVar(tableData.rowVar, dataset);
-            if (gRow && !tableData.colVar) gridVar = gRow;
+            if (gRow) gridVar = gRow;
           }
           if (gridVar) {
             var gridResult = buildGridMatrix(null, gridVar, dataset, ov);
@@ -6633,7 +7981,6 @@
                   return t;
                 });
               });
-              console.log('[S6] Grid matrix dispatched, cols:', gridResult.colValues.length, 'rows:', gridResult.rowValues.length);
 
               function switchToResultsGrid() {
                 var th = resolveLiveTablesHook(triggerEl) || freshHook;
@@ -6655,14 +8002,12 @@
 
           /* Pre-augment result so we don't need the wrapper */
           try {
-            freq = augmentResult(freq, tableData.rowVar, ov);
+            freq = augmentResult(freq, tableData.rowVar, tableData.colVar, ov, dataset);
             freq.__cxAugmented = true;
           } catch (augErr) {
             console.warn('[S6] augment failed, using raw freq:', augErr);
           }
 
-          console.log('[S6] freq built OK, rows:', freq.rowValues ? freq.rowValues.length : 0,
-            'dispatching via', rawDispatch.__cxWrapped ? 'wrapped' : 'raw', 'dispatch');
 
           var tableId = tableData.id;
           try {
@@ -6679,7 +8024,6 @@
                 }
                 return t;
               });
-              console.log('[S6] dispatch updater ran: matched=', matched, 'prevLen=', prev.length);
               if (!matched) console.warn('[S6] table id not in prev:', tableId);
               return out;
             });
@@ -6824,6 +8168,245 @@
         return null;
       }
 
+      function findOutputSettings(tablesHook) {
+        if (!tablesHook) return { showCount: true, showPercent: true, percentType: 'column', hideZeroRows: false };
+        var s = tablesHook;
+        var count = 0;
+        while (s && count < 80) {
+          var v = s.memoizedState;
+          if (v && typeof v === 'object' && !Array.isArray(v) &&
+            typeof v.showCount === 'boolean' &&
+            typeof v.showPercent === 'boolean' &&
+            typeof v.percentType === 'string') {
+            return v;
+          }
+          s = s.next;
+          count++;
+        }
+        return { showCount: true, showPercent: true, percentType: 'column', hideZeroRows: false };
+      }
+
+      function getActiveTableData() {
+        var hook = resolveLiveTablesHook();
+        var tables = hook && Array.isArray(hook.memoizedState) ? hook.memoizedState : null;
+        if (!tables || !tables.length) return null;
+
+        var activeRow = document.querySelector('[draggable="true"].border-l-2.cursor-pointer.border-\\[\\#1F4E78\\]');
+        if (activeRow) {
+          var activeFiber = fiberOf(activeRow);
+          var activeTable = activeFiber ? getTableFromFiber(activeFiber) : null;
+          if (activeTable && activeTable.id) {
+            var liveMatch = tables.find(function (t) { return t && t.id === activeTable.id; });
+            if (liveMatch) return liveMatch;
+            return activeTable;
+          }
+        }
+        return tables.find(function (t) { return t && t.result; }) || tables[0] || null;
+      }
+
+      function clearColumnAugment(tableEl) {
+        if (!tableEl) return;
+        tableEl.querySelectorAll('[data-cx-col-aug="1"]').forEach(function (el) { el.remove(); });
+        var topHeader = tableEl.querySelector('thead tr:first-child');
+        if (topHeader) {
+          var topHeaders = topHeader.querySelectorAll('th');
+          var groupHeader = topHeaders[topHeaders.length - 1];
+          if (groupHeader && groupHeader.dataset.cxColAugBaseColspan) {
+            groupHeader.colSpan = Number(groupHeader.dataset.cxColAugBaseColspan) || groupHeader.colSpan;
+          }
+        }
+      }
+
+      function computeDisplayRowIndexes(result, settings) {
+        var rowTypes = result.rowTypes || result.rowValues.map(function () { return 'data'; });
+        var hideZeroRows = !!(settings && settings.hideZeroRows);
+        var indexes = [];
+        for (var i = 0; i < result.rowValues.length; i++) {
+          var rowType = rowTypes[i] || 'data';
+          var total = result.rowTotalsN[i] || 0;
+          if (!hideZeroRows || rowType === 'stat' || total > 0) indexes.push(i);
+        }
+        return indexes;
+      }
+
+      function buildHeaderGroupDescriptors(paths, levels) {
+        return Array.from({ length: levels }, function (_, level) {
+          var groups = [];
+          var currentKey = '';
+          paths.forEach(function (path) {
+            var key = path.slice(0, level + 1).join('\u0001');
+            var label = path[level] || '';
+            if (!groups.length || key !== currentKey) {
+              groups.push({ key: key, label: label, span: 1 });
+              currentKey = key;
+            } else {
+              groups[groups.length - 1].span += 1;
+            }
+          });
+          return groups;
+        });
+      }
+
+      function calcColumnAugCell(spec, result, rowIndex, settings) {
+        var value = 0;
+        var pct = 0;
+        if (spec.kind === 'summary') {
+          value = spec.memberIndexes.reduce(function (sum, idx) {
+            return sum + (((result.counts[rowIndex] || [])[idx]) || 0);
+          }, 0);
+          if (settings.percentType === 'row') {
+            pct = (result.rowTotalsN[rowIndex] || 0) > 0 ? value / result.rowTotalsN[rowIndex] : 0;
+          } else if (settings.percentType === 'column') {
+            pct = spec.base > 0 ? value / spec.base : 0;
+          } else {
+            pct = result.grandTotal > 0 ? value / result.grandTotal : 0;
+          }
+          return { kind: 'summary', value: value, pct: pct };
+        }
+
+        if (spec.kind === 'mean') {
+          var weightedSum = 0;
+          var weightedBase = 0;
+          spec.weightedIndexes.forEach(function (item) {
+            var n = (((result.counts[rowIndex] || [])[item.index]) || 0);
+            weightedSum += n * item.weight;
+            weightedBase += n;
+          });
+          value = weightedBase > 0 ? (weightedSum / weightedBase) : 0;
+          return { kind: 'mean', value: value, pct: 0 };
+        }
+
+        return { kind: 'summary', value: 0, pct: 0 };
+      }
+
+      function fillMetricCell(td, metric, settings) {
+        td.innerHTML = '';
+        td.className = 'px-2 py-1.5 text-center border border-[#BDD7EE] tabular-nums';
+        td.style.whiteSpace = 'nowrap';
+        if (metric.kind === 'mean') {
+          td.style.background = '#FEE2E2';
+          td.style.color = '#B91C1C';
+          td.style.fontWeight = '600';
+          td.textContent = Number.isFinite(metric.value) && metric.value !== 0 ? metric.value.toFixed(2) : '-';
+          return;
+        }
+
+        td.style.background = '#FEF3C7';
+        td.style.color = '#92400E';
+        td.style.fontWeight = '600';
+        if (!metric.value) {
+          td.textContent = '-';
+          return;
+        }
+        if (settings.showCount && settings.showPercent) {
+          var countSpan = document.createElement('span');
+          countSpan.textContent = String(metric.value);
+          var br = document.createElement('br');
+          var pctSpan = document.createElement('span');
+          pctSpan.className = 'text-[10px]';
+          pctSpan.style.color = '#92400E';
+          pctSpan.style.fontWeight = '500';
+          pctSpan.textContent = '(' + (metric.pct * 100).toFixed(1) + ')';
+          td.appendChild(countSpan);
+          td.appendChild(br);
+          td.appendChild(pctSpan);
+          return;
+        }
+        if (settings.showCount) {
+          td.textContent = String(metric.value);
+          return;
+        }
+        if (settings.showPercent) {
+          td.textContent = (metric.pct * 100).toFixed(1);
+          return;
+        }
+        td.textContent = '-';
+      }
+
+      function applyColumnAugment() {
+        var tableEl = document.querySelector('.overflow-auto table');
+        if (!tableEl) return;
+        clearColumnAugment(tableEl);
+        return;
+      }
+
+      function injectSwitchButton() {
+        if (document.querySelector('[data-cx-switch-wrap="1"]')) return;
+
+        function triggerRunCurrentTable() {
+          var runBtn = Array.prototype.slice.call(document.querySelectorAll('button')).find(function (btn) {
+            return (btn.textContent || '').trim() === 'Run Table';
+          });
+          if (runBtn) {
+            setTimeout(function () { try { runBtn.click(); } catch (e) {} }, 140);
+            return;
+          }
+          var designTab = Array.prototype.slice.call(document.querySelectorAll('button')).find(function (btn) {
+            return (btn.textContent || '').trim() === 'Design';
+          });
+          if (designTab) {
+            try { designTab.click(); } catch (e1) {}
+            setTimeout(function () {
+              var laterRun = Array.prototype.slice.call(document.querySelectorAll('button')).find(function (btn) {
+                return (btn.textContent || '').trim() === 'Run Table';
+              });
+              if (laterRun) {
+                try { laterRun.click(); } catch (e2) {}
+              }
+            }, 180);
+          }
+        }
+
+        var wrapper = document.createElement('div');
+        wrapper.className = 'inline-flex items-center';
+        wrapper.setAttribute('data-cx-switch-wrap', '1');
+
+        var switchBtn = document.createElement('button');
+        switchBtn.type = 'button';
+        switchBtn.textContent = 'Switch';
+        switchBtn.className = 'inline-flex items-center rounded-md border border-[#1F4E78] bg-white px-2.5 py-1 text-[11px] font-semibold text-[#1F4E78] transition-colors hover:bg-blue-50';
+        switchBtn.setAttribute('data-cx-switch-btn', '1');
+        switchBtn.addEventListener('click', function () {
+          var hook = resolveLiveTablesHook(switchBtn);
+          if (!hook || !hook.queue || typeof hook.queue.dispatch !== 'function') return;
+          var tableData = getActiveTableData();
+          if (!tableData) return;
+          var dispatch = hook.queue.dispatch;
+          dispatch(function (prev) {
+            if (!Array.isArray(prev)) return prev;
+            return prev.map(function (t) {
+              if (!t || t.id !== tableData.id) return t;
+              return Object.assign({}, t, {
+                rowVar: t.colVar || null,
+                colVar: t.rowVar || null,
+                result: null
+              });
+            });
+          });
+          if (window.__cxSettingsWorkbookLinked && typeof window.cxTriggerWorkspaceSave === 'function') {
+            setTimeout(function () { window.cxTriggerWorkspaceSave(); }, 260);
+          }
+          triggerRunCurrentTable();
+        });
+
+        wrapper.appendChild(switchBtn);
+
+        var outputBtn = Array.prototype.slice.call(document.querySelectorAll('button')).find(function (btn) {
+          return (btn.textContent || '').trim() === 'Output Options';
+        });
+        if (outputBtn && outputBtn.parentElement) {
+          var parent = outputBtn.parentElement;
+          parent.insertBefore(wrapper, outputBtn);
+          return;
+        }
+        var runBtnFallback = Array.prototype.slice.call(document.querySelectorAll('button')).find(function (btn) {
+          return (btn.textContent || '').trim() === 'Run Table';
+        });
+        if (runBtnFallback && runBtnFallback.parentElement) {
+          runBtnFallback.parentElement.insertBefore(wrapper, runBtnFallback);
+        }
+      }
+
       var _obsTimer = null;
       new MutationObserver(function () {
         if (_obsTimer) clearTimeout(_obsTimer);
@@ -6831,7 +8414,6 @@
           /* Detect SPSS file change via dataset identity */
           var dsKey = detectDatasetKey();
           if (dsKey && _lastDatasetKey && dsKey !== _lastDatasetKey) {
-            console.log('[S6] Dataset changed (' + _lastDatasetKey + ' -> ' + dsKey + '), resetting hooks...');
             _hooked = false;
             _hookedHook = null;
             _tablesHookRef = null;
@@ -6852,7 +8434,6 @@
               /* Compare queue identity — React recreates hook objects on re-render
                  but keeps the same queue. Only reset if queue actually changed. */
               if (currentHook.queue !== _tablesHookRef.queue) {
-                console.log('[S6] Hook queue changed (new SPSS file?), re-hooking...');
                 _hooked = false;
                 _hookedHook = null;
                 _tablesHookRef = null;
@@ -6864,7 +8445,6 @@
               }
             } else if (!currentHook && fiber) {
               /* Old hook is gone, fiber tree rebuilt but tables not ready yet */
-              console.log('[S6] Hook lost (file change?), resetting...');
               _hooked = false;
               _hookedHook = null;
               _tablesHookRef = null;
@@ -6873,15 +8453,16 @@
           }
           if (!_hooked && _hookAttempts < 100) tryHookDispatch();
           enableNoTopRun();
+          injectSwitchButton();
+          applyColumnAugment();
         }, 300);
       }).observe(document.body, { childList: true, subtree: true });
 
       /* Initial attempts */
       setTimeout(function () { tryHookDispatch(); }, 1000);
       setTimeout(function () { tryHookDispatch(); }, 2500);
-      setTimeout(function () { tryHookDispatch(); enableNoTopRun(); }, 4000);
+      setTimeout(function () { tryHookDispatch(); enableNoTopRun(); injectSwitchButton(); applyColumnAugment(); }, 4000);
 
-      console.log('[S6] TB/T2B/Mean + no-TOP support loaded');
 
     })();
   </script>
@@ -7054,7 +8635,6 @@
         /* Get corner colSpan to find the Total col in colgroup */
         var cornerSpan = (headerCells[0] && headerCells[0].colSpan) || 2;
         var totalCol = colgroup ? (colgroup.querySelectorAll('col')[cornerSpan] || null) : null;
-        console.log('[CX-HIDE v3] cornerSpan=', cornerSpan, 'shouldHide=', _cxShouldHideTotalFromDOM(), 'totalTh=', (totalTh&&totalTh.textContent||'').trim(), 'cols=', colgroup?colgroup.querySelectorAll('col').length:0);
 
         /* Sub-header rows: first th is n= cell (Total sub-header) */
         var subHeaderCells = [];
@@ -7073,17 +8653,46 @@
         var totalBodyCells = [];
         var tbody = tableEl.querySelector('tbody');
         if (tbody) {
+          /* Track rowSpan occupancy across rows: colOccupied[visualCol] = remaining rows */
+          var colOccupied = {};
           tbody.querySelectorAll('tr').forEach(function(tr) {
             if (!tr.cells.length) return;
-            var firstRowSpan = tr.cells[0] ? (tr.cells[0].rowSpan || 1) : 1;
-            var totalCellIdx = (firstRowSpan > 1) ? cornerSpan : (cornerSpan - 1);
-            if (tr.cells.length >= totalCellIdx + 1) {
-              totalBodyCells.push(tr.cells[totalCellIdx]);
+            /* Decrement remaining rowSpan counters from previous rows */
+            var nextOccupied = {};
+            Object.keys(colOccupied).forEach(function(col) {
+              if (colOccupied[col] > 1) nextOccupied[col] = colOccupied[col] - 1;
+            });
+            colOccupied = nextOccupied;
+
+            var visualCol = 0;
+            var found = false;
+            for (var ci = 0; ci < tr.cells.length; ci++) {
+              /* Skip columns occupied by rowSpan from earlier rows */
+              while (colOccupied[visualCol]) visualCol++;
+
+              var cell = tr.cells[ci];
+              var cspan = cell && cell.colSpan ? cell.colSpan : 1;
+              var rspan = cell && cell.rowSpan ? cell.rowSpan : 1;
+
+              /* Register this cell's rowSpan so future rows skip these columns */
+              if (rspan > 1) {
+                for (var sc = 0; sc < cspan; sc++) {
+                  colOccupied[visualCol + sc] = rspan;
+                }
+              }
+
+              var startCol = visualCol;
+              var endCol = visualCol + cspan - 1;
+              if (cornerSpan >= startCol && cornerSpan <= endCol) {
+                totalBodyCells.push(cell);
+                found = true;
+                break;
+              }
+              visualCol += cspan;
             }
+            void found;
           });
         }
-
-        console.log('[CX-HIDE v3] totalBodyCells found:', totalBodyCells.length, totalBodyCells.slice(0,3).map(function(c){ return (c.textContent||'').trim().substring(0,20); }));
 
         if (shouldHide) {
           /* Use width:0 on the <col> element (inline style overrides Tailwind class).

@@ -474,14 +474,22 @@ export default function App() {
   const batchSettingsInputRef = useRef<HTMLInputElement>(null)
   const pendingSettingsRestoreRef = useRef<AllSettings | null>(null)
 
+  // โ”€โ”€ Undo / Redo history โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€
+  const _historyStack = useRef([]) // { tables, folders }[]
+  const _historyIdx = useRef(-1)
+  // Always-current refs (updated every render — safe to read in callbacks)
+  const _latestTables = useRef(tables)
+  _latestTables.current = tables
+  const _latestFolders = useRef(folders)
+  _latestFolders.current = folders
+
   // โ”€โ”€ Batch export flow โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€
   const {
     batchExporting,
     batchElapsedMs,
     batchExportSummary,
     beginBatchExport,
-    completeBatchExport,
-    endBatchExportSession,
+    finishBatchExport,
     dismissBatchExportSummary,
   } = useBatchExportFlow()
 
@@ -695,6 +703,59 @@ export default function App() {
     return () => window.removeEventListener('click', dismiss)
   }, [variableContextMenu])
 
+  // โ”€โ”€ Undo / Redo functions โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€
+
+  function pushHistory() {
+    const snapshot = {
+      tables: JSON.parse(JSON.stringify(_latestTables.current)),
+      folders: JSON.parse(JSON.stringify(_latestFolders.current)),
+    }
+    _historyStack.current = _historyStack.current.slice(0, _historyIdx.current + 1)
+    _historyStack.current.push(snapshot)
+    if (_historyStack.current.length > 50) {
+      _historyStack.current.shift()
+    } else {
+      _historyIdx.current++
+    }
+  }
+
+  // Refs so the keyboard handler (mounted once) always calls the latest version
+  const _handleUndoRef = useRef(null)
+  const _handleRedoRef = useRef(null)
+
+  _handleUndoRef.current = function handleUndo() {
+    if (_historyIdx.current <= 0) return
+    _historyIdx.current--
+    const snap = _historyStack.current[_historyIdx.current]
+    setTables(snap.tables)
+    setFolders(snap.folders)
+    setActiveTableId(prev => snap.tables.find(t => t.id === prev) ? prev : (snap.tables[0]?.id ?? ''))
+  }
+
+  _handleRedoRef.current = function handleRedo() {
+    if (_historyIdx.current >= _historyStack.current.length - 1) return
+    _historyIdx.current++
+    const snap = _historyStack.current[_historyIdx.current]
+    setTables(snap.tables)
+    setFolders(snap.folders)
+    setActiveTableId(prev => snap.tables.find(t => t.id === prev) ? prev : (snap.tables[0]?.id ?? ''))
+  }
+
+  useEffect(() => {
+    function onKeyDown(e) {
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return
+      if (e.ctrlKey && !e.shiftKey && e.key === 'z') {
+        e.preventDefault()
+        _handleUndoRef.current?.()
+      } else if ((e.ctrlKey && e.shiftKey && e.key === 'Z') || (e.ctrlKey && e.key === 'y')) {
+        e.preventDefault()
+        _handleRedoRef.current?.()
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [])
+
   // โ”€โ”€ File loading โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€
 
   const loadFile = useCallback(async (file: File, handle?: FileSystemFileHandle) => {
@@ -783,6 +844,7 @@ export default function App() {
   // โ”€โ”€ Table operations โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€
 
   const addTable = useCallback((folderId: string | null = null) => {
+    pushHistory()
     const idx = tables.length + 1
     const t = newTable(idx, folderId)
     setTables(prev => [...prev, t])
@@ -793,6 +855,7 @@ export default function App() {
   const createTablesFromVariables = useCallback((names: Iterable<string>, folderId: string | null = null) => {
     const uniqueNames = [...new Set(names)].filter(Boolean)
     if (uniqueNames.length === 0) return
+    pushHistory()
 
     const orderedNames = variableCatalog
       ? variableCatalog.list.filter(variable => uniqueNames.includes(variable.name)).map(variable => variable.name)
@@ -845,6 +908,7 @@ export default function App() {
   }, [tables, lastSelectedTableId])
 
   const handleTableDelete = useCallback((id: string) => {
+    pushHistory()
     setTables(prev => {
       const next = prev.filter(t => t.id !== id)
       if (next.length === 0) {
@@ -865,6 +929,7 @@ export default function App() {
   }, [])
 
   const handleTableDuplicate = useCallback((id: string) => {
+    pushHistory()
     setTables(prev => {
       const idx = prev.findIndex(t => t.id === id)
       if (idx < 0) return prev
@@ -890,6 +955,7 @@ export default function App() {
 
   const handleTablePasteAfter = useCallback((id: string) => {
     if (copiedTablesBuffer.length === 0) return
+    pushHistory()
     setTables(prev => {
       const idx = prev.findIndex(t => t.id === id)
       const inserts = copiedTablesBuffer.map(t => ({ ...t, id: crypto.randomUUID(), result: null }))
@@ -960,6 +1026,7 @@ export default function App() {
   }, [])
 
   const deleteFolder = useCallback((id: string) => {
+    pushHistory()
     setFolders(prev => prev.filter(f => f.id !== id))
     setTables(prev => prev.map(t => t.folderId === id ? { ...t, folderId: null } : t))
   }, [])
@@ -976,8 +1043,8 @@ export default function App() {
   ) => {
     const names =
       target.folderNames && target.folderNames.length > 0 ? target.folderNames : dragVarsRef.current
-    console.log('[handleDropTop] folderNames=', target.folderNames, 'refNames=', dragVarsRef.current, 'final names=', names)
     if (names.length === 0 || !activeTable) return
+    pushHistory()
     const nestSelected = mode === 'nest' ? (target.targetVar ?? null) : null
     setTables(prev => prev.map(t => {
       if (t.id !== activeTableId) return t
@@ -995,8 +1062,8 @@ export default function App() {
   ) => {
     const names =
       target.folderNames && target.folderNames.length > 0 ? target.folderNames : dragVarsRef.current
-    console.log('[handleDropSide] folderNames=', target.folderNames, 'refNames=', dragVarsRef.current, 'final names=', names)
     if (names.length === 0 || !activeTable) return
+    pushHistory()
     const nestSelected = mode === 'nest' ? (target.targetVar ?? null) : null
     setTables(prev => prev.map(t => {
       if (t.id !== activeTableId) return t
@@ -1009,6 +1076,7 @@ export default function App() {
   }, [activeTable, activeTableId])
 
   const handleRemoveTop = useCallback((name: string, occurrence?: { branchIndex: number; itemIndex: number }) => {
+    pushHistory()
     setTables(prev => prev.map(t => {
       if (t.id !== activeTableId) return t
       const spec = parseAxisSpec(t.colVar)
@@ -1018,6 +1086,7 @@ export default function App() {
   }, [activeTableId])
 
   const handleRemoveSide = useCallback((name: string, occurrence?: { branchIndex: number; itemIndex: number }) => {
+    pushHistory()
     setTables(prev => prev.map(t => {
       if (t.id !== activeTableId) return t
       const spec = parseAxisSpec(t.rowVar)
@@ -1087,10 +1156,12 @@ export default function App() {
   }, [activeTableId])
 
   const handleClearTop = useCallback(() => {
+    pushHistory()
     setTables(prev => prev.map(t => t.id === activeTableId ? { ...t, colVar: null } : t))
   }, [activeTableId])
 
   const handleClearSide = useCallback(() => {
+    pushHistory()
     setTables(prev => prev.map(t => t.id === activeTableId ? { ...t, rowVar: null } : t))
   }, [activeTableId])
 
@@ -1138,6 +1209,7 @@ export default function App() {
   }, [applyFilterToEditingTables])
 
   const handleClearFilter = useCallback(() => {
+    pushHistory()
     applyFilterToEditingTables(() => emptyTableFilter())
   }, [applyFilterToEditingTables])
 
@@ -1422,10 +1494,9 @@ export default function App() {
       }
     } finally {
       const elapsedMs = Date.now() - startedAt
-      completeBatchExport({ successCount, skippedCount, elapsedMs })
-      endBatchExportSession()
+      finishBatchExport({ successCount, skippedCount, elapsedMs })
     }
-  }, [dataset, currentSourceMappings, variableCatalog, settings, beginBatchExport, completeBatchExport, endBatchExportSession])
+  }, [dataset, currentSourceMappings, variableCatalog, settings, beginBatchExport, finishBatchExport])
 
   // โ”€โ”€ Variable editor โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€
 
@@ -2105,6 +2176,7 @@ export default function App() {
                     <button
                       onClick={() => { setOpenHeaderMenu(null); runAllTables() }}
                       disabled={runningAll}
+                      title={runningAll ? 'Running all tables, please wait...' : undefined}
                       className="flex w-full items-center gap-2 px-3 py-2 text-xs text-gray-700 hover:bg-gray-50 disabled:opacity-40"
                     >
                       <Play className="h-3.5 w-3.5" />
@@ -2166,6 +2238,7 @@ export default function App() {
                 void handleExportTable()
               }}
               disabled={!activeResult || exporting}
+              title={exporting ? 'Exporting in progress...' : !activeResult ? 'Run the table first to enable export' : undefined}
               className="inline-flex items-center gap-1.5 rounded-lg bg-[#1F4E78] px-3 py-1.5 text-xs font-semibold text-white hover:bg-[#173b5c] disabled:opacity-40"
             >
               <Download className="h-3.5 w-3.5" />

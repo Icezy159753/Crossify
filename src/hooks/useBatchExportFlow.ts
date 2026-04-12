@@ -33,12 +33,11 @@ export function useBatchExportFlow() {
     return startedAt
   }, [])
 
-  const completeBatchExport = useCallback((summary: BatchExportSummary) => {
+  // Completes the export and ends the session atomically — always call instead of
+  // completeBatchExport + endBatchExportSession separately to prevent stuck batchExporting state.
+  const finishBatchExport = useCallback((summary: BatchExportSummary) => {
     setBatchElapsedMs(summary.elapsedMs)
     setBatchExportSummary(summary)
-  }, [])
-
-  const endBatchExportSession = useCallback(() => {
     setBatchExportStartedAt(null)
     setBatchExporting(false)
   }, [])
@@ -52,8 +51,7 @@ export function useBatchExportFlow() {
     batchElapsedMs,
     batchExportSummary,
     beginBatchExport,
-    completeBatchExport,
-    endBatchExportSession,
+    finishBatchExport,
     dismissBatchExportSummary,
   }
 }

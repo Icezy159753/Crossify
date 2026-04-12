@@ -28,7 +28,7 @@ function openDb(): Promise<IDBDatabase> {
   })
 }
 
-function buildHandleId(source: SourceDatasetSetting) {
+export function buildHandleId(source: SourceDatasetSetting) {
   return source.filePath?.trim()
     ? `path:${source.filePath.trim().toLowerCase()}`
     : `name:${source.fileName.trim().toLowerCase()}`

@@ -79,7 +79,6 @@ const VarItem = memo(function VarItem({
       onDragStart={e => {
         const names = getFolderDragNames(v.name)
         const payload = JSON.stringify(names)
-        console.log('[DragStart]', v.name, 'selected=', selected, 'names=', names, 'payload=', payload)
         e.dataTransfer.effectAllowed = 'move'
         e.dataTransfer.setData(FOLDER_VAR_LIST_MIME, payload)
         e.dataTransfer.setData('text/plain', `${FOLDER_VAR_TEXT_PREFIX}${payload}`)

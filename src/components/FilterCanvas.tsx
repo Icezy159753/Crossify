@@ -411,6 +411,7 @@ export const FilterCanvas = memo(function FilterCanvas({
       <button
         onClick={onGenerate}
         disabled={!canRun}
+        title={!canRun ? 'Add variables to Top or Side in the Design tab first' : undefined}
         className="w-full rounded-xl bg-[#1F4E78] py-2.5 text-sm font-bold text-white shadow transition-colors hover:bg-[#16375a] disabled:cursor-not-allowed disabled:bg-gray-200"
       >
         Run Table

@@ -77,7 +77,7 @@ export interface AllSettings {
   activeLock?: SettingsLockInfo | null
 }
 
-interface VariableOverrideSheetRow {
+export interface VariableOverrideSheetRow {
   variable: string
   setting: string
   key: string
@@ -86,7 +86,7 @@ interface VariableOverrideSheetRow {
   extra2?: string
 }
 
-interface VariableNetSheetRow {
+export interface VariableNetSheetRow {
   variable: string
   setting: string
   value: string
@@ -96,7 +96,7 @@ interface VariableNetSheetRow {
 }
 
 
-function parseScalePresetLabel(value: string) {
+export function parseScalePresetLabel(value: string) {
   const normalized = value.trim()
   if (['1.สร้างTB(Scale น้อยดี)', 'สร้างTB(Scale น้อยดี)', '1.?????TB(Scale ??????)', '?????TB(Scale ??????)'].includes(normalized)) return 'tb_low_good'
   if (['2.สร้างTB(Scale มากดี)', 'สร้างTB(Scale มากดี)', '2.?????TB(Scale ?????)', '?????TB(Scale ?????)'].includes(normalized)) return 'tb_high_good'
@@ -105,7 +105,7 @@ function parseScalePresetLabel(value: string) {
   return ''
 }
 
-function parseScalePresetEntry(value: string) {
+export function parseScalePresetEntry(value: string) {
   const normalized = value.trim()
   if (normalized === '1.Create TB (Low scale = good)' || normalized === 'Create TB (Low scale = good)') return 'tb_low_good'
   if (normalized === '2.Create TB (High scale = good)' || normalized === 'Create TB (High scale = good)') return 'tb_high_good'
@@ -148,7 +148,7 @@ function styleDataRow(row: ExcelJS.Row, even: boolean) {
   })
 }
 
-function buildVariableOverrideRows(variableOverrides: Record<string, unknown>) {
+export function buildVariableOverrideRows(variableOverrides: Record<string, unknown>) {
   const rows: VariableOverrideSheetRow[] = []
   const netRows: VariableNetSheetRow[] = []
 
@@ -234,7 +234,7 @@ function buildVariableOverrideRows(variableOverrides: Record<string, unknown>) {
   return { rows, netRows }
 }
 
-function parseVariableOverrideRows(rows: VariableOverrideSheetRow[], netRows: VariableNetSheetRow[] = []): Record<string, unknown> {
+export function parseVariableOverrideRows(rows: VariableOverrideSheetRow[], netRows: VariableNetSheetRow[] = []): Record<string, unknown> {
   const byVariable = new Map<string, {
     order: Array<{ key: string; rank: number }>
     weights: Record<string, string>
@@ -343,11 +343,11 @@ function readHiddenSettings(ws: ExcelJS.Worksheet): string | null {
   return chunks.length > 0 ? chunks.join('') : null
 }
 
-function isFilterJoin(value: string): value is FilterJoin {
+export function isFilterJoin(value: string): value is FilterJoin {
   return value === 'all' || value === 'any'
 }
 
-function isFilterOperator(value: string): value is FilterOperator {
+export function isFilterOperator(value: string): value is FilterOperator {
   return (
     value === 'in' ||
     value === 'not_in' ||
@@ -363,7 +363,7 @@ function isFilterOperator(value: string): value is FilterOperator {
   )
 }
 
-function summarizeFilterCondition(condition: TableFilterCondition) {
+export function summarizeFilterCondition(condition: TableFilterCondition) {
   if (condition.operator === 'in' || condition.operator === 'not_in') {
     const values = condition.values.join(', ')
     return `${condition.variableName} ${condition.operator === 'in' ? 'in' : 'not in'} [${values}]`
@@ -376,7 +376,7 @@ function summarizeFilterCondition(condition: TableFilterCondition) {
   return `${condition.variableName} ${condition.operator} ${condition.value}`.trim()
 }
 
-function summarizeFilter(filter?: TableFilterSpec) {
+export function summarizeFilter(filter?: TableFilterSpec) {
   if (!filter) return ''
   const description = filter.description.trim()
   if (description) return description
