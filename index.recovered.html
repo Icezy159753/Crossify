@@ -185,6 +185,13 @@
 
           /* The app resets state shortly after reading the file. We wait 800ms then apply our presets. */
           setTimeout(function () {
+            /* Mark as linked after successful settings load so Variable Editor won't reprompt save */
+            if (!window.__cxSettingsWorkbookLinked) {
+              window.__cxSettingsWorkbookLinked = true;
+              if (typeof window.__cxRunPendingSettingsAction === 'function') {
+                try { window.__cxRunPendingSettingsAction(); } catch (e) { }
+              }
+            }
             if (Object.keys(sigSettings).length > 0 && typeof window.__cxSaveSigSettings === 'function') {
               var currSig = window.__cxLoadSigSettings ? window.__cxLoadSigSettings() : {};
               var nextSig = Object.assign({}, currSig, sigSettings);
@@ -2184,6 +2191,10 @@
 
       var _gridPanelEl = null;
       var _gridMembers = [];
+      var _applyPanelEl = null;
+      var _applySourceVarName = null;
+      var _applyFilterQ = '';
+      var _applySelected = Object.create(null);
       function renderGridMembers() { if (!_gbEl) return; var c = document.getElementById('cx-grid-mem-list'); if (!c) return; c.innerHTML = ''; _gridMembers.forEach(function (m, i) { var r = document.createElement('div'); r.style.cssText = 'padding:8px 12px;background:#fff;border:1px solid #e2e8f0;border-radius:8px;display:flex;justify-content:space-between;margin-bottom:6px'; var t = document.createElement('div'); t.innerHTML = '<div style="font-weight:bold;font-size:12px">' + m.name + '</div><div style="font-size:11px;color:#64748b">' + (m.label || '') + '</div>'; var x = document.createElement('button'); x.textContent = '×'; x.style.cssText = 'background:none;border:none;cursor:pointer;font-size:16px;color:#94a3b8'; x.onclick = function () { _gridMembers.splice(i, 1); renderGridMembers(); }; r.appendChild(t); r.appendChild(x); c.appendChild(r); }); if (_gridMembers.length === 0) { c.innerHTML = '<div style="text-align:center;padding:20px;color:#94a3b8;font-size:12px;border:2px dashed #cbd5e1;border-radius:8px">ลากตัวแปรที่มีสเกลเดียวกันมาวางที่นี่</div>'; } else { var vl = _gridMembers[0].valueLabels; if (vl) { var vv = document.createElement('div'); vv.style.cssText = 'margin-top:10px;font-size:10px;color:#64748b;border-top:1px solid #e2e8f0;padding-top:10px'; vv.textContent = "Scale Reference: " + Object.keys(vl).map(k => k + '=' + vl[k]).join(', '); c.appendChild(vv); } } }
       var _tabBarEl = null;
       var _createPanelEl = null;
@@ -2235,7 +2246,7 @@
         return node;
       }
 
-      function openModal(editVarName) {
+      function openModal(editVarName, initTab) {
         if (_modal) return;
         _hook = getDatasetHook();
         if (!_hook) { alert('กรุณาโหลดไฟล์ SPSS ก่อน'); return; }
@@ -2280,6 +2291,12 @@
         if (_allVars.length === 0) { alert('ไม่พบตัวแปรใน Variable Folders'); return; }
         _filterQ = '';
         _editingVarName = editVarName || null;
+        _applySourceVarName = _editingVarName;
+        _applyFilterQ = '';
+        _applySelected = Object.create(null);
+        if (_applySourceVarName) {
+          resetApplySelectionBySimilarity();
+        }
         if (_editingVarName && byName[_editingVarName]) {
           var ev = byName[_editingVarName];
           if (ev.isGridUserCreated && ev.gridRole) {
@@ -2296,11 +2313,11 @@
             _rules = (ev._derivedRules && ev._derivedRules.length > 0)
               ? ev._derivedRules.map(function (r) { return JSON.parse(JSON.stringify(r)); })
               : [{ id: uid(), conditions: [], expression: '', newCode: '1', newLabel: '' }];
-            _activeTab = 'create';
+            _activeTab = initTab || 'create';
           }
         } else {
           _rules = [{ id: uid(), conditions: [], expression: '', newCode: '1', newLabel: '' }];
-          _activeTab = editVarName === '__manage__' ? 'manage' : 'create';
+          _activeTab = initTab || (editVarName === '__manage__' ? 'manage' : 'create');
           _editingVarName = null;
         }
         buildModal();
@@ -2314,8 +2331,11 @@
         _rulesPanelContainer = null;
         _exprTokenToVar = Object.create(null);
         _editingVarName = null;
+        _applySourceVarName = null;
+        _applyFilterQ = '';
+        _applySelected = Object.create(null);
         _activeTab = 'create';
-        _tabBarEl = null; _createPanelEl = null; _managePanelEl = null;
+        _tabBarEl = null; _createPanelEl = null; _managePanelEl = null; _applyPanelEl = null;
       }
       function closePopover() {
         if (_popover) { _popover.remove(); _popover = null; }
@@ -2334,6 +2354,7 @@
       }
       function mkBtn(txt, bg, fg, bdr) {
         var b = document.createElement('button');
+        b.type = 'button';
         b.textContent = txt;
         b.style.cssText = 'padding:9px 20px;border:' + bdr + ';background:' + bg + ';color:' + fg + ';border-radius:10px;cursor:pointer;font-size:13px;font-family:inherit';
         return b;
@@ -2376,6 +2397,10 @@
           _managePanelEl.style.display = tab === 'manage' ? 'flex' : 'none';
           if (tab === 'manage') renderManageList();
         }
+        if (_applyPanelEl) {
+          _applyPanelEl.style.display = tab === 'apply' ? 'flex' : 'none';
+          if (tab === 'apply') renderApplyPanel();
+        }
       }
 
       /* โ•โ• Build Manage Panel โ•โ• */
@@ -2399,7 +2424,9 @@
         container.innerHTML = '';
         var hook = _hook || getDatasetHook();
         if (!hook) { container.innerHTML = '<div style="text-align:center;padding:40px;font-size:13px;color:#94a3b8">ไม่พบข้อมูล</div>'; return; }
-        var vars = (hook.data.variables || []).filter(function (v) { return v._derived === true && v.gridRole !== 'side'; });
+        var vars = (hook.data.variables || []).filter(function (v) {
+          return v && v.name && v._derived === true && v.gridRole !== 'side';
+        });
         if (vars.length === 0) {
           container.innerHTML = '<div style="text-align:center;padding:40px;font-size:13px;color:#94a3b8">ยังไม่มีตัวแปรที่สร้างไว้</div>';
           return;
@@ -2443,6 +2470,16 @@
           editBtn.addEventListener('mouseout', function () { editBtn.style.background = '#eff6ff'; });
           editBtn.addEventListener('click', function () { editCreatedVar(v.name); });
 
+          var applyBtn = document.createElement('button');
+          applyBtn.textContent = 'Apply';
+          applyBtn.style.cssText = 'padding:6px 12px;border:1.5px solid #10b981;background:#ecfdf5;color:#047857;border-radius:8px;cursor:pointer;font-size:11px;font-weight:600;font-family:inherit';
+          applyBtn.addEventListener('mouseover', function () { applyBtn.style.background = '#d1fae5'; });
+          applyBtn.addEventListener('mouseout', function () { applyBtn.style.background = '#ecfdf5'; });
+          applyBtn.addEventListener('click', function () {
+            closeModal();
+            setTimeout(function () { openModal(v.name, 'apply'); }, 50);
+          });
+
           var delBtn = document.createElement('button');
           delBtn.textContent = 'ลบ';
           delBtn.style.cssText = 'padding:6px 14px;border:1.5px solid #fca5a5;background:#fef2f2;color:#dc2626;border-radius:8px;cursor:pointer;font-size:11px;font-weight:600;font-family:inherit';
@@ -2450,10 +2487,334 @@
           delBtn.addEventListener('mouseout', function () { delBtn.style.background = '#fef2f2'; });
           delBtn.addEventListener('click', function () { deleteCreatedVar(v.name); });
 
-          btns.appendChild(editBtn); btns.appendChild(delBtn);
+          btns.appendChild(editBtn); btns.appendChild(applyBtn); btns.appendChild(delBtn);
           row.appendChild(numBadge); row.appendChild(info); row.appendChild(btns);
           container.appendChild(row);
         });
+      }
+
+      function cloneObj(v, fb) { try { return JSON.parse(JSON.stringify(v == null ? fb : v)); } catch (e) { return fb; } }
+      function tryOpenAppVariableEditor(varName) {
+        if (!varName) return false;
+        var rows = document.querySelectorAll('[draggable="true"]');
+        function fiberOfLocal(el) {
+          if (!el) return null;
+          var k = Object.keys(el).find(function (x) { return x.indexOf('__reactFiber') === 0; });
+          return k ? el[k] : null;
+        }
+        for (var i = 0; i < rows.length; i++) {
+          var row = rows[i];
+          var cls = String(row.className || '');
+          if (cls.indexOf('cursor-grab') < 0) continue;
+          var f = fiberOfLocal(row);
+          var depth = 0;
+          while (f && depth < 18) {
+            var p = f.memoizedProps;
+            if (p && typeof p.onOpen === 'function') {
+              try {
+                p.onOpen(varName);
+                return true;
+              } catch (e) { }
+            }
+            f = f.return;
+            depth++;
+          }
+        }
+        return false;
+      }
+      function openApplySourceEditor() {
+        var sourceVar = _applySourceVarName;
+        if (!sourceVar) { alert('ไม่พบตัวแปรต้นทาง'); return; }
+
+        /* Preferred path: open the real React "Edit Variable" modal from app state */
+        closeModal();
+        setTimeout(function () {
+          var opened = tryOpenAppVariableEditor(sourceVar);
+          if (!opened) {
+            /* Fallback to in-modal editor if runtime hook is unavailable */
+            openModal(sourceVar, 'create');
+          }
+        }, 40);
+        return;
+
+        _editingVarName = sourceVar;
+        _activeTab = 'create';
+        switchTab('create');
+
+        var hook = _hook || getDatasetHook();
+        var ev = null;
+        if (hook && hook.data && Array.isArray(hook.data.variables)) {
+          ev = hook.data.variables.find(function (v) { return v && v.name === sourceVar; }) || null;
+        }
+        if (!ev) {
+          ev = _allVars.find(function (v) { return v && v.name === sourceVar; }) || { name: sourceVar, label: '' };
+        }
+
+        if (ev && ev.isGridUserCreated && ev.gridRole) {
+          _activeTab = 'grid';
+          _gridMembers = [];
+          var gm = ev.gridMembers || [];
+          gm.forEach(function (m) {
+            var found = _allVars.find(function (v) { return v.name === m.name; });
+            if (found) _gridMembers.push(found);
+          });
+          _rules = [{ id: uid(), conditions: [], expression: '', newCode: '1', newLabel: '' }];
+          var gridNameEl = document.getElementById('cx-grid-name');
+          var gridLabelEl = document.getElementById('cx-grid-label');
+          if (gridNameEl) { gridNameEl.value = ev.name; gridNameEl.readOnly = true; gridNameEl.style.background = '#f1f5f9'; gridNameEl.style.color = '#64748b'; }
+          if (gridLabelEl) gridLabelEl.value = ev.label || '';
+          renderGridMembers();
+          switchTab('grid');
+          return;
+        }
+
+        _rules = (ev && ev._derivedRules && ev._derivedRules.length > 0)
+          ? ev._derivedRules.map(function (r) { return JSON.parse(JSON.stringify(r)); })
+          : [{ id: uid(), conditions: [], expression: '', newCode: '1', newLabel: '' }];
+
+        var ni = document.getElementById('cx-dv-name');
+        var li = document.getElementById('cx-dv-label');
+        if (ni) {
+          ni.value = (ev && ev.name) || sourceVar;
+          ni.readOnly = true;
+          ni.style.background = '#f1f5f9';
+          ni.style.color = '#64748b';
+        }
+        if (li) li.value = (ev && ev.label) || '';
+
+        var rulesPanel = document.getElementById('cx-rules-panel');
+        if (rulesPanel) {
+          buildRulesPanel(rulesPanel);
+        } else {
+          setTimeout(function () {
+            var rp = document.getElementById('cx-rules-panel');
+            if (rp) buildRulesPanel(rp);
+          }, 0);
+        }
+      }
+      function getAllApplyVars() {
+        var hook = _hook || getDatasetHook();
+        var all = (hook && hook.data && hook.data.variables) ? hook.data.variables : [];
+        return all.filter(function (v) {
+          if (!v || !v.name) return false;
+          if (v.gridRole === 'side') return false;
+          if (v.isString && Object.keys(v.valueLabels || {}).length === 0) return false;
+          return true;
+        }).map(function (v) {
+          var next = Object.assign({}, v);
+          next.displayName = resolveVarDisplayName(v);
+          return next;
+        });
+      }
+      function varSignature(v) {
+        var vl = (v && v.valueLabels && typeof v.valueLabels === 'object') ? v.valueLabels : {};
+        var keys = Object.keys(vl).sort(function (a, b) {
+          var na = Number(a), nb = Number(b);
+          if (Number.isFinite(na) && Number.isFinite(nb)) return na - nb;
+          return String(a).localeCompare(String(b));
+        });
+        if (keys.length === 0) return '';
+        var parts = [];
+        for (var i = 0; i < keys.length; i++) {
+          var k = String(keys[i]);
+          parts.push(k + '::' + String(vl[k]));
+        }
+        return parts.join('||');
+      }
+      function getSimilarTargets(sourceName) {
+        var all = getAllApplyVars();
+        var src = all.find(function (v) { return v.name === sourceName; });
+        if (!src) return [];
+        var sig = varSignature(src);
+        if (!sig) return [];
+        return all.filter(function (v) {
+          if (!v || !v.name || v.name === sourceName) return false;
+          return varSignature(v) === sig;
+        });
+      }
+      function resetApplySelectionBySimilarity() {
+        _applySelected = Object.create(null);
+        var sim = getSimilarTargets(_applySourceVarName);
+        sim.forEach(function (v) { _applySelected[v.name] = true; });
+      }
+      function renderApplyPanel() {
+        var srcList = document.getElementById('cx-apply-source-list');
+        var tgtList = document.getElementById('cx-apply-target-list');
+        var stat = document.getElementById('cx-apply-stat');
+        var srcNameEl = document.getElementById('cx-apply-source-name');
+        if (!srcList || !tgtList || !stat || !srcNameEl) return;
+
+        var all = getAllApplyVars();
+        if (!_applySourceVarName && all.length > 0) _applySourceVarName = all[0].name;
+        var src = all.find(function (v) { return v.name === _applySourceVarName; }) || null;
+        srcNameEl.textContent = src
+          ? ((src.displayName || src.name) + (src.displayName && src.displayName !== src.name ? ' [' + src.name + ']' : '') + (src.label ? ' — ' + src.label : ''))
+          : '-';
+
+        var q = String(_applyFilterQ || '').trim().toLowerCase();
+        var filteredSource = all.filter(function (v) {
+          if (!q) return true;
+          return String(v.name || '').toLowerCase().indexOf(q) > -1 || String(v.label || '').toLowerCase().indexOf(q) > -1;
+        });
+        srcList.innerHTML = '';
+        filteredSource.forEach(function (v) {
+          var active = v.name === _applySourceVarName;
+          var row = document.createElement('button');
+          row.type = 'button';
+          row.style.cssText = 'width:100%;display:flex;align-items:flex-start;gap:7px;padding:7px 8px;border-radius:8px;border:1px solid ' + (active ? '#93c5fd' : 'transparent') + ';background:' + (active ? '#eff6ff' : '#fff') + ';cursor:pointer;text-align:left';
+          var badge = document.createElement('span');
+          badge.style.cssText = badgeStyle(v) + ';margin-top:2px';
+          badge.textContent = varBadge(v).label;
+          var txt = document.createElement('div');
+          txt.style.cssText = 'min-width:0;flex:1';
+          var nm = document.createElement('div');
+          nm.style.cssText = 'font-size:12px;font-weight:700;color:#1e293b;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+          nm.textContent = v.displayName || v.name;
+          var lb = document.createElement('div');
+          lb.style.cssText = 'font-size:10px;color:#64748b;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+          lb.textContent = (v.displayName && v.displayName !== v.name ? v.name + ' • ' : '') + (v.label || v.longName || '');
+          txt.appendChild(nm); txt.appendChild(lb);
+          row.appendChild(badge); row.appendChild(txt);
+          row.addEventListener('click', function () {
+            _applySourceVarName = v.name;
+            resetApplySelectionBySimilarity();
+            renderApplyPanel();
+          });
+          row.addEventListener('dblclick', function (e) {
+            e.preventDefault();
+            e.stopPropagation();
+            closeModal();
+            setTimeout(function () { openModal(v.name, 'create'); }, 50);
+          });
+          row.title = 'คลิกเลือกต้นทาง / ดับเบิ้ลคลิกเพื่อแก้ไขตัวแปร';
+          srcList.appendChild(row);
+        });
+        if (filteredSource.length === 0) srcList.innerHTML = '<div style="padding:18px;text-align:center;color:#94a3b8;font-size:12px">ไม่พบตัวแปร</div>';
+
+        var similar = getSimilarTargets(_applySourceVarName);
+        tgtList.innerHTML = '';
+        if (similar.length === 0) {
+          tgtList.innerHTML = '<div style="padding:18px;text-align:center;color:#94a3b8;font-size:12px">ไม่พบตัวแปรที่มี Code/Label เหมือนกัน</div>';
+        } else {
+          similar.forEach(function (v) {
+            var on = !!_applySelected[v.name];
+            var row = document.createElement('button');
+            row.type = 'button';
+            row.style.cssText = 'width:100%;display:flex;align-items:center;gap:8px;padding:8px 10px;border:none;border-radius:8px;cursor:pointer;text-align:left;background:' + (on ? '#1f4e78' : '#fff') + ';color:' + (on ? '#fff' : '#374151');
+            row.innerHTML = '<span style="width:14px;height:14px;border-radius:4px;border:1px solid ' + (on ? '#fff' : '#cbd5e1') + ';display:inline-flex;align-items:center;justify-content:center;font-size:10px;">' + (on ? '✓' : '') + '</span>'
+              + '<span style="font-size:12px;font-weight:600">' + (v.displayName || v.name) + '</span>'
+              + '<span style="font-size:10px;opacity:0.75;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + (v.label || '') + '</span>';
+            row.addEventListener('click', function () {
+              _applySelected[v.name] = !_applySelected[v.name];
+              renderApplyPanel();
+            });
+            tgtList.appendChild(row);
+          });
+        }
+        var selectedCount = Object.keys(_applySelected).filter(function (k) { return _applySelected[k]; }).length;
+        stat.textContent = 'เลือกแล้ว ' + selectedCount + '/' + similar.length;
+      }
+      function applyNetT2BToSelected() {
+        if (!_applySourceVarName) { alert('ไม่พบตัวแปรต้นทาง'); return; }
+        var targets = Object.keys(_applySelected).filter(function (k) { return _applySelected[k]; });
+        if (targets.length === 0) { alert('กรุณาเลือกตัวแปรปลายทาง'); return; }
+        var ov = (window.__cxVariableOverrides && typeof window.__cxVariableOverrides === 'object')
+          ? window.__cxVariableOverrides
+          : {};
+        var src = ov[_applySourceVarName] || {};
+        var srcNet = cloneObj(src.netGroups || src.groups || [], []);
+        var srcSumm = cloneObj(src.customSummaries || src.summaries || [], []);
+        var srcPreset = (typeof src.summaryPreset === 'string') ? src.summaryPreset : '';
+        targets.forEach(function (name) {
+          var base = ov[name] && typeof ov[name] === 'object' ? ov[name] : {};
+          if (srcNet.length) { base.netGroups = cloneObj(srcNet, []); base.groups = cloneObj(srcNet, []); }
+          if (srcSumm.length) { base.customSummaries = cloneObj(srcSumm, []); base.summaries = cloneObj(srcSumm, []); }
+          if (srcPreset) base.summaryPreset = srcPreset;
+          ov[name] = base;
+        });
+        window.__cxVariableOverrides = ov;
+
+        if (typeof window.__cxGetTbPresetStore === 'function' && typeof window.__cxSetTbPresetStore === 'function') {
+          var tb = window.__cxGetTbPresetStore() || {};
+          var srcTb = tb[_applySourceVarName];
+          if (srcTb && typeof srcTb === 'object') {
+            targets.forEach(function (name) { tb[name] = cloneObj(srcTb, {}); });
+            window.__cxSetTbPresetStore(tb);
+          }
+        }
+        var t = document.createElement('div');
+        t.style.cssText = 'position:fixed;bottom:24px;left:50%;transform:translateX(-50%);z-index:2147483647;background:#166534;color:#fff;padding:9px 22px;border-radius:20px;font-size:12px;font-family:inherit;box-shadow:0 4px 20px rgba(0,0,0,0.2)';
+        t.textContent = 'Apply Net/T2B จาก ' + _applySourceVarName + ' ไป ' + targets.length + ' ตัวแปรแล้ว';
+        document.body.appendChild(t);
+        setTimeout(function () { t.remove(); }, 2800);
+      }
+      function buildApplyPanel() {
+        var panel = document.createElement('div');
+        panel.style.cssText = 'flex:1;min-height:0;display:flex;flex-direction:column;overflow:hidden';
+        var head = document.createElement('div');
+        head.style.cssText = 'padding:14px 22px;border-bottom:1px solid #f1f5f9;background:#fafafa;display:flex;align-items:center;justify-content:space-between;gap:10px';
+        var left = document.createElement('div');
+        left.innerHTML = '<div style="font-size:13px;font-weight:700;color:#374151">Apply Net / T2B หลายตัวแปร</div>'
+          + '<div id="cx-apply-source-name" style="font-size:11px;color:#94a3b8;margin-top:2px">ต้นทาง: -</div>';
+        var stat = document.createElement('div');
+        stat.id = 'cx-apply-stat';
+        stat.style.cssText = 'font-size:11px;color:#64748b;font-weight:600';
+        head.appendChild(left); head.appendChild(stat);
+
+        var body = document.createElement('div');
+        body.style.cssText = 'padding:12px 22px;display:flex;flex-direction:column;gap:8px;min-height:0;flex:1';
+        var search = mkInput('ค้นหาตัวแปร...', 'text');
+        search.addEventListener('input', function () { _applyFilterQ = search.value || ''; renderApplyPanel(); });
+        var cols = document.createElement('div');
+        cols.style.cssText = 'display:grid;grid-template-columns:1fr 1fr;gap:10px;min-height:0;flex:1';
+        var srcCol = document.createElement('div');
+        srcCol.style.cssText = 'display:flex;flex-direction:column;min-height:0;gap:6px';
+        var srcT = document.createElement('div');
+        srcT.style.cssText = 'font-size:11px;font-weight:700;color:#475569';
+        srcT.textContent = 'ตัวแปรต้นทาง (SA/MA)';
+        var srcList = document.createElement('div');
+        srcList.id = 'cx-apply-source-list';
+        srcList.style.cssText = 'flex:1;min-height:0;overflow:auto;border:1px solid #e2e8f0;border-radius:10px;padding:6px;display:flex;flex-direction:column;gap:4px;background:#f8fafc';
+        srcCol.appendChild(srcT); srcCol.appendChild(srcList);
+        var tgtCol = document.createElement('div');
+        tgtCol.style.cssText = 'display:flex;flex-direction:column;min-height:0;gap:6px';
+        var tgtT = document.createElement('div');
+        tgtT.style.cssText = 'font-size:11px;font-weight:700;color:#475569';
+        tgtT.textContent = 'ตัวแปรปลายทาง (Code + Label เหมือนกัน)';
+        var tgtList = document.createElement('div');
+        tgtList.id = 'cx-apply-target-list';
+        tgtList.style.cssText = 'flex:1;min-height:0;overflow:auto;border:1px solid #e2e8f0;border-radius:10px;padding:6px;display:flex;flex-direction:column;gap:4px';
+        tgtCol.appendChild(tgtT); tgtCol.appendChild(tgtList);
+        cols.appendChild(srcCol); cols.appendChild(tgtCol);
+        body.appendChild(search); body.appendChild(cols);
+
+        var foot = document.createElement('div');
+        foot.style.cssText = 'padding:12px 22px;border-top:1px solid #f1f5f9;background:#fafafa;display:flex;justify-content:space-between;align-items:center';
+        var hint = document.createElement('div');
+        hint.style.cssText = 'font-size:11px;color:#94a3b8';
+        hint.textContent = 'Apply เฉพาะ Net Groups + TB/T2B preset/summaries';
+        var actions = document.createElement('div');
+        actions.style.cssText = 'display:flex;gap:8px';
+        var editSrc = mkBtn('แก้ไขต้นทาง', '#fff', '#1f4e78', '1px solid #bfdbfe');
+        editSrc.title = 'เปิดหน้าแก้ไขตัวแปรต้นทาง';
+        editSrc.addEventListener('click', function () {
+          openApplySourceEditor();
+        });
+        var selAll = mkBtn('Select all', '#fff', '#1f4e78', '1px solid #bfdbfe');
+        selAll.addEventListener('click', function () {
+          getSimilarTargets(_applySourceVarName).forEach(function (v) { _applySelected[v.name] = true; });
+          renderApplyPanel();
+        });
+        var clear = mkBtn('Clear', '#fff', '#6b7280', '1px solid #e5e7eb');
+        clear.addEventListener('click', function () { _applySelected = Object.create(null); renderApplyPanel(); });
+        var apply = mkBtn('Apply', '#059669', '#fff', 'none');
+        apply.style.fontWeight = '700';
+        apply.addEventListener('click', applyNetT2BToSelected);
+        actions.appendChild(editSrc); actions.appendChild(selAll); actions.appendChild(clear); actions.appendChild(apply);
+        foot.appendChild(hint); foot.appendChild(actions);
+
+        panel.appendChild(head); panel.appendChild(body); panel.appendChild(foot);
+        return panel;
       }
 
       function editCreatedVar(varName) {
@@ -2548,6 +2909,7 @@
         tabBar.appendChild(mkTab('สร้างใหม่', 'create'));
         tabBar.appendChild(mkTab('สร้าง Grid', 'grid'));
         tabBar.appendChild(mkTab('ตัวแปรที่สร้างแล้ว', 'manage'));
+        tabBar.appendChild(mkTab('Apply Net/T2B', 'apply'));
 
         /* create panel wrapper */
         var createPanel = document.createElement('div');
@@ -2621,6 +2983,7 @@
             isString: false, isGroupedMA: false,
             valueLabels: topValueLabels,
             isGridUserCreated: true, gridRole: 'top',
+            hideTotal: htChecked,
             gridMembers: membersList,
             gridScaleLabels: scaleLabels,
             gridPairName: vn + '_SIDE',
@@ -2634,6 +2997,7 @@
             isString: false, isGroupedMA: false,
             valueLabels: scaleLabels,
             isGridUserCreated: true, gridRole: 'side',
+            hideTotal: htChecked,
             gridMembers: membersList,
             gridScaleLabels: scaleLabels,
             gridPairName: topName,
@@ -2707,7 +3071,21 @@
         var gnw = fieldWrap('ชื่อตัวแปร Grid'); gnw.appendChild(gni);
         var gli = mkInput('คำอธิบายตัวแปร (Grid Label)', 'text'); gli.id = 'cx-grid-label';
         var glw = fieldWrap('คำอธิบาย (LABEL)'); glw.style.flex = '2'; glw.appendChild(gli);
-        gm.appendChild(gnw); gm.appendChild(glw);
+        var ghw = fieldWrap('OPTIONS');
+        ghw.style.flex = '0 0 170px';
+        ghw.style.justifyContent = 'flex-end';
+        var hideWrap = document.createElement('label');
+        hideWrap.style.cssText = 'display:flex;align-items:center;gap:7px;font-size:12px;color:#334155;cursor:pointer;height:34px;user-select:none';
+        var hideInput = document.createElement('input');
+        hideInput.type = 'checkbox';
+        hideInput.id = 'cx-grid-hide-total';
+        hideInput.style.cssText = 'width:15px;height:15px;accent-color:#2563eb;cursor:pointer';
+        var hideTxt = document.createElement('span');
+        hideTxt.textContent = 'Hide Total';
+        hideWrap.appendChild(hideInput);
+        hideWrap.appendChild(hideTxt);
+        ghw.appendChild(hideWrap);
+        gm.appendChild(gnw); gm.appendChild(glw); gm.appendChild(ghw);
         _gmEl = gm;
         createPanel.appendChild(gm); // attach right next to meta
 
@@ -2726,8 +3104,11 @@
         var managePanel = buildManagePanel();
         managePanel.style.display = 'none';
         _managePanelEl = managePanel;
+        var applyPanel = buildApplyPanel();
+        applyPanel.style.display = 'none';
+        _applyPanelEl = applyPanel;
 
-        box.appendChild(tb); box.appendChild(tabBar); box.appendChild(createPanel); box.appendChild(managePanel); box.appendChild(footer); box.appendChild(gridFooter);
+        box.appendChild(tb); box.appendChild(tabBar); box.appendChild(createPanel); box.appendChild(managePanel); box.appendChild(applyPanel); box.appendChild(footer); box.appendChild(gridFooter);
         bd.appendChild(box); document.body.appendChild(bd);
         _modal = bd;
 
@@ -2742,8 +3123,14 @@
                 /* Pre-fill Grid tab */
                 var gridNameEl = document.getElementById('cx-grid-name');
                 var gridLabelEl = document.getElementById('cx-grid-label');
+                var gridHideTotalEl = document.getElementById('cx-grid-hide-total');
                 if (gridNameEl) { gridNameEl.value = ev.name; gridNameEl.readOnly = true; gridNameEl.style.background = '#f1f5f9'; gridNameEl.style.color = '#64748b'; }
                 if (gridLabelEl) gridLabelEl.value = ev.label || '';
+                if (gridHideTotalEl) {
+                  var htMap = window.__cxHideTotalVars || {};
+                  var hideFromMap = htMap[ev.name] === true || (ev.label && htMap[ev.label] === true);
+                  gridHideTotalEl.checked = (ev.hideTotal === true) || hideFromMap;
+                }
                 renderGridMembers();
               } else {
                 ni.value = ev.name;
@@ -3294,7 +3681,24 @@
         };
       }
 
+      function cxReadLegacyTbPresets() {
+        try {
+          var raw = localStorage.getItem(LS_KEY);
+          if (!raw) return {};
+          var parsed = JSON.parse(raw);
+          return (parsed && typeof parsed === 'object') ? parsed : {};
+        } catch (e) {
+          return {};
+        }
+      }
+
       window.__cxGlobalSettingsState = cxNormalizeGlobalSettings(window.__cxGlobalSettingsState);
+      if (!window.__cxGlobalSettingsState.tbPresets || Object.keys(window.__cxGlobalSettingsState.tbPresets).length === 0) {
+        var _legacyTb = cxReadLegacyTbPresets();
+        if (_legacyTb && Object.keys(_legacyTb).length > 0) {
+          window.__cxGlobalSettingsState.tbPresets = cxCloneJson(_legacyTb, {}) || {};
+        }
+      }
 
       function cxFindFiber(el) {
         if (!el) return null;
@@ -3338,7 +3742,17 @@
         if (!ov) return null;
         if (ov[GLOBAL_SETTINGS_KEY] && typeof ov[GLOBAL_SETTINGS_KEY] === 'object') {
           window.__cxGlobalSettingsState = cxNormalizeGlobalSettings(ov[GLOBAL_SETTINGS_KEY]);
+          if (!window.__cxGlobalSettingsState.tbPresets || Object.keys(window.__cxGlobalSettingsState.tbPresets).length === 0) {
+            var legacyA = cxReadLegacyTbPresets();
+            if (legacyA && Object.keys(legacyA).length > 0) {
+              window.__cxGlobalSettingsState.tbPresets = cxCloneJson(legacyA, {}) || {};
+              ov[GLOBAL_SETTINGS_KEY] = cxCloneJson(window.__cxGlobalSettingsState, { tbPresets: {}, sigSettings: { enabled: false, level: 95, sigLetters: '' } });
+            }
+          }
         } else {
+          var fallbackTb = (window.__cxGlobalSettingsState && window.__cxGlobalSettingsState.tbPresets) || {};
+          if (!fallbackTb || Object.keys(fallbackTb).length === 0) fallbackTb = cxReadLegacyTbPresets();
+          window.__cxGlobalSettingsState.tbPresets = cxCloneJson(fallbackTb, {}) || {};
           ov[GLOBAL_SETTINGS_KEY] = cxCloneJson(window.__cxGlobalSettingsState, { tbPresets: {}, sigSettings: { enabled: false, level: 95, sigLetters: '' } });
         }
         window.__cxVariableOverrides = ov;

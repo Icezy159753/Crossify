@@ -463,6 +463,9 @@ export default function App() {
   const [loadedSettingsName, setLoadedSettingsName] = useState<string | null>(null)
   const [settingsLockReleased, setSettingsLockReleased] = useState(false)
   const [gridHideTotalVars, setGridHideTotalVars] = useState<Set<string>>(new Set())
+  const [applyToVarNames, setApplyToVarNames] = useState<string[]>([])
+  const [variableEditorTab, setVariableEditorTab] = useState<'edit' | 'apply'>('edit')
+  const [applyVarSearch, setApplyVarSearch] = useState('')
 
   // Folders
   const [folders, setFolders] = useState<FolderDef[]>([])
@@ -1363,6 +1366,26 @@ export default function App() {
     if (activeTableId) runTable(activeTableId)
   }, [activeTableId, runTable])
 
+  const activeResult = activeTable?.result ?? null
+
+  const activeHideTotal = useMemo(() => {
+    const checkName = (name: string | null | undefined) => {
+      if (!name) return false
+      if (gridHideTotalVars.has(name)) return true
+      if (!dataset) return false
+      const v = dataset.variables.find(vv => vv.name === name || (vv as Record<string, unknown>)['longName'] === name) as Record<string, unknown> | undefined
+      return !!(v && v['isGridUserCreated'] && v['hideTotal'])
+    }
+    if (activeResult) {
+      return checkName(activeResult.rowVar) || checkName(activeResult.colVar)
+    }
+    if (!activeTable) return false
+    return flattenAxisSpec(parseAxisSpec(activeTable.rowVar)).some(checkName) ||
+           flattenAxisSpec(parseAxisSpec(activeTable.colVar)).some(checkName)
+  }, [dataset, activeTable, activeResult, gridHideTotalVars])
+
+  const activeConfig = useMemo(() => ({ ...settings, hideTotal: activeHideTotal }), [settings, activeHideTotal])
+
   const handleExportTable = useCallback(async () => {
     if (!activeTable?.result || !dataset) return
     setExporting(true)
@@ -1557,6 +1580,9 @@ export default function App() {
     setSelectedVariableRowKeys([])
     setLastSelectedVariableIndex(null)
     setEditingVariableName(name)
+    setVariableEditorTab('edit')
+    setApplyVarSearch('')
+    setApplyToVarNames([])
   }, [variableCatalog, dataset, variableOverrides])
 
   const saveVariableEditor = useCallback((name: string, rows: VariableEditorRow[]) => {
@@ -1584,8 +1610,49 @@ export default function App() {
         summaryPreset: selectedScalePreset ?? undefined,
       },
     }))
+    setApplyToVarNames([])
     setEditingVariableName(null)
   }, [selectedNumericStats, variableGroups, selectedScalePreset])
+
+  const similarVarNames = useMemo(() => {
+    if (!editingVariableName || !variableCatalog) return []
+    return variableCatalog.list
+      .filter(item => {
+        if (item.name === editingVariableName) return false
+        return !item.isString || Object.keys(item.valueLabels ?? {}).length > 0
+      })
+      .map(item => item.name)
+  }, [editingVariableName, variableCatalog])
+
+  const filteredSimilarVarNames = useMemo(() => {
+    if (!applyVarSearch.trim()) return similarVarNames
+    const q = applyVarSearch.trim().toLowerCase()
+    return similarVarNames.filter(vn => {
+      if (vn.toLowerCase().includes(q)) return true
+      const item = variableCatalog?.byName.get(vn)
+      return !!(item?.label?.toLowerCase().includes(q) || item?.longName?.toLowerCase().includes(q))
+    })
+  }, [similarVarNames, applyVarSearch, variableCatalog])
+
+  const saveAndApplyToVars = useCallback((targetNames: string[]) => {
+    const summaryRows = variableEditorRows
+      .filter(r => r.rowKind === 'summary')
+      .map(r => ({ code: r.code, label: r.label, members: r.members ?? [] }))
+    setVariableOverrides(prev => {
+      const next = { ...prev }
+      for (const tName of targetNames) {
+        const existing = prev[tName] ?? {}
+        next[tName] = {
+          ...existing,
+          groups: variableGroups,
+          summaries: summaryRows,
+          numericStats: selectedNumericStats,
+          summaryPreset: selectedScalePreset ?? undefined,
+        }
+      }
+      return next
+    })
+  }, [variableEditorRows, variableGroups, selectedNumericStats, selectedScalePreset])
 
   const toggleCodeSort = useCallback(() => {
     setCodeSortDirection(prev => prev === 'asc' ? 'desc' : 'asc')
@@ -1769,29 +1836,6 @@ export default function App() {
   }, [activeTableId, applyFilterToEditingTables, createTablesFromVariables, selectedVariableNames, variableCatalog])
 
   // โ”€โ”€ Return JSX โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€
-
-  const activeResult = activeTable?.result ?? null
-
-  // Derive hideTotal: true if any variable in the active result has hideTotal set
-  const activeHideTotal = useMemo(() => {
-    const checkName = (name: string | null | undefined) => {
-      if (!name) return false
-      if (gridHideTotalVars.has(name)) return true
-      if (!dataset) return false
-      const v = dataset.variables.find(vv => vv.name === name || (vv as Record<string, unknown>)['longName'] === name) as Record<string, unknown> | undefined
-      return !!(v && v['isGridUserCreated'] && v['hideTotal'])
-    }
-    // Check from result (most reliable — actual variable names used in computation)
-    if (activeResult) {
-      return checkName(activeResult.rowVar) || checkName(activeResult.colVar)
-    }
-    // Fallback: check from table axis spec before result is available
-    if (!activeTable) return false
-    return flattenAxisSpec(parseAxisSpec(activeTable.rowVar)).some(checkName) ||
-           flattenAxisSpec(parseAxisSpec(activeTable.colVar)).some(checkName)
-  }, [dataset, activeTable, activeResult, gridHideTotalVars])
-
-  const activeConfig = useMemo(() => ({ ...settings, hideTotal: activeHideTotal }), [settings, activeHideTotal])
 
   const getFilterSummary = (table: TableDef): string | null => {
     if (!hasActiveFilter(table.filter)) return null
@@ -2613,8 +2657,8 @@ export default function App() {
       {/* Variable editor modal */}
       {editingVariableName && editingVariableItem && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/35 p-4">
-          <div className="w-full max-w-4xl max-h-[85vh] overflow-hidden rounded-2xl bg-white shadow-2xl border border-gray-200">
-            <div className="flex items-center justify-between px-5 py-3 border-b border-gray-200 bg-gray-50">
+          <div className="w-full max-w-4xl max-h-[85vh] overflow-hidden rounded-2xl bg-white shadow-2xl border border-gray-200 flex flex-col">
+            <div className="flex items-center justify-between px-5 py-3 border-b border-gray-200 bg-gray-50 flex-shrink-0">
               <div>
                 <h3 className="text-sm font-bold text-gray-800">Edit Variable - {editingVariableName}</h3>
                 <p className="text-xs text-gray-500">{editingVariableItem.label || editingVariableItem.longName || editingVariableItem.name}</p>
@@ -2627,7 +2671,28 @@ export default function App() {
               </button>
             </div>
 
-            <div className="px-5 py-4 overflow-auto max-h-[calc(85vh-64px)] space-y-4">
+            {/* Tab bar */}
+            <div className="flex border-b border-gray-200 bg-white px-5 flex-shrink-0">
+              <button
+                onClick={() => setVariableEditorTab('edit')}
+                className={`px-4 py-2.5 text-xs font-semibold border-b-2 transition-colors ${variableEditorTab === 'edit' ? 'border-[#2E75B6] text-[#2E75B6]' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
+              >
+                แก้ไขตัวแปร
+              </button>
+              <button
+                onClick={() => setVariableEditorTab('apply')}
+                className={`flex items-center gap-1.5 px-4 py-2.5 text-xs font-semibold border-b-2 transition-colors ${variableEditorTab === 'apply' ? 'border-[#2E75B6] text-[#2E75B6]' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
+              >
+                Apply Net / T2B
+                {applyToVarNames.length > 0 && (
+                  <span className="rounded-full bg-[#2E75B6] px-1.5 py-0.5 text-[10px] text-white leading-none">{applyToVarNames.length}</span>
+                )}
+              </button>
+            </div>
+
+            {/* Edit tab */}
+            {variableEditorTab === 'edit' && (
+            <div className="px-5 py-4 overflow-auto flex-1 min-h-0 space-y-4">
               <div className="grid grid-cols-[1fr_auto] gap-4 items-start">
                 <div className="border border-gray-200 rounded-xl overflow-auto max-h-[62vh]">
                   <table className="w-full text-xs select-none">
@@ -2850,13 +2915,21 @@ export default function App() {
                 </div>
               </div>
 
-              <div className="flex items-center justify-end gap-2">
+              <div className="flex items-center justify-end gap-2 pt-2 border-t border-gray-100 mt-2">
                 <button
-                  onClick={() => setEditingVariableName(null)}
+                  onClick={() => { setApplyToVarNames([]); setEditingVariableName(null) }}
                   className="px-3 py-1.5 rounded-lg border border-gray-200 text-sm text-gray-600 hover:bg-gray-50"
                 >
                   Cancel
                 </button>
+                {applyToVarNames.length > 0 && (
+                  <button
+                    onClick={() => setVariableEditorTab('apply')}
+                    className="px-3 py-1.5 rounded-lg border border-[#2E75B6] text-sm font-semibold text-[#2E75B6] hover:bg-blue-50"
+                  >
+                    Apply to {applyToVarNames.length} var{applyToVarNames.length > 1 ? 's' : ''}
+                  </button>
+                )}
                 <button
                   onClick={() => saveVariableEditor(editingVariableName, variableEditorRows)}
                   className="px-3 py-1.5 rounded-lg bg-[#1F4E78] text-white text-sm font-semibold hover:bg-[#173b5c]"
@@ -2865,6 +2938,108 @@ export default function App() {
                 </button>
               </div>
             </div>
+            )} {/* end Edit tab */}
+
+            {/* Apply Net/T2B tab */}
+            {variableEditorTab === 'apply' && (
+              <div className="flex flex-col flex-1 min-h-0">
+                <div className="px-5 py-4 overflow-auto flex-1 min-h-0">
+                  <div className="grid grid-cols-2 gap-4 h-full">
+                    {/* Left — variable checklist */}
+                    <div className="flex flex-col min-h-0">
+                      <input
+                        type="text"
+                        value={applyVarSearch}
+                        onChange={e => setApplyVarSearch(e.target.value)}
+                        placeholder="ค้นหาตัวแปร..."
+                        className="mb-2 w-full rounded-lg border border-gray-200 px-3 py-1.5 text-xs outline-none focus:ring-1 focus:ring-blue-300"
+                      />
+                      <div className="mb-2 flex items-center justify-between">
+                        <span className="text-xs font-semibold text-gray-600">เลือกแล้ว {applyToVarNames.length}/{similarVarNames.length}</span>
+                        <div className="flex gap-2">
+                          <button onClick={() => setApplyToVarNames(filteredSimilarVarNames)} className="text-xs text-blue-600 hover:underline">Select all</button>
+                          <span className="text-xs text-gray-300">|</span>
+                          <button onClick={() => setApplyToVarNames([])} className="text-xs text-gray-500 hover:underline">Clear</button>
+                        </div>
+                      </div>
+                      <div className="flex-1 overflow-auto rounded-xl border border-gray-200 p-1 space-y-0.5" style={{ maxHeight: '50vh' }}>
+                        {filteredSimilarVarNames.length === 0 && (
+                          <p className="px-3 py-4 text-center text-xs text-gray-400">ไม่พบตัวแปร</p>
+                        )}
+                        {filteredSimilarVarNames.map(vn => {
+                          const checked = applyToVarNames.includes(vn)
+                          const varItem = variableCatalog?.byName.get(vn)
+                          return (
+                            <button
+                              key={vn}
+                              onClick={() => setApplyToVarNames(prev => prev.includes(vn) ? prev.filter(n => n !== vn) : [...prev, vn])}
+                              className={`flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-xs transition-colors ${checked ? 'bg-[#1F4E78] text-white' : 'text-gray-700 hover:bg-gray-100'}`}
+                            >
+                              <span className={`inline-flex h-4 w-4 flex-shrink-0 items-center justify-center rounded border text-[10px] font-bold ${checked ? 'border-white bg-white text-[#1F4E78]' : 'border-gray-300 bg-white text-transparent'}`}>✓</span>
+                              <span className="font-medium">{vn}</span>
+                              {varItem && <span className={`truncate text-[10px] ${checked ? 'text-blue-200' : 'text-gray-400'}`}>{varItem.label || varItem.longName || ''}</span>}
+                            </button>
+                          )
+                        })}
+                      </div>
+                    </div>
+                    {/* Right — what will be applied */}
+                    <div>
+                      <div className="mb-2 text-xs font-semibold text-gray-700">สิ่งที่จะ Apply ไปยังตัวแปรที่เลือก</div>
+                      <div className="rounded-xl border border-gray-200 bg-gray-50 p-4 space-y-3">
+                        {variableGroups.length === 0 && !selectedScalePreset && variableEditorRows.filter(r => r.rowKind === 'summary').length === 0 && (
+                          <p className="text-xs text-gray-400">ยังไม่มีการตั้งค่า — กลับ tab "แก้ไขตัวแปร" เพื่อสร้าง Net Groups หรือ Scale Preset ก่อน</p>
+                        )}
+                        {variableGroups.length > 0 && (
+                          <div>
+                            <div className="mb-1.5 text-[11px] font-semibold text-emerald-700">Net Groups ({variableGroups.length})</div>
+                            <div className="space-y-1.5">
+                              {variableGroups.map(group => (
+                                <div key={group.id} className="rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 py-1.5">
+                                  <div className="text-[11px] font-semibold text-emerald-800">{getNetPrefix(getGroupDepth(group, variableGroups))}{group.name}</div>
+                                  <div className="mt-0.5 text-[10px] text-emerald-700">{group.members.join(', ')}</div>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                        {selectedScalePreset && (
+                          <div>
+                            <div className="mb-1 text-[11px] font-semibold text-blue-700">Scale Preset</div>
+                            <div className="rounded-lg border border-blue-200 bg-blue-50 px-2.5 py-1.5 text-[11px] text-blue-800">{getScalePresetDisplayLabel(selectedScalePreset)}</div>
+                          </div>
+                        )}
+                        {variableEditorRows.filter(r => r.rowKind === 'summary').length > 0 && (
+                          <div>
+                            <div className="mb-1 text-[11px] font-semibold text-amber-700">TB/T2B Summaries</div>
+                            <div className="space-y-1">
+                              {variableEditorRows.filter(r => r.rowKind === 'summary').map(r => (
+                                <div key={r.key} className="rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1 text-[11px] text-amber-800">{r.label}</div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                      <p className="mt-2 text-[11px] text-gray-400">* Apply คัดลอก Net Groups, Scale Preset และ TB/T2B เท่านั้น — ไม่แตะ label/order/factor ของตัวแปรปลายทาง</p>
+                    </div>
+                  </div>
+                </div>
+                <div className="flex-shrink-0 border-t border-gray-200 bg-white px-5 py-3 flex items-center justify-between">
+                  <span className="text-xs text-gray-500">{applyToVarNames.length > 0 ? `เลือก ${applyToVarNames.length} ตัวแปร` : 'ยังไม่ได้เลือกตัวแปร'}</span>
+                  <div className="flex items-center gap-2">
+                    <button onClick={() => setVariableEditorTab('edit')} className="px-3 py-1.5 rounded-lg border border-gray-200 text-sm text-gray-600 hover:bg-gray-50">← กลับแก้ไข</button>
+                    <button
+                      disabled={applyToVarNames.length === 0}
+                      onClick={() => { saveAndApplyToVars(applyToVarNames); saveVariableEditor(editingVariableName, variableEditorRows) }}
+                      className="px-4 py-1.5 rounded-lg bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700 disabled:opacity-40 disabled:cursor-not-allowed"
+                    >
+                      Apply ตัวแปร ({applyToVarNames.length})
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
             {variableContextMenu && (
               <div
                 className="fixed z-[60] min-w-[140px] rounded-lg border border-gray-200 bg-white py-1 shadow-xl"
