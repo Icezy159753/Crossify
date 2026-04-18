@@ -491,7 +491,7 @@ function addCrosstabSheet(
         styleBase(totalNCell)
       } else {
         const totalPctCell = baseRow.getCell(totalNCol)
-        totalPctCell.value = totalN
+        setPctValue(totalPctCell, 1)
         styleBase(totalPctCell)
       }
     }
@@ -520,7 +520,8 @@ function addCrosstabSheet(
       } else {
         const pctCell = baseRow.getCell(startCol)
         styleBase(pctCell)
-        pctCell.value = n === 0 ? '-' : n
+        if (n === 0) pctCell.value = '-'
+        else setPctValue(pctCell, pct)
       }
     }
 

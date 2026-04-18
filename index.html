@@ -6174,8 +6174,109 @@
         return ci ? ci.name : name;
       }
 
+      /* Vanilla-JS port of evaluateFilterSpec — for use when the React bundle hasn't exposed
+         window.__cxGetFilteredCases. Handles label→code reverse-map (dataset.cases stores labels). */
+      function applyFilterToCases(table, dataset) {
+        if (!table || !table.filter) return dataset.cases;
+        var spec = table.filter;
+        if (!spec.groups || spec.groups.length === 0) return dataset.cases;
+        var activeGroups = spec.groups.filter(function (g) { return g.conditions && g.conditions.length > 0; });
+        if (activeGroups.length === 0) return dataset.cases;
+
+        var varMap = {};
+        dataset.variables.forEach(function (v) {
+          varMap[v.name] = v;
+          if (v.longName) varMap[v.longName] = v;
+        });
+
+        function getValueKeys(varName, rc) {
+          var vinfo = varMap[varName];
+          if (vinfo && Array.isArray(vinfo.memberNames) && vinfo.memberNames.length > 0) {
+            return vinfo.memberNames.map(function (mn) {
+              var raw = rc[mn];
+              return raw == null ? '' : String(raw).trim();
+            }).filter(Boolean);
+          }
+          if (vinfo && vinfo.valueLabels && Object.keys(vinfo.valueLabels).length > 0) {
+            var labelStr = rc[varName] == null ? '' : String(rc[varName]);
+            var keys = Object.keys(vinfo.valueLabels);
+            for (var i = 0; i < keys.length; i++) {
+              if (vinfo.valueLabels[keys[i]] === labelStr) return [keys[i]];
+            }
+          }
+          var fallback = rc[varName];
+          return fallback == null || fallback === '' ? [] : [String(fallback).trim()];
+        }
+
+        function getText(varName, rc) {
+          var v = rc[varName];
+          return v == null ? '' : String(v);
+        }
+
+        function getNum(varName, rc) {
+          var v = rc[varName];
+          var n = Number(v);
+          return isFinite(n) ? n : null;
+        }
+
+        function isReady(c) {
+          if (c.operator === 'in' || c.operator === 'not_in') return c.values && c.values.length > 0;
+          if (c.operator === 'between') return (c.value || '').trim() !== '' && (c.secondaryValue || '').trim() !== '';
+          if (['gt', 'gte', 'lt', 'lte', 'contains', 'not_contains'].indexOf(c.operator) >= 0) return (c.value || '').trim() !== '';
+          return true;
+        }
+
+        function evalCond(c, rc) {
+          if (!isReady(c)) return true;
+          if (c.operator === 'is_blank') return getText(c.variableName, rc).trim() === '';
+          if (c.operator === 'not_blank') return getText(c.variableName, rc).trim() !== '';
+          if (c.operator === 'in' || c.operator === 'not_in') {
+            var sel = c.values;
+            var keys = getValueKeys(c.variableName, rc);
+            var hit = keys.some(function (k) { return sel.indexOf(k) >= 0; });
+            return c.operator === 'in' ? hit : !hit;
+          }
+          if (c.operator === 'contains' || c.operator === 'not_contains') {
+            var hay = getText(c.variableName, rc).trim().toLowerCase();
+            var ndl = (c.value || '').trim().toLowerCase();
+            var hit2 = ndl === '' ? true : hay.indexOf(ndl) >= 0;
+            return c.operator === 'contains' ? hit2 : !hit2;
+          }
+          var num = getNum(c.variableName, rc);
+          if (num == null) return false;
+          var p = Number(c.value), s = Number(c.secondaryValue);
+          if (['gt', 'gte', 'lt', 'lte'].indexOf(c.operator) >= 0 && !isFinite(p)) return false;
+          if (c.operator === 'between' && (!isFinite(p) || !isFinite(s))) return false;
+          if (c.operator === 'gt') return num > p;
+          if (c.operator === 'gte') return num >= p;
+          if (c.operator === 'lt') return num < p;
+          if (c.operator === 'lte') return num <= p;
+          var lo = p <= s ? p : s, hi = p <= s ? s : p;
+          return num >= lo && num <= hi;
+        }
+
+        function evalGrp(g, rc) {
+          if (g.conditions.length === 0) return true;
+          var m = g.conditions.map(function (c) { return evalCond(c, rc); });
+          return g.join === 'all' ? m.every(Boolean) : m.some(Boolean);
+        }
+
+        return dataset.cases.filter(function (rc) {
+          var m = activeGroups.map(function (g) { return evalGrp(g, rc); });
+          return spec.rootJoin === 'all' ? m.every(Boolean) : m.some(Boolean);
+        });
+      }
+
       /* ── Frequency table (no colVar) ── */
       function buildFreqTable(table, dataset, overrides) {
+        /* Apply filter in S6 (works with both old and new React bundles) */
+        try {
+          var _filtered = applyFilterToCases(table, dataset);
+          if (_filtered !== dataset.cases) {
+            console.log('[S6] filter applied:', dataset.cases.length, '→', _filtered.length);
+            dataset = Object.assign({}, dataset, { cases: _filtered });
+          }
+        } catch (_fe) { console.warn('[S6] filter eval failed:', _fe); }
         var parsed = parseAxis(table.rowVar);
         if (!parsed.length && dataset && Array.isArray(dataset.variables)) {
           var sideLabel = Array.prototype.slice.call(document.querySelectorAll('.font-bold.uppercase.tracking-wide')).find(function (el) {
@@ -7021,6 +7122,100 @@
         });
       }
 
+      /* ── Switch Top/Side button ── */
+      function injectSwitchButton() {
+        /* Find the Design tab's TOP label — only visible when on Design tab */
+        var topLabel = Array.prototype.slice.call(document.querySelectorAll('.font-bold.uppercase.tracking-wide')).find(function (el) {
+          return (el.textContent || '').trim().toUpperCase() === 'TOP';
+        });
+        if (!topLabel) return;
+        if (document.getElementById('cx-switch-axes-wrapper')) return;
+
+        /* Walk up to find the TOP zone container (.rounded-xl with TOP inside) */
+        var topZone = topLabel.closest('.border-2') || topLabel.closest('[class*="rounded-xl"]');
+        if (!topZone) return;
+        /* Only inject if topZone is the inner TOP zone, not the outer Design container.
+           Heuristic: the outer container also contains SIDE. If so, find the inner one. */
+        var allLabels = topZone.querySelectorAll('.font-bold.uppercase.tracking-wide');
+        var hasSide = Array.prototype.some.call(allLabels, function (el) {
+          return (el.textContent || '').trim().toUpperCase() === 'SIDE';
+        });
+        if (hasSide) {
+          /* topZone is the outer design card — find the inner TOP-only zone */
+          var inner = topLabel.parentElement;
+          while (inner && inner !== topZone) {
+            if (inner.classList && (inner.classList.contains('rounded-xl') || inner.className.indexOf('rounded-xl') >= 0)) break;
+            inner = inner.parentElement;
+          }
+          if (inner && inner !== topZone) topZone = inner;
+        }
+
+        var btn = document.createElement('button');
+        btn.id = 'cx-switch-axes-btn';
+        btn.type = 'button';
+        btn.innerHTML = '<span style="font-size:13px;line-height:1">⇄</span>&nbsp;Switch Top/Side';
+        btn.title = 'Swap Top ↔ Side axes';
+        btn.style.cssText = 'display:inline-flex;align-items:center;padding:5px 10px;font-size:11px;font-weight:600;color:#475569;background:white;border:1px solid #e5e7eb;border-radius:6px;cursor:pointer;transition:border-color 0.15s,color 0.15s';
+        btn.addEventListener('mouseenter', function () { btn.style.borderColor = '#93c5fd'; btn.style.color = '#2563eb'; });
+        btn.addEventListener('mouseleave', function () { btn.style.borderColor = '#e5e7eb'; btn.style.color = '#475569'; });
+
+        btn.addEventListener('click', function (e) {
+          e.preventDefault();
+          e.stopPropagation();
+          try {
+            var freshHook = resolveLiveTablesHook(btn);
+            if (!freshHook || !freshHook.queue) { console.warn('[S6] switch: no hook'); return; }
+            var rawDispatch = freshHook.queue.__cxOrigDispatch || freshHook.queue.dispatch;
+            if (typeof rawDispatch !== 'function') { console.warn('[S6] switch: no dispatch'); return; }
+
+            /* Find the table currently being designed — prefer the one from TOP zone's fiber */
+            var activeTableId = null;
+            var designFiber = fiberOf(topLabel);
+            if (designFiber) {
+              var t = getTableFromFiber(designFiber);
+              if (t && t.id) activeTableId = t.id;
+            }
+            if (!activeTableId) {
+              var activeRow = document.querySelector('[draggable="true"].border-l-2.cursor-pointer.border-\\[\\#1F4E78\\]');
+              if (activeRow) {
+                var af = fiberOf(activeRow);
+                if (af) {
+                  var active = getTableFromFiber(af);
+                  if (active && active.id) activeTableId = active.id;
+                }
+              }
+            }
+            console.log('[S6] switch: activeTableId=', activeTableId);
+            if (!activeTableId) { console.warn('[S6] switch: no active table found'); return; }
+
+            rawDispatch(function (prev) {
+              if (!Array.isArray(prev)) return prev;
+              return prev.map(function (t) {
+                if (!t || t.id !== activeTableId) return t;
+                /* Swap rowVar ↔ colVar; clear result so user knows to re-run */
+                return Object.assign({}, t, {
+                  rowVar: t.colVar,
+                  colVar: t.rowVar,
+                  result: null
+                });
+              });
+            });
+          } catch (err) {
+            console.error('[S6] switch axes failed:', err);
+          }
+        });
+
+        var wrapper = document.createElement('div');
+        wrapper.id = 'cx-switch-axes-wrapper';
+        wrapper.style.cssText = 'display:flex;justify-content:flex-end;margin:0 0 8px 0';
+        wrapper.appendChild(btn);
+
+        /* Insert BEFORE the TOP zone so the button sits at the top of the Design card */
+        if (topZone.parentNode) {
+          topZone.parentNode.insertBefore(wrapper, topZone);
+        }
+      }
+
       function getCurrentTableForRunButton(btn) {
         /* Use fresh fiber walk (no early break) + fresh hook */
         var fiber = fiberOf(btn);
@@ -7353,13 +7548,14 @@
           }
           if (!_hooked && _hookAttempts < 100) tryHookDispatch();
           enableNoTopRun();
+          injectSwitchButton();
         }, 300);
       }).observe(document.body, { childList: true, subtree: true });
 
       /* Initial attempts */
       setTimeout(function () { tryHookDispatch(); }, 1000);
       setTimeout(function () { tryHookDispatch(); }, 2500);
-      setTimeout(function () { tryHookDispatch(); enableNoTopRun(); }, 4000);
+      setTimeout(function () { tryHookDispatch(); enableNoTopRun(); injectSwitchButton(); }, 4000);
 
       console.log('[S6] TB/T2B/Mean + no-TOP support loaded');
 

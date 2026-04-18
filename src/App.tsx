@@ -1302,6 +1302,14 @@ export default function App() {
               return normalizeCode(raw)
             }).filter(Boolean)
           }
+          // dataset.cases stores label text (from applyValueLabels), not raw codes.
+          // Reverse-map the label back to its code so it matches condition.values.
+          const item = variableCatalog.byName.get(varName)
+          if (item && Object.keys(item.valueLabels).length > 0) {
+            const labelStr = rawCase[varName] == null ? '' : String(rawCase[varName])
+            const code = Object.entries(item.valueLabels).find(([, v]) => v === labelStr)?.[0]
+            return code ? [code] : [normalizeCode(rawCase[varName])].filter(Boolean)
+          }
           return [normalizeCode(rawCase[varName])].filter(Boolean)
         },
         getTextValue: (varName: string, rawCase: Record<string, string | number>) => {
@@ -1365,6 +1373,51 @@ export default function App() {
   const handleGenerate = useCallback(() => {
     if (activeTableId) runTable(activeTableId)
   }, [activeTableId, runTable])
+
+  const handleSwapAxes = useCallback(() => {
+    setTables(prev => prev.map(t =>
+      t.id !== activeTableId ? t : { ...t, rowVar: t.colVar, colVar: t.rowVar }
+    ))
+  }, [activeTableId])
+
+  useEffect(() => {
+    if (!dataset || !variableCatalog) {
+      ;(window as Record<string, unknown>).__cxGetFilteredCases = null
+      return
+    }
+    ;(window as Record<string, unknown>).__cxGetFilteredCases = (tableId: string) => {
+      const table = tables.find(t => t.id === tableId)
+      if (!table || !hasActiveFilter(table.filter)) return null
+      const runtime = {
+        getValueKeys: (varName: string, rawCase: Record<string, string | number>) => {
+          const grouped = variableCatalog.groupedByName.get(varName)
+          if (grouped) {
+            return grouped.options.map(opt => normalizeCode(rawCase[opt.memberName])).filter(Boolean)
+          }
+          const item = variableCatalog.byName.get(varName)
+          if (item && Object.keys(item.valueLabels).length > 0) {
+            const labelStr = rawCase[varName] == null ? '' : String(rawCase[varName])
+            const code = Object.entries(item.valueLabels).find(([, v]) => v === labelStr)?.[0]
+            return code ? [code] : [normalizeCode(rawCase[varName])].filter(Boolean)
+          }
+          return [normalizeCode(rawCase[varName])].filter(Boolean)
+        },
+        getTextValue: (varName: string, rawCase: Record<string, string | number>) => {
+          const val = rawCase[varName]
+          return val == null ? '' : String(val)
+        },
+        getNumericValue: (varName: string, rawCase: Record<string, string | number>) => {
+          const val = rawCase[varName]
+          const num = Number(val)
+          return Number.isFinite(num) ? num : null
+        },
+      }
+      return dataset.cases.filter(rawCase => {
+        const labeled = Object.fromEntries(Object.entries(rawCase).map(([k, v]) => [k, String(v)]))
+        return evaluateFilterSpec(table.filter, rawCase, labeled, runtime)
+      })
+    }
+  }, [dataset, variableCatalog, tables])
 
   const activeResult = activeTable?.result ?? null
 
@@ -1494,7 +1547,17 @@ export default function App() {
               filteredCases = dataset.cases.filter(rawCase => {
                 const labeled = Object.fromEntries(Object.entries(rawCase).map(([k, v]) => [k, String(v)]))
                 const runtime = {
-                  getValueKeys: (varName: string, rc: Record<string, string | number>) => [normalizeCode(rc[varName])].filter(Boolean),
+                  getValueKeys: (varName: string, rc: Record<string, string | number>) => {
+                    const grouped = variableCatalog.groupedByName.get(varName)
+                    if (grouped) return grouped.options.map(opt => normalizeCode(rc[opt.memberName])).filter(Boolean)
+                    const item = variableCatalog.byName.get(varName)
+                    if (item && Object.keys(item.valueLabels).length > 0) {
+                      const labelStr = rc[varName] == null ? '' : String(rc[varName])
+                      const code = Object.entries(item.valueLabels).find(([, v]) => v === labelStr)?.[0]
+                      return code ? [code] : [normalizeCode(rc[varName])].filter(Boolean)
+                    }
+                    return [normalizeCode(rc[varName])].filter(Boolean)
+                  },
                   getTextValue: (varName: string, rc: Record<string, string | number>) => String(rc[varName] ?? ''),
                   getNumericValue: (varName: string, rc: Record<string, string | number>) => { const n = Number(rc[varName]); return Number.isFinite(n) ? n : null },
                 }
@@ -2440,6 +2503,7 @@ export default function App() {
                   onMoveSideDown={handleMoveSideDown}
                   onUpdateName={handleUpdateTableName}
                   onGenerate={handleGenerate}
+                  onSwapAxes={handleSwapAxes}
                   canRun={canRun}
                 />
               )}

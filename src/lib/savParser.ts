@@ -37,11 +37,8 @@ interface RawLabelChunk {
   len: number
 }
 
-const SYSMIS_BYTES = new Uint8Array([0xFE, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF])
-const SYSMIS_VALUE = new DataView(SYSMIS_BYTES.buffer).getFloat64(0, true)
-
 function isSysMiss(v: number) {
-  return v <= SYSMIS_VALUE + 1e200
+  return isNaN(v)
 }
 
 // ── Encoding helpers ─────────────────────────────────────────────────────────
