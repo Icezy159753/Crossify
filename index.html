@@ -271,6 +271,23 @@
           return tbPresets[k] && tbPresets[k].preset;
         });
 
+        /* Filter out presets for variables that aren't in the CURRENT dataset
+           (leftover from a previous job). Compare case-insensitively against both
+           `name` and `longName`. If no dataset is loaded, keep all (safety). */
+        try {
+          var ds = (typeof resolveLiveDataset === 'function') ? resolveLiveDataset() : null;
+          if (ds && Array.isArray(ds.variables) && ds.variables.length) {
+            var validNames = Object.create(null);
+            ds.variables.forEach(function (v) {
+              if (v && v.name) validNames[String(v.name).toLowerCase()] = true;
+              if (v && v.longName) validNames[String(v.longName).toLowerCase()] = true;
+            });
+            presetKeys = presetKeys.filter(function (k) {
+              return validNames[String(k).toLowerCase()];
+            });
+          }
+        } catch (_dsErr) { /* keep original list on lookup error */ }
+
         var newEntries = presetKeys
           .sort(function (a, b) { return a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }); })
           .map(function (k) {
@@ -405,10 +422,17 @@
         }
       }
 
-      /* ═══ Path 1: Intercept saveAs (fallback browsers) ═══ */
+      /* ═══ Path 1: Intercept saveAs (fallback browsers) ═══
+         Only inject TB_Setting into the SETTINGS workbook, not table-export files.
+         Heuristic: filename contains 'settings' (case-insensitive) → settings file.
+         Table exports (crosstab_all.xlsx, crosstab_selected.xlsx, user table names) skip. */
+      function _isSettingsFilename(filename) {
+        if (typeof filename !== 'string') return false;
+        return /settings/i.test(filename);
+      }
       window.__cxInterceptSaveAs = function (blob, filename, originalAction) {
         console.log('[TB_Setting] interceptedSaveAs called:', filename);
-        if (typeof filename === 'string' && /\.xlsx$/i.test(filename)) {
+        if (typeof filename === 'string' && /\.xlsx$/i.test(filename) && _isSettingsFilename(filename)) {
           _processBlob(blob, filename, originalAction).catch(function (err) {
             console.error('[TB_Setting] inject failed:', err);
             originalAction();
@@ -863,6 +887,37 @@
   <link rel="modulepreload" crossorigin href="/assets/exceljs-BMcsBZ_F.js">
   <link rel="modulepreload" crossorigin href="/assets/arquero-6vuVcGup.js">
   <link rel="stylesheet" crossorigin href="/assets/index-DN00P1lj.css">
+  <style>
+    /* Scale app to 80% using zoom + force app root (and tailwind h-screen wrappers) to
+       125vh so the scaled content fills the physical viewport exactly (125 × 0.8 = 100). */
+    html { zoom: 0.8; }
+    html, body { margin: 0; padding: 0; }
+    body { min-height: 125vh; }
+    #root { min-height: 125vh; display: flex; flex-direction: column; }
+    #root > * { flex: 1 1 auto; min-height: 125vh !important; }
+    /* Tailwind's h-screen / min-h-screen inside the app use physical 100vh — override
+       so they fill the zoomed viewport fully */
+    .h-screen, .min-h-screen { min-height: 125vh !important; }
+    /* Compact results table: smaller cell padding + font for a cleaner look */
+    [class*="overflow-auto"] table {
+      table-layout: auto !important;
+    }
+    [class*="overflow-auto"] table th,
+    [class*="overflow-auto"] table td {
+      padding: 3px 8px !important;
+      font-size: 11px !important;
+    }
+    /* All data columns (col 3+) equal width for a uniform professional look.
+       Cols 1-2 are row labels (group + leaf) and keep their natural width. */
+    [class*="overflow-auto"] table td:nth-child(n+3),
+    [class*="overflow-auto"] table th:nth-child(n+3) {
+      width: 70px !important;
+      min-width: 70px !important;
+      max-width: 70px !important;
+      text-align: center !important;
+      word-break: break-word !important;
+    }
+  </style>
 </head>
 
 <body>
@@ -4999,10 +5054,67 @@
         });
       }
 
+      /* Clean Mean column cells: strip "(xxx.x)" percentage parens so TOP Mean matches
+         SIDE Mean display (just the decimal value, no percent).
+         Uses offset-from-END indexing to survive rowspan-shifted cells. */
+      function cleanColumnStatCells() {
+        document.querySelectorAll('table').forEach(function (tbl) {
+          var headers = tbl.querySelectorAll('thead tr');
+          if (!headers.length) return;
+
+          var lastHdr = headers[headers.length - 1];
+          var hCells = lastHdr.children;
+          var nCols = hCells.length;
+
+          /* Find Mean column — walk from end so we get rightmost Mean. */
+          var meanOffsetFromEnd = -1;
+          for (var h = nCols - 1; h >= 0; h--) {
+            var txt = (hCells[h].textContent || '').trim();
+            if (/^mean$/i.test(txt)) {
+              meanOffsetFromEnd = nCols - 1 - h;
+              break;
+            }
+          }
+          if (meanOffsetFromEnd < 0) return;
+
+          tbl.querySelectorAll('tbody tr').forEach(function (tr) {
+            var nCells = tr.children.length;
+            var idx = nCells - 1 - meanOffsetFromEnd;
+            if (idx < 0) return;
+            var c = tr.children[idx];
+            if (!c || c.__cxMeanCleaned) return;
+            var raw = (c.textContent || '').trim();
+            if (!raw || raw === '-') return;
+            /* "4.27 (426.7)" → keep "4.27" (rounded to 2 dp) */
+            var m = /^\s*(-?\d+(?:\.\d+)?)\s*\(/.exec(raw);
+            if (m) {
+              var num = Number(m[1]);
+              if (isFinite(num)) {
+                c.textContent = num.toFixed(2);
+                c.__cxMeanCleaned = true;
+                return;
+              }
+            }
+            /* Plain number with too many decimals → round to 2 dp */
+            var m2 = /^\s*(-?\d+(?:\.\d+)?)\s*$/.exec(raw);
+            if (m2) {
+              var num2 = Number(m2[1]);
+              if (isFinite(num2) && raw.length > 5) {
+                c.textContent = num2.toFixed(2);
+                c.__cxMeanCleaned = true;
+              }
+            }
+          });
+        });
+      }
+
       var _styleTimer = null;
       new MutationObserver(function () {
         if (_styleTimer) clearTimeout(_styleTimer);
-        _styleTimer = setTimeout(styleResultSummaryRows, 200);
+        _styleTimer = setTimeout(function () {
+          styleResultSummaryRows();
+          cleanColumnStatCells();
+        }, 200);
       }).observe(document.body, { childList: true, subtree: true });
 
       /* ── Excel Save/Load hooks for TB_Setting sheet ── */
@@ -6128,6 +6240,680 @@
       }
       window.__cxInjectNetGroups = cxInjectNetGroups;
 
+      /* ══════════════════════════════════════════════════════
+         Column (TOP) summary injection — mirror of __cxAddSummary / __cxEnsureSingleVarMean
+         for the colVar axis so TB/T2B/BB/B2B/Mean also appear as columns when a variable
+         with scale presets is placed on TOP. Single-var TOP only (multi-var is a no-op).
+         ══════════════════════════════════════════════════════ */
+      function cxColPathForInjected(result, labelText) {
+        var paths = result.colPaths || [];
+        for (var ci = 0; ci < paths.length; ci++) {
+          var pp = paths[ci];
+          if (!pp || pp.length < 2) continue;
+          var t0 = (result.colTypes && result.colTypes[ci]) || 'data';
+          if (t0 === 'stat' || t0 === 'summary' || t0 === 'net') continue;
+          return pp.slice(0, -1).concat([labelText]);
+        }
+        var ll = (result.colLevelLabels || []).length;
+        if (ll >= 2) return ['', labelText];
+        return [labelText];
+      }
+
+      /* Normalize col types — fill in 'stat' for Mean/Min/Max labels when bundle omits colTypes */
+      function cxNormalizedColTypes(result) {
+        var n = (result.colValues || []).length;
+        var raw = Array.isArray(result.colTypes) && result.colTypes.length === n
+          ? result.colTypes
+          : result.colValues.map(function () { return 'data'; });
+        return result.colValues.map(function (cv, idx) {
+          var t = raw[idx];
+          if (t === 'stat' || t === 'summary' || t === 'net' || t === 'data') return t;
+          var lab = String(cv == null ? '' : cv).trim();
+          if (/^mean$/i.test(lab) || /^min$/i.test(lab) || /^max$/i.test(lab) || /^stddev$/i.test(lab)) return 'stat';
+          return t != null && t !== '' ? t : 'data';
+        });
+      }
+
+      /* Group cols into sections by path prefix (all but last). For single-var TOP, one section
+         covers all cols. For nested, each outer value starts a new section. */
+      function cxColSections(result, colTypes) {
+        var n = result.colValues.length;
+        var colPaths = result.colPaths && result.colPaths.length === n
+          ? result.colPaths
+          : result.colValues.map(function (v) { return [v]; });
+        var sections = [];
+        var cur = null;
+        for (var ci = 0; ci < n; ci++) {
+          var p = colPaths[ci] || [result.colValues[ci]];
+          var prefix = p.slice(0, -1);
+          var key = prefix.join('\u0001');
+          if (cur && cur.key === key) {
+            cur.endIdx = ci + 1;
+          } else {
+            if (cur) sections.push(cur);
+            cur = { key: key, prefix: prefix, startIdx: ci, endIdx: ci + 1 };
+          }
+        }
+        if (cur) sections.push(cur);
+        return { sections: sections, colPaths: colPaths };
+      }
+
+      /* Apply a per-section column transform. fn receives (section, ctx) and returns
+         an array of "template entries" — either {kind:'old', idx} or custom entries with
+         custom toCell/toHeader logic. The template is materialized into new cols + counts. */
+      function cxApplyColumnTemplate(result, template) {
+        var n = result.colValues.length;
+        var rawTypes = Array.isArray(result.colTypes) && result.colTypes.length === n
+          ? result.colTypes : result.colValues.map(function () { return 'data'; });
+        var colPaths = result.colPaths && result.colPaths.length === n
+          ? result.colPaths : result.colValues.map(function (v) { return [v]; });
+
+        var newValues = [], newTypes = [], newPaths = [];
+        var newTotalsN = Array.isArray(result.colTotalsN) && result.colTotalsN.length === n ? [] : null;
+
+        template.forEach(function (ent) {
+          if (ent.kind === 'old') {
+            newValues.push(result.colValues[ent.idx]);
+            newTypes.push(rawTypes[ent.idx]);
+            newPaths.push(colPaths[ent.idx]);
+            if (newTotalsN) newTotalsN.push(result.colTotalsN[ent.idx]);
+          } else {
+            newValues.push(ent.value);
+            newTypes.push(ent.type);
+            newPaths.push(ent.path);
+            if (newTotalsN) {
+              var tot = 0;
+              (ent.members || []).forEach(function (idx) { tot += result.colTotalsN[idx] || 0; });
+              newTotalsN.push(tot);
+            }
+          }
+        });
+
+        var newCounts = result.counts.map(function (rc, rowIdx) {
+          if (!Array.isArray(rc)) return rc;
+          return template.map(function (ent) {
+            if (ent.kind === 'old') return rc[ent.idx] || 0;
+            if (typeof ent.computeCell === 'function') return ent.computeCell(rc, rowIdx);
+            var s = 0;
+            (ent.members || []).forEach(function (idx) { s += rc[idx] || 0; });
+            return s;
+          });
+        });
+
+        var patched = Object.assign({}, result, {
+          colValues: newValues,
+          colTypes: newTypes,
+          colPaths: newPaths,
+          counts: newCounts
+        });
+        if (newTotalsN) patched.colTotalsN = newTotalsN;
+        return patched;
+      }
+
+      /* Find the variable in the axis that has scale-preset summaries, preferring innermost.
+         Returns { varName, level, info } or null. */
+      function cxFindPresetVarInAxis(axisStr) {
+        var parsed = parseAxis(axisStr);
+        var flat = flatVars(parsed);
+        if (!flat.length) return null;
+        var stored = (typeof window.__cxGetTbPresetStore === 'function') ? window.__cxGetTbPresetStore() : {};
+        for (var i = flat.length - 1; i >= 0; i--) {
+          var info = stored[flat[i]];
+          if (info && info.summaries && info.summaries.length) {
+            return { varName: flat[i], level: i, info: info, flat: flat };
+          }
+        }
+        return null;
+      }
+
+      /* Find the owner variable of a section by matching its data col values against
+         each candidate var's preset memberLabels or dataset valueLabels. Returns varName or null. */
+      function cxFindSectionOwnerVar(result, sec, colTypes, flat, stored, dataset) {
+        for (var ci = sec.startIdx; ci < sec.endIdx; ci++) {
+          if (colTypes[ci] !== 'data') continue;
+          var cv = result.colValues[ci];
+          var cvStr = String(cv == null ? '' : cv).trim();
+          if (!cvStr) continue;
+          for (var fi = 0; fi < flat.length; fi++) {
+            var vn = flat[fi];
+            /* Check preset memberLabels */
+            var info = stored[vn];
+            if (info && info.memberLabels) {
+              var lbls = info.memberLabels;
+              for (var c1 in lbls) {
+                if (lbls[c1] === cv || String(lbls[c1] == null ? '' : lbls[c1]).trim() === cvStr) {
+                  return vn;
+                }
+              }
+            }
+            /* Check dataset valueLabels */
+            if (dataset && Array.isArray(dataset.variables)) {
+              var vnLC = String(vn).toLowerCase();
+              var dvar = dataset.variables.find(function (v) {
+                return v.name === vn || v.longName === vn
+                  || (v.name && v.name.toLowerCase() === vnLC)
+                  || (v.longName && v.longName.toLowerCase() === vnLC);
+              });
+              if (dvar && dvar.valueLabels) {
+                var vls = dvar.valueLabels;
+                for (var c2 in vls) {
+                  if (vls[c2] === cv || String(vls[c2] == null ? '' : vls[c2]).trim() === cvStr) {
+                    return vn;
+                  }
+                }
+              }
+            }
+          }
+        }
+        return null;
+      }
+
+      /* Inject summary columns (TB/T2B/BB/B2B/T3B/B3B) for ANY structure:
+         - Single-var, multi-branch, nested-inner  → per-section owner-based injection
+         - Nested-outer-preset                      → OUTER end-append (new outer groups span inner values)
+         Each section's owner is detected by matching col labels → variable's valueLabels. */
+      function cxAddColumnSummary(result, colVarStr) {
+        if (!result || !result.colValues || !result.colValues.length) return result;
+        if (!colVarStr || !Array.isArray(result.counts)) return result;
+        var parsed = parseAxis(colVarStr);
+        var flat = flatVars(parsed);
+        if (!flat.length) return result;
+
+        var stored = (typeof window.__cxGetTbPresetStore === 'function') ? window.__cxGetTbPresetStore() : {};
+        var ds = (typeof resolveLiveDataset === 'function') ? resolveLiveDataset() : null;
+        var colTypes = cxNormalizedColTypes(result);
+        var n = result.colValues.length;
+        var colPaths = result.colPaths && result.colPaths.length === n
+          ? result.colPaths : result.colValues.map(function (v) { return [v]; });
+
+        var existingSumCodes = {};
+        for (var ck = 0; ck < n; ck++) {
+          if (colTypes[ck] === 'summary') existingSumCodes[result.colValues[ck]] = true;
+        }
+
+        /* Detect nested-outer-preset: axis is a single nested branch (length 1, depth > 1)
+           with preset on the OUTER variable but not on inner. */
+        var isNestedSingleBranch = parsed.length === 1 && parsed[0].length > 1;
+        var outerVar = isNestedSingleBranch ? parsed[0][0] : null;
+        var innerVar = isNestedSingleBranch ? parsed[0][parsed[0].length - 1] : null;
+        var outerInfo = outerVar ? stored[outerVar] : null;
+        var innerInfo = innerVar ? stored[innerVar] : null;
+        var outerHasPreset = outerInfo && outerInfo.summaries && outerInfo.summaries.length;
+        var innerHasPreset = innerInfo && innerInfo.summaries && innerInfo.summaries.length;
+
+        var template = [];
+        var anyInserted = false;
+
+        if (isNestedSingleBranch && outerHasPreset && !innerHasPreset) {
+          /* ── OUTER-preset nested: end-append new outer groups spanning inner values ── */
+          var info = outerInfo;
+          var memberLabels = info.memberLabels || {};
+          var presetLevel = 0;
+          var siblingOrder = [];
+          var siblingMap = {};
+          for (var ci = 0; ci < n; ci++) {
+            if (colTypes[ci] !== 'data') continue;
+            var p = colPaths[ci];
+            if (!p || p.length <= presetLevel) continue;
+            var levelVal = p[presetLevel];
+            var sibPath = p.slice(0, presetLevel).concat(p.slice(presetLevel + 1));
+            var sibKey = JSON.stringify(sibPath);
+            if (!(sibKey in siblingMap)) {
+              siblingMap[sibKey] = { path: sibPath, colMap: {} };
+              siblingOrder.push(sibKey);
+            }
+            siblingMap[sibKey].colMap[levelVal] = ci;
+            siblingMap[sibKey].colMap[String(levelVal == null ? '' : levelVal).trim()] = ci;
+          }
+          for (var k = 0; k < n; k++) template.push({ kind: 'old', idx: k });
+          info.summaries.forEach(function (sum) {
+            if (existingSumCodes[sum.code]) return;
+            siblingOrder.forEach(function (sibKey) {
+              var sib = siblingMap[sibKey];
+              var memberIdxs = [];
+              (sum.members || []).forEach(function (mCode) {
+                var lbl = memberLabels[mCode] || mCode;
+                var lblKey = String(lbl == null ? '' : lbl).trim();
+                if (sib.colMap[lbl] != null) memberIdxs.push(sib.colMap[lbl]);
+                else if (sib.colMap[lblKey] != null) memberIdxs.push(sib.colMap[lblKey]);
+              });
+              if (!memberIdxs.length) return;
+              var newPath = sib.path.slice(0, presetLevel).concat([sum.code]).concat(sib.path.slice(presetLevel));
+              template.push({
+                kind: 'sum', value: sum.code, type: 'summary',
+                path: newPath, members: memberIdxs
+              });
+              anyInserted = true;
+            });
+          });
+        } else {
+          /* ── Per-section owner-based injection (handles single-var, multi-branch, nested-inner) ── */
+          var sectInfo = cxColSections(result, colTypes);
+          console.log('[S6] addColSum: flat=', flat, 'sections=', sectInfo.sections.length,
+            'stored keys=', Object.keys(stored).filter(function(k){return stored[k]&&stored[k].summaries&&stored[k].summaries.length}));
+          sectInfo.sections.forEach(function (sec) {
+            var ownerVar = cxFindSectionOwnerVar(result, sec, colTypes, flat, stored, ds);
+            var info = ownerVar ? stored[ownerVar] : null;
+            console.log('[S6] addColSum section', sec.prefix, '[', sec.startIdx, '..', sec.endIdx, '] owner=', ownerVar,
+              'summaries=', info && info.summaries ? info.summaries.length : 0);
+            if (!info || !info.summaries || !info.summaries.length) {
+              /* No preset for this section — keep cols as-is */
+              for (var j0 = sec.startIdx; j0 < sec.endIdx; j0++) template.push({ kind: 'old', idx: j0 });
+              return;
+            }
+            var memberLabels = info.memberLabels || {};
+            /* Fallback member labels from dataset's valueLabels (first-run safety) */
+            if (!Object.keys(memberLabels).length && ds) {
+              var vnLC = String(ownerVar).toLowerCase();
+              var dvar = ds.variables.find(function (v) {
+                return v.name === ownerVar || v.longName === ownerVar
+                  || (v.name && v.name.toLowerCase() === vnLC)
+                  || (v.longName && v.longName.toLowerCase() === vnLC);
+              });
+              if (dvar && dvar.valueLabels) memberLabels = dvar.valueLabels;
+            }
+
+            var insertIdx = sec.endIdx;
+            for (var i = sec.startIdx; i < sec.endIdx; i++) {
+              if (colTypes[i] === 'stat' && insertIdx === sec.endIdx) insertIdx = i;
+            }
+            var labelToIdx = {};
+            for (var li = sec.startIdx; li < sec.endIdx; li++) {
+              if (colTypes[li] === 'stat' || colTypes[li] === 'summary') continue;
+              var cv = result.colValues[li];
+              labelToIdx[cv] = li;
+              labelToIdx[String(cv == null ? '' : cv).trim()] = li;
+            }
+            for (var j = sec.startIdx; j < insertIdx; j++) template.push({ kind: 'old', idx: j });
+            info.summaries.forEach(function (sum) {
+              if (existingSumCodes[sum.code]) return;
+              var memberIdxs = [];
+              (sum.members || []).forEach(function (mCode) {
+                var lbl = memberLabels[mCode] || mCode;
+                var lblKey = String(lbl == null ? '' : lbl).trim();
+                if (labelToIdx[lbl] != null) memberIdxs.push(labelToIdx[lbl]);
+                else if (labelToIdx[lblKey] != null) memberIdxs.push(labelToIdx[lblKey]);
+              });
+              if (!memberIdxs.length) return;
+              template.push({
+                kind: 'sum', value: sum.code, type: 'summary',
+                path: sec.prefix.concat([sum.code]),
+                members: memberIdxs
+              });
+              anyInserted = true;
+            });
+            for (var jj = insertIdx; jj < sec.endIdx; jj++) template.push({ kind: 'old', idx: jj });
+          });
+        }
+
+        if (!anyInserted) return result;
+        return cxApplyColumnTemplate(result, template);
+      }
+      window.__cxAddColumnSummary = cxAddColumnSummary;
+
+      /* Resolve weights for a variable across all sources (manual + preset + dataset fallback).
+         Returns { weights, labels, info }. Weights empty = no Mean possible. */
+      function cxResolveColumnWeights(vn, overrides) {
+        if (typeof ensureTbInfoExpanded === 'function') {
+          try { ensureTbInfoExpanded(vn); } catch (_e) { }
+        }
+        var stored = (typeof window.__cxGetTbPresetStore === 'function') ? window.__cxGetTbPresetStore() : {};
+        var info = stored[vn];
+        var ov = (overrides && overrides[vn]) || {};
+        var manualWeights = ov.weights;
+        var labels = ov.labels || {};
+        var manualOk = manualWeights && Object.keys(manualWeights).some(function (k) {
+          var v = manualWeights[k];
+          return v != null && String(v).trim() !== '' && String(v).trim() !== '-';
+        });
+
+        var weights = {};
+        if (manualOk) {
+          Object.keys(manualWeights).forEach(function (k) {
+            var v = manualWeights[k];
+            if (v != null && String(v).trim() !== '' && String(v).trim() !== '-') weights[k] = v;
+          });
+        }
+        if (info && info.memberLabels && typeof cxBuildAutoWeightsFromInfo === 'function') {
+          var pm = cxBuildAutoWeightsFromInfo(info);
+          if (pm) Object.keys(pm).forEach(function (k) { if (!(k in weights)) weights[k] = pm[k]; });
+        }
+        if (Object.keys(weights).length === 0 && !manualOk && typeof window.__cxResolveMeanWeights === 'function') {
+          var autoMw = window.__cxResolveMeanWeights(vn, overrides);
+          if (autoMw && Object.keys(autoMw).length) Object.assign(weights, autoMw);
+        }
+        if (info && info.memberLabels) labels = Object.assign({}, info.memberLabels, labels);
+
+        /* FALLBACK: First-run state often has info.preset set but memberLabels empty,
+           so the above paths yield nothing. Derive weights + labels directly from the
+           dataset's valueLabels, ordered by code. Preset direction (_low_good/_high_good)
+           determines ascending vs descending weights. */
+        if (!Object.keys(weights).length && info && info.preset) {
+          var ds = (typeof resolveLiveDataset === 'function') ? resolveLiveDataset() : null;
+          if (ds && Array.isArray(ds.variables)) {
+            var vnLC = String(vn).toLowerCase();
+            var dvar = ds.variables.find(function (v) {
+              return v.name === vn || v.longName === vn
+                || (v.name && v.name.toLowerCase() === vnLC)
+                || (v.longName && v.longName.toLowerCase() === vnLC);
+            });
+            if (dvar && dvar.valueLabels && Object.keys(dvar.valueLabels).length) {
+              var codeKeys = Object.keys(dvar.valueLabels).filter(function (k) {
+                return k != null && String(k) !== '' && !isSummaryKey(k);
+              });
+              codeKeys.sort(function (a, b) {
+                var an = Number(a), bn = Number(b);
+                if (isFinite(an) && isFinite(bn)) return an - bn;
+                return String(a).localeCompare(String(b), undefined, { numeric: true, sensitivity: 'base' });
+              });
+              var lowGood = /_low_good$/.test(info.preset);
+              codeKeys.forEach(function (k, i) {
+                if (!(k in weights)) weights[k] = String(lowGood ? codeKeys.length - i : i + 1);
+                if (!(k in labels)) labels[k] = dvar.valueLabels[k];
+              });
+            }
+          }
+        }
+
+        return { weights: weights, labels: labels, info: info };
+      }
+
+      /* Mean column — dispatch like cxAddColumnSummary:
+         - Nested outer preset          → single Mean outer group (end-appended)
+         - Single-var / multi-branch / nested-inner → per-section Mean via owner detection */
+      function cxAddColumnMean(result, colVarStr, overrides) {
+        if (!result || !result.colValues || !result.colValues.length) return result;
+        if (!colVarStr || !Array.isArray(result.counts)) return result;
+        var parsed = parseAxis(colVarStr);
+        var flat = flatVars(parsed);
+        if (!flat.length) return result;
+
+        var stored = (typeof window.__cxGetTbPresetStore === 'function') ? window.__cxGetTbPresetStore() : {};
+        var ds = (typeof resolveLiveDataset === 'function') ? resolveLiveDataset() : null;
+        var colTypes = cxNormalizedColTypes(result);
+        var n = result.colValues.length;
+        var colPaths = result.colPaths && result.colPaths.length === n
+          ? result.colPaths : result.colValues.map(function (v) { return [v]; });
+
+        /* Build label→weight helper for an owner var */
+        function buildLabelToWeight(vn) {
+          var resolved = cxResolveColumnWeights(vn, overrides);
+          if (!Object.keys(resolved.weights).length) return null;
+          var labelToWeight = {};
+          Object.keys(resolved.weights).forEach(function (code) {
+            var w = Number(resolved.weights[code]);
+            if (!isFinite(w)) return;
+            var lab = resolved.labels[code] != null ? resolved.labels[code] : code;
+            labelToWeight[lab] = w;
+            labelToWeight[String(lab).trim()] = w;
+            labelToWeight[String(code).trim()] = w;
+          });
+          return Object.keys(labelToWeight).length ? labelToWeight : null;
+        }
+
+        var isNestedSingleBranch = parsed.length === 1 && parsed[0].length > 1;
+        var outerVar = isNestedSingleBranch ? parsed[0][0] : null;
+        var innerVar = isNestedSingleBranch ? parsed[0][parsed[0].length - 1] : null;
+        var outerInfo = outerVar ? stored[outerVar] : null;
+        var innerInfo = innerVar ? stored[innerVar] : null;
+        var outerHasPreset = outerInfo && outerInfo.summaries && outerInfo.summaries.length;
+        var innerHasPreset = innerInfo && innerInfo.summaries && innerInfo.summaries.length;
+
+        var template = [];
+        var anyInserted = false;
+
+        if (isNestedSingleBranch && outerHasPreset && !innerHasPreset) {
+          /* ── OUTER-preset nested: one Mean outer group spanning all inner values ── */
+          var presetLevel = 0;
+          var labelToWeight = buildLabelToWeight(outerVar);
+          if (!labelToWeight) return result;
+          var siblingOrder = [];
+          var siblingMap = {};
+          for (var ci = 0; ci < n; ci++) {
+            if (colTypes[ci] !== 'data') continue;
+            var p = colPaths[ci];
+            if (!p || p.length <= presetLevel) continue;
+            var levelVal = p[presetLevel];
+            var sibPath = p.slice(0, presetLevel).concat(p.slice(presetLevel + 1));
+            var sibKey = JSON.stringify(sibPath);
+            if (!(sibKey in siblingMap)) {
+              siblingMap[sibKey] = { path: sibPath, entries: [] };
+              siblingOrder.push(sibKey);
+            }
+            var w = labelToWeight[levelVal];
+            if (w == null) w = labelToWeight[String(levelVal == null ? '' : levelVal).trim()];
+            if (w != null) siblingMap[sibKey].entries.push({ idx: ci, weight: w });
+          }
+          for (var k = 0; k < n; k++) template.push({ kind: 'old', idx: k });
+          siblingOrder.forEach(function (sibKey) {
+            var sib = siblingMap[sibKey];
+            if (!sib.entries.length) return;
+            (function (entries, sibPath) {
+              var newPath = sibPath.slice(0, presetLevel).concat(['Mean']).concat(sibPath.slice(presetLevel));
+              template.push({
+                kind: 'mean', value: 'Mean', type: 'stat',
+                path: newPath,
+                computeCell: function (rc) {
+                  var totN = 0, totW = 0;
+                  entries.forEach(function (e) {
+                    var cc = (rc && rc[e.idx]) || 0;
+                    totN += cc;
+                    totW += cc * e.weight;
+                  });
+                  return totN > 0 ? Math.round((totW / totN) * 100) / 100 : 0;
+                }
+              });
+            })(sib.entries, sib.path);
+            anyInserted = true;
+          });
+        } else {
+          /* ── Per-section Mean via owner detection ── */
+          var sectInfo = cxColSections(result, colTypes);
+          sectInfo.sections.forEach(function (sec) {
+            var ownerVar = cxFindSectionOwnerVar(result, sec, colTypes, flat, stored, ds);
+            var ltw = ownerVar ? buildLabelToWeight(ownerVar) : null;
+            var hasMean = false;
+            for (var hi = sec.startIdx; hi < sec.endIdx; hi++) {
+              var cv0 = String(result.colValues[hi] == null ? '' : result.colValues[hi]).trim();
+              if (colTypes[hi] === 'stat' && /^mean$/i.test(cv0)) { hasMean = true; break; }
+            }
+            var weightedCols = [];
+            if (ltw && !hasMean) {
+              for (var wi = sec.startIdx; wi < sec.endIdx; wi++) {
+                var t = colTypes[wi];
+                if (t === 'stat' || t === 'summary' || t === 'net') continue;
+                var cv = result.colValues[wi];
+                var key = String(cv == null ? '' : cv).trim();
+                var w = ltw[cv];
+                if (w == null) w = ltw[key];
+                if (w != null) weightedCols.push({ idx: wi, weight: w });
+              }
+            }
+            for (var j = sec.startIdx; j < sec.endIdx; j++) template.push({ kind: 'old', idx: j });
+            if (weightedCols.length) {
+              (function (wCols, prefix) {
+                template.push({
+                  kind: 'mean', value: 'Mean', type: 'stat',
+                  path: prefix.concat(['Mean']),
+                  computeCell: function (rc) {
+                    var totN = 0, totW = 0;
+                    wCols.forEach(function (wc) {
+                      var cc = (rc && rc[wc.idx]) || 0;
+                      totN += cc;
+                      totW += cc * wc.weight;
+                    });
+                    return totN > 0 ? Math.round((totW / totN) * 100) / 100 : 0;
+                  }
+                });
+              })(weightedCols, sec.prefix);
+              anyInserted = true;
+            }
+          });
+        }
+
+        if (!anyInserted) return result;
+        return cxApplyColumnTemplate(result, template);
+      }
+      window.__cxAddColumnMean = cxAddColumnMean;
+
+      /* Inject Net group columns from override.groups — works at any level.
+         INNER level: insert before first member col within each section (matches SIDE behavior).
+         OUTER/middle level: append new Net outer groups spanning all sibling values. */
+      function cxInjectColumnNetGroups(result, colVarStr, overrides) {
+        if (!result || !result.colValues || !result.colValues.length) return result;
+        if (!colVarStr || !Array.isArray(result.counts)) return result;
+        var parsed = parseAxis(colVarStr);
+        var flat = flatVars(parsed);
+        if (!flat.length || !overrides) return result;
+
+        /* Find variable in axis that has groups (prefer innermost) */
+        function getOv(varName) {
+          var keys = [varName, String(varName).toLowerCase(), String(varName).toUpperCase()];
+          for (var ki = 0; ki < keys.length; ki++) if (overrides[keys[ki]]) return overrides[keys[ki]];
+          var vnLC = String(varName).toLowerCase();
+          var ks = Object.keys(overrides);
+          for (var kj = 0; kj < ks.length; kj++) if (ks[kj].toLowerCase() === vnLC) return overrides[ks[kj]];
+          return null;
+        }
+        var netVar = null, netLevel = -1, ov = null;
+        for (var li = flat.length - 1; li >= 0; li--) {
+          var o = getOv(flat[li]);
+          if (o && Array.isArray(o.groups) && o.groups.length) {
+            netVar = flat[li]; netLevel = li; ov = o; break;
+          }
+        }
+        if (!ov) return result;
+        var groups = ov.groups;
+        var labels = ov.labels || {};
+        var colTypes = cxNormalizedColTypes(result);
+        var n = result.colValues.length;
+        var colPaths = result.colPaths && result.colPaths.length === n
+          ? result.colPaths : result.colValues.map(function (v) { return [v]; });
+
+        function depthOf(g) {
+          var d = 0, cur = g, guard = 0;
+          while (cur && cur.parentId && guard++ < 16) {
+            var par = groups.find(function (x) { return x.id === cur.parentId; });
+            if (!par) break;
+            d++; cur = par;
+          }
+          return d;
+        }
+
+        var isInnermost = (netLevel === flat.length - 1);
+        var template = [];
+        var anyInserted = false;
+
+        if (isInnermost) {
+          /* Per-section injection, insert before first member */
+          var sectInfo = cxColSections(result, colTypes);
+          sectInfo.sections.forEach(function (sec) {
+            var codeToIdx = {};
+            for (var li2 = sec.startIdx; li2 < sec.endIdx; li2++) {
+              if (colTypes[li2] !== 'data') continue;
+              var cv = String(result.colValues[li2] == null ? '' : result.colValues[li2]).trim();
+              var paths = colPaths[li2];
+              var last = paths && paths.length ? String(paths[paths.length - 1] || cv).trim() : cv;
+              codeToIdx[cv] = li2;
+              codeToIdx[last] = li2;
+            }
+            function memberToIdxI(memberCode) {
+              if (codeToIdx[memberCode] != null) return codeToIdx[memberCode];
+              var lab = labels[memberCode];
+              if (lab != null && codeToIdx[String(lab).trim()] != null) return codeToIdx[String(lab).trim()];
+              return null;
+            }
+            var netCols = [];
+            groups.forEach(function (g) {
+              var idxs = (g.members || []).map(memberToIdxI).filter(function (x) { return x != null; });
+              if (!idxs.length) return;
+              idxs.sort(function (a, b) { return a - b; });
+              var d = depthOf(g);
+              var indent = '';
+              for (var ii = 0; ii < d + 1; ii++) indent += '   ';
+              netCols.push({
+                insertBefore: idxs[0], depth: d,
+                label: indent + (g.name || 'Net'),
+                members: idxs
+              });
+            });
+            if (!netCols.length) {
+              for (var j = sec.startIdx; j < sec.endIdx; j++) template.push({ kind: 'old', idx: j });
+              return;
+            }
+            netCols.sort(function (a, b) { return a.insertBefore - b.insertBefore || a.depth - b.depth; });
+            anyInserted = true;
+            var ni = 0;
+            for (var k = sec.startIdx; k < sec.endIdx; k++) {
+              while (ni < netCols.length && netCols[ni].insertBefore === k) {
+                var nc = netCols[ni];
+                template.push({
+                  kind: 'net', value: nc.label, type: 'net',
+                  path: sec.prefix.concat([nc.label]), members: nc.members
+                });
+                ni++;
+              }
+              template.push({ kind: 'old', idx: k });
+            }
+            while (ni < netCols.length) {
+              var nc2 = netCols[ni];
+              template.push({
+                kind: 'net', value: nc2.label, type: 'net',
+                path: sec.prefix.concat([nc2.label]), members: nc2.members
+              });
+              ni++;
+            }
+          });
+        } else {
+          /* Outer/middle level: aggregate across sibling tuples */
+          var siblingOrder = [];
+          var siblingMap = {};
+          for (var ci = 0; ci < n; ci++) {
+            if (colTypes[ci] !== 'data') continue;
+            var p = colPaths[ci];
+            if (!p || p.length <= netLevel) continue;
+            var levelVal = p[netLevel];
+            var sibPath = p.slice(0, netLevel).concat(p.slice(netLevel + 1));
+            var sibKey = JSON.stringify(sibPath);
+            if (!(sibKey in siblingMap)) {
+              siblingMap[sibKey] = { path: sibPath, colMap: {} };
+              siblingOrder.push(sibKey);
+            }
+            siblingMap[sibKey].colMap[levelVal] = ci;
+            siblingMap[sibKey].colMap[String(levelVal == null ? '' : levelVal).trim()] = ci;
+          }
+          function memberToIdxO(siblingEntry, memberCode) {
+            if (siblingEntry.colMap[memberCode] != null) return siblingEntry.colMap[memberCode];
+            var lab = labels[memberCode];
+            if (lab != null && siblingEntry.colMap[String(lab).trim()] != null) return siblingEntry.colMap[String(lab).trim()];
+            return null;
+          }
+          for (var kk = 0; kk < n; kk++) template.push({ kind: 'old', idx: kk });
+          /* Emit Net groups (group-major, sibling-minor) */
+          groups.forEach(function (g) {
+            var d = depthOf(g);
+            var indent = '';
+            for (var ii = 0; ii < d + 1; ii++) indent += '   ';
+            var label = indent + (g.name || 'Net');
+            siblingOrder.forEach(function (sibKey) {
+              var sib = siblingMap[sibKey];
+              var idxs = (g.members || []).map(function (mc) { return memberToIdxO(sib, mc); }).filter(function (x) { return x != null; });
+              if (!idxs.length) return;
+              var newPath = sib.path.slice(0, netLevel).concat([label]).concat(sib.path.slice(netLevel));
+              template.push({
+                kind: 'net', value: label, type: 'net',
+                path: newPath, members: idxs
+              });
+              anyInserted = true;
+            });
+          });
+        }
+
+        if (!anyInserted) return result;
+        return cxApplyColumnTemplate(result, template);
+      }
+      window.__cxInjectColumnNetGroups = cxInjectColumnNetGroups;
+
       function augmentResult(result, rowVarStr, overrides) {
         if (!result || !result.rowValues || !result.rowValues.length) return result;
         if (result.__cxAugmented) return result;
@@ -6226,12 +7012,51 @@
           return true;
         }
 
+        var _tbStore = (typeof window.__cxGetTbPresetStore === 'function') ? (window.__cxGetTbPresetStore() || {}) : {};
+        var _filterOv = null;
+        try { _filterOv = (typeof findOverrides === 'function') ? findOverrides(resolveLiveTablesHook()) : null; } catch (_foe) { _filterOv = null; }
+        if (!_filterOv && typeof window !== 'undefined' && window.__cxVariableOverrides) _filterOv = window.__cxVariableOverrides;
+
+        function expandSummaryValues(varName, values) {
+          var out = values.slice();
+          /* Expand scale-preset summary codes (TB/T2B/etc) → member codes */
+          var info = _tbStore[varName];
+          if (info && Array.isArray(info.summaries)) {
+            values.forEach(function (val) {
+              var sum = info.summaries.find(function (s) { return s.code === val; });
+              if (sum && Array.isArray(sum.members)) {
+                sum.members.forEach(function (m) {
+                  if (out.indexOf(m) < 0) out.push(m);
+                });
+              }
+            });
+          }
+          /* Expand Net group codes → member codes (group id OR group name matches) */
+          var ov = _filterOv && (_filterOv[varName] || _filterOv[String(varName).toLowerCase()]);
+          if (ov && Array.isArray(ov.groups)) {
+            values.forEach(function (val) {
+              var grp = ov.groups.find(function (g) {
+                return g && (g.id === val || g.name === val || String(g.name || '').trim() === String(val).trim());
+              });
+              if (grp && Array.isArray(grp.members)) {
+                grp.members.forEach(function (m) {
+                  var mStr = String(m);
+                  if (out.indexOf(mStr) < 0) out.push(mStr);
+                });
+              }
+            });
+          }
+          return out;
+        }
+
         function evalCond(c, rc) {
           if (!isReady(c)) return true;
           if (c.operator === 'is_blank') return getText(c.variableName, rc).trim() === '';
           if (c.operator === 'not_blank') return getText(c.variableName, rc).trim() !== '';
           if (c.operator === 'in' || c.operator === 'not_in') {
-            var sel = c.values;
+            /* Expand summary codes (TB/T2B/etc) to their member codes so summaries
+               behave like regular codes in filters */
+            var sel = expandSummaryValues(c.variableName, c.values);
             var keys = getValueKeys(c.variableName, rc);
             var hit = keys.some(function (k) { return sel.indexOf(k) >= 0; });
             return c.operator === 'in' ? hit : !hit;
@@ -7045,6 +7870,17 @@
             }
 
             var aug3 = augmentResult(t.result, t.rowVar, ov);
+            /* TOP augmentation — inject Net groups, TB/T2B/BB/B2B summaries, and Mean
+               as columns when colVar's innermost variable has the relevant overrides.
+               Supports nested TOP (per-section injection). */
+            if (t.colVar) {
+              try { aug3 = cxInjectColumnNetGroups(aug3, t.colVar, ov); }
+              catch (eN2) { console.warn('[S6] injectColNet err', eN2); }
+              try { aug3 = cxAddColumnSummary(aug3, t.colVar); }
+              catch (eC) { console.warn('[S6] addColSum err', eC); }
+              try { aug3 = cxAddColumnMean(aug3, t.colVar, ov); }
+              catch (eM) { console.warn('[S6] addColMean err', eM); }
+            }
             return Object.assign({}, t, { result: aug3 });
           }
           return t;
@@ -7122,32 +7958,19 @@
         });
       }
 
-      /* ── Switch Top/Side button ── */
+      /* ── Switch Top/Side button ──
+         Injects right below the "Output Options" button (outside Design card).
+         Uses fiber tree + rawDispatch to swap rowVar ↔ colVar. */
       function injectSwitchButton() {
-        /* Find the Design tab's TOP label — only visible when on Design tab */
-        var topLabel = Array.prototype.slice.call(document.querySelectorAll('.font-bold.uppercase.tracking-wide')).find(function (el) {
-          return (el.textContent || '').trim().toUpperCase() === 'TOP';
+        /* Switch button should always appear alongside Output Options on all tabs.
+           Uses Output Options as anchor — if it's not present we can't place Switch. */
+        var existing = document.getElementById('cx-switch-axes-wrapper');
+        var outputBtn = Array.prototype.slice.call(document.querySelectorAll('button')).find(function (b) {
+          return (b.textContent || '').trim() === 'Output Options';
         });
-        if (!topLabel) return;
-        if (document.getElementById('cx-switch-axes-wrapper')) return;
-
-        /* Walk up to find the TOP zone container (.rounded-xl with TOP inside) */
-        var topZone = topLabel.closest('.border-2') || topLabel.closest('[class*="rounded-xl"]');
-        if (!topZone) return;
-        /* Only inject if topZone is the inner TOP zone, not the outer Design container.
-           Heuristic: the outer container also contains SIDE. If so, find the inner one. */
-        var allLabels = topZone.querySelectorAll('.font-bold.uppercase.tracking-wide');
-        var hasSide = Array.prototype.some.call(allLabels, function (el) {
-          return (el.textContent || '').trim().toUpperCase() === 'SIDE';
-        });
-        if (hasSide) {
-          /* topZone is the outer design card — find the inner TOP-only zone */
-          var inner = topLabel.parentElement;
-          while (inner && inner !== topZone) {
-            if (inner.classList && (inner.classList.contains('rounded-xl') || inner.className.indexOf('rounded-xl') >= 0)) break;
-            inner = inner.parentElement;
-          }
-          if (inner && inner !== topZone) topZone = inner;
+        if (!outputBtn) {
+          if (existing) existing.style.display = 'none';
+          return;
         }
 
         var btn = document.createElement('button');
@@ -7155,7 +7978,7 @@
         btn.type = 'button';
         btn.innerHTML = '<span style="font-size:13px;line-height:1">⇄</span>&nbsp;Switch Top/Side';
         btn.title = 'Swap Top ↔ Side axes';
-        btn.style.cssText = 'display:inline-flex;align-items:center;padding:5px 10px;font-size:11px;font-weight:600;color:#475569;background:white;border:1px solid #e5e7eb;border-radius:6px;cursor:pointer;transition:border-color 0.15s,color 0.15s';
+        btn.style.cssText = 'display:inline-flex;align-items:center;padding:6px 12px;font-size:12px;font-weight:600;color:#475569;background:white;border:1px solid #e5e7eb;border-radius:8px;cursor:pointer;transition:border-color 0.15s,color 0.15s';
         btn.addEventListener('mouseenter', function () { btn.style.borderColor = '#93c5fd'; btn.style.color = '#2563eb'; });
         btn.addEventListener('mouseleave', function () { btn.style.borderColor = '#e5e7eb'; btn.style.color = '#475569'; });
 
@@ -7168,11 +7991,11 @@
             var rawDispatch = freshHook.queue.__cxOrigDispatch || freshHook.queue.dispatch;
             if (typeof rawDispatch !== 'function') { console.warn('[S6] switch: no dispatch'); return; }
 
-            /* Find the table currently being designed — prefer the one from TOP zone's fiber */
             var activeTableId = null;
-            var designFiber = fiberOf(topLabel);
-            if (designFiber) {
-              var t = getTableFromFiber(designFiber);
+            /* Try the Switch button's fiber first; fall back to Output Options */
+            var anchorFiber = fiberOf(btn) || fiberOf(outputBtn);
+            if (anchorFiber) {
+              var t = getTableFromFiber(anchorFiber);
               if (t && t.id) activeTableId = t.id;
             }
             if (!activeTableId) {
@@ -7192,7 +8015,6 @@
               if (!Array.isArray(prev)) return prev;
               return prev.map(function (t) {
                 if (!t || t.id !== activeTableId) return t;
-                /* Swap rowVar ↔ colVar; clear result so user knows to re-run */
                 return Object.assign({}, t, {
                   rowVar: t.colVar,
                   colVar: t.rowVar,
@@ -7205,14 +8027,45 @@
           }
         });
 
+        /* If wrapper exists but its parent is no longer outputBtn's parent
+           (React re-rendered), remove it so we re-insert in the right place */
+        if (existing && existing.parentNode !== outputBtn.parentNode) {
+          if (existing.parentNode) existing.parentNode.removeChild(existing);
+          existing = null;
+        }
+        if (existing) {
+          existing.style.display = '';
+          return; /* already correctly placed */
+        }
+
         var wrapper = document.createElement('div');
         wrapper.id = 'cx-switch-axes-wrapper';
-        wrapper.style.cssText = 'display:flex;justify-content:flex-end;margin:0 0 8px 0';
+        wrapper.style.cssText = 'display:inline-flex;align-items:center';
         wrapper.appendChild(btn);
 
-        /* Insert BEFORE the TOP zone so the button sits at the top of the Design card */
-        if (topZone.parentNode) {
-          topZone.parentNode.insertBefore(wrapper, topZone);
+        /* Insert as sibling BEFORE Output Options — don't touch outputBtn itself so React
+           can freely re-render it on tab change */
+        outputBtn.parentNode.insertBefore(wrapper, outputBtn);
+
+        /* Force the parent to lay out as a flex-row so Switch and Output Options sit
+           side-by-side on the SAME horizontal line. Record the original values so we
+           can restore them if the parent's children change. */
+        var parent = outputBtn.parentElement;
+        if (parent && !parent.__cxOrigLayout) {
+          parent.__cxOrigLayout = {
+            display: parent.style.display,
+            flexDirection: parent.style.flexDirection,
+            alignItems: parent.style.alignItems,
+            justifyContent: parent.style.justifyContent,
+            gap: parent.style.gap,
+          };
+        }
+        if (parent) {
+          parent.style.display = 'flex';
+          parent.style.flexDirection = 'row';
+          parent.style.alignItems = 'center';
+          parent.style.justifyContent = 'flex-end';
+          parent.style.gap = '8px';
         }
       }
 

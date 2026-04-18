@@ -338,8 +338,8 @@ function addCrosstabSheet(
   const ws = wb.addWorksheet(sheetName, { views: [{ showGridLines: false }] })
   const pendingRowMerges: Array<{ startRow: number; endRow: number; col: number }> = []
 
-  for (let col = 1; col <= rowLabelCols; col++) ws.getColumn(col).width = col === rowLabelCols ? 28 : 18
-  for (let col = rowLabelCols + 1; col <= totalCols; col++) ws.getColumn(col).width = showBoth ? 8 : 12
+  for (let col = 1; col <= rowLabelCols; col++) ws.getColumn(col).width = col === rowLabelCols ? 24 : 14
+  for (let col = rowLabelCols + 1; col <= totalCols; col++) ws.getColumn(col).width = showBoth ? 6 : 10
 
   const metaRow = ws.addRow([])
   metaRow.height = 18

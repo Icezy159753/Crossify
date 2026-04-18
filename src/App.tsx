@@ -1374,12 +1374,6 @@ export default function App() {
     if (activeTableId) runTable(activeTableId)
   }, [activeTableId, runTable])
 
-  const handleSwapAxes = useCallback(() => {
-    setTables(prev => prev.map(t =>
-      t.id !== activeTableId ? t : { ...t, rowVar: t.colVar, colVar: t.rowVar }
-    ))
-  }, [activeTableId])
-
   useEffect(() => {
     if (!dataset || !variableCatalog) {
       ;(window as Record<string, unknown>).__cxGetFilteredCases = null
@@ -2503,7 +2497,6 @@ export default function App() {
                   onMoveSideDown={handleMoveSideDown}
                   onUpdateName={handleUpdateTableName}
                   onGenerate={handleGenerate}
-                  onSwapAxes={handleSwapAxes}
                   canRun={canRun}
                 />
               )}

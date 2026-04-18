@@ -2,7 +2,7 @@ import { memo, useState, useCallback, type DragEvent } from 'react'
 
 const AXIS_ITEM_MIME = 'application/x-crossify-axis-item'
 const AXIS_TEXT_PREFIX = 'crossify-axis:'
-import { ArrowLeftRight, ChevronDown, ChevronUp, RotateCcw, X } from 'lucide-react'
+import { ChevronDown, ChevronUp, RotateCcw, X } from 'lucide-react'
 import {
   flattenAxisSpec,
   parseAxisSpec,
@@ -406,7 +406,6 @@ interface DesignCanvasProps {
   onMoveSideDown: (name: string) => void
   onUpdateName: (name: string) => void
   onGenerate: () => void
-  onSwapAxes?: () => void
   canRun: boolean
 }
 
@@ -431,7 +430,6 @@ export const DesignCanvas = memo(function DesignCanvas({
   onMoveSideDown,
   onUpdateName,
   onGenerate,
-  onSwapAxes,
   canRun,
 }: DesignCanvasProps) {
   const rowLevels = parseAxisSpec(table.rowVar)
@@ -486,20 +484,6 @@ export const DesignCanvas = memo(function DesignCanvas({
             onMoveDown={onMoveTopDown}
             onModeChange={setTopMode}
           />
-          <div className="flex items-center justify-between">
-            <div className="text-[10px] text-gray-400">← Side rows &nbsp;|&nbsp; Top columns →</div>
-            {onSwapAxes && (
-              <button
-                type="button"
-                onClick={onSwapAxes}
-                title="Swap Top ↔ Side axes"
-                className="inline-flex items-center gap-1 rounded border border-gray-200 bg-white px-2 py-1 text-[11px] font-semibold text-gray-600 hover:border-blue-300 hover:text-blue-600 transition-colors"
-              >
-                <ArrowLeftRight className="h-3.5 w-3.5" />
-                Switch Top/Side
-              </button>
-            )}
-          </div>
           <div className="flex min-w-0 items-start gap-3">
             <AxisDropZone
               title="Side"
