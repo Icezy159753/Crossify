@@ -217,3 +217,107 @@ interface CrosstabResult {
 9. **Async vs Sync** — `Pi` = sync (ใช้ใน Run All), `Zl` = async (ใช้ใน Run Table ปกติ) ทั้งคู่ต้องแก้ parallel กันถ้ามี bug ใน logic เดียวกัน
 
 10. **`_colPaths` const** — ถูก define ก่อน T2B block ใน `TiForCol` ถ้าอัปเดต `i` ใน T2B block แล้ว Mean section ต้องใช้ `i.colPaths` (updated) ไม่ใช่ `_colPaths` (stale)
+
+---
+
+## 11. 🔒 T2B Column Injection — Cross-Script Scope (CRITICAL — ห้ามแก้ถอย)
+
+**สถานะ:** ✅ ใช้ได้ทุกมิติ (Top เดี่ยว / Top หลายตัวแปร Add / Top+Nest / Side) — ยืนยันโดยผู้ใช้ 2026-04-19
+
+**Problem เคยเกิด:**
+- `cxAddColumnSummary` ไม่สามารถ inject TB/T2B/BB/B2B columns ได้ตอน Top เป็นหลายตัวแปร (`S0+A5_1`) หรือ Nested
+- Log พบ `fbInfo=null` ตลอด แม้ `pGuess='t2b_high_good'` และ `secVals` มีครบ 5 ค่า
+
+**Root cause:**
+- `buildScaleSummaryPreset` (บรรทัด 4419) อยู่ใน IIFE script block **4007–5853** (ปิด scope ด้วย `(function(){...})()` ที่ L4008/L5852)
+- `cxBuildSummaryInfoFromSectionValues` (บรรทัด ~7173) อยู่อีก script block **6594–9623**
+- 2 scripts ใช้ IIFE scope ต่างกัน → `typeof buildScaleSummaryPreset !== 'function'` = true ใน script หลัง → return null ทันที
+- ฟังก์ชัน `ensureTbInfoExpanded`, `expandTbStoredEntry`, `buildFactorOnlyPreset` ก็อยู่ใน scope แรกเหมือนกัน — ปัญหาเดียวกัน
+
+**Fix (ห้ามลบ):**
+
+1. **`index.html:5854-5858`** — ที่ท้าย IIFE แรก expose helpers ไปที่ `window.__cx*`:
+   ```js
+   window.__cxBuildScaleSummaryPreset = buildScaleSummaryPreset;
+   window.__cxBuildFactorOnlyPreset = buildFactorOnlyPreset;
+   window.__cxIsFactorOnlyPreset = isFactorOnlyPreset;
+   window.__cxCodeRowsFromOverride = codeRowsFromOverride;
+   ```
+
+2. **`index.html:~7173` `cxBuildSummaryInfoFromSectionValues`** — fallback ใช้ `window.__cxBuildScaleSummaryPreset` ถ้า local scope ไม่มี:
+   ```js
+   var builder = (typeof buildScaleSummaryPreset === 'function') ? buildScaleSummaryPreset
+     : (typeof window.__cxBuildScaleSummaryPreset === 'function' ? window.__cxBuildScaleSummaryPreset : null);
+   if (!builder) return null;
+   ```
+
+3. **`index.html:~6992,~7238` (cxAddColumnSummary + cxAddColumnMean)** — dataset resolution: `resolveLiveDataset` ไม่มีจริง → ต้อง fallback ไป `getDatasetHook()`:
+   ```js
+   var ds = null;
+   try { if (typeof resolveLiveDataset === 'function') ds = resolveLiveDataset(); } catch(_e){}
+   if (!ds && typeof getDatasetHook === 'function') {
+     try { var _h = getDatasetHook(); if (_h && _h.data) ds = _h.data; } catch(_e){}
+   }
+   ```
+   โดยไม่มี fallback นี้ `cxFindSectionOwnerVar` จะคืน null → `ownerVar=null` → skip injection
+
+4. **`index.html:~7079` (per-section branch ของ cxAddColumnSummary)** — สร้าง pseudoCtx จาก col paths ของ section → pass ให้ `ensureTbInfoExpanded(ownerVar, pseudoCtx, 0, len)` เพราะ `expandTbStoredEntry` ต้องการ `resultCtx.rowValues` ถึงจะ derive codeRows ได้
+
+**Debug log (อย่าลบ):**
+- `[S6 addColSum] flat=... sections=N storedKeys=[...] dsVars=N` — ยืนยัน dataset resolve
+- `[S6 addColSum] section N fallback owner=<var>` — เมื่อ primary owner lookup fail ต้อง fallback
+- `[S6 addColSum] fallback build N pGuess=<preset> secVals=[...] fbInfo=<object>` — จุดที่เคยพัง (fbInfo=null)
+- `[S6 addColSum] section N prefix=[...] owner=... info=... storedOwner=...` — final info ที่จะใช้ inject
+
+**กฎห้ามทำลาย (write protection):**
+- ❌ ห้ามลบ `window.__cxBuildScaleSummaryPreset` expose (L5854-5858)
+- ❌ ห้าม revert `cxBuildSummaryInfoFromSectionValues` กลับไปใช้ local `buildScaleSummaryPreset` อย่างเดียว
+- ❌ ห้ามลบ `getDatasetHook()` fallback ใน cxAddColumnSummary/cxAddColumnMean
+- ❌ ห้ามลบ pseudoCtx building ก่อนเรียก `ensureTbInfoExpanded`
+- ✅ ถ้าจะ refactor: ต้อง verify 4 scenarios — Top เดี่ยว, Top Add 2 vars, Top Nest 2 vars, Side — ก่อน commit
+
+**เกี่ยวข้อง:** ส่วน 10 (Net column injector) ใช้กลไก shallow-path detection + add-mode fallback + nested-section reorder คล้ายกัน (index.html:7440-7620) — ถ้าแก้ Net ต้องไม่กระทบ T2B และกลับกัน
+
+---
+
+## 12. 🔒 Top/Side Axis Chip Spacing — Design Canvas Tightening (CRITICAL — ห้ามแก้ถอย)
+
+**สถานะ:** ✅ ผู้ใช้ยืนยันดีแล้ว 2026-04-19 — chips ใน Top container ติดกันสวยงาม
+
+**Context:** บันเดิล `index-DsrIxxwV.js` ถูก compile จาก src/DesignCanvas.tsx เวอร์ชั่นเก่า คลาส DOM ไม่ตรงกับ `src/` ปัจจุบัน:
+- Bundle container class: `flex flex-wrap items-start gap-px min-h-[84px]` (gap-px = 1px)
+- src ปัจจุบัน: `flex flex-nowrap items-start gap-1` (gap-1 = 4px)
+- Chip class (ตรงกันทั้งคู่): `min-h-[42px] min-w-[86px] px-2 py-1.5 rounded-2xl`
+
+**Fix (ต้องคง):**
+
+1. **CSS rules ใน `index.html:1392-1403`** — ครอบคลุมทั้ง bundle + src variants:
+   ```css
+   .min-h-[84px].flex-wrap { gap: 0 !important; }
+   .min-h-[84px].flex-nowrap { gap: 0 !important; }
+   .min-h-[84px] > * { margin: 0 !important; }
+   .min-h-[84px] > * > div:first-child:not(.min-w-[86px]):not(.min-h-[42px]) { display: none !important; }
+   ```
+
+2. **JS runtime failsafe ใน `index.html:~1406-1441`** — `cxTightenTopChips()` + MutationObserver:
+   - Query `[class*="min-h-[84px]"]` → set `gap: 0`
+   - Loop children → set `margin: 0`
+   - Detect drop-zone grandchildren (has `w-2` หรือ `min-w-[10px]`) → `display: none`
+   - Debounced 150ms + re-run on DOM mutations
+
+**กฎห้ามทำลาย:**
+- ❌ ห้ามลบ CSS rules ข้างบน (ทั้ง 4 บรรทัด)
+- ❌ ห้ามลบ `cxTightenTopChips()` + MutationObserver setup
+- ❌ ห้ามเปลี่ยน selector `[class*="min-h-[84px]"]` เป็น attribute-specific อย่าง `[data-crossify-axis-scroll]` (attr นี้ไม่มีใน bundle เก่า)
+- ❌ ห้าม rebuild bundle เพื่อให้ class match src/ (จะพังฟีเจอร์อื่น — ดูส่วน 2)
+- ✅ ถ้าต้องแก้ระยะ: เปลี่ยนเฉพาะค่า `gap: 0` → `gap: <Npx>` ใน CSS rules, อย่าแตะ structure
+
+**เหตุผลต้องการทั้ง CSS + JS:**
+- CSS ทำงานเฉพาะ class ที่รู้จัก — ถ้า bundle อัปเดต class name ใหม่ CSS อาจ miss
+- JS runtime ทำงานกับ element ทั้งหมดที่มี substring `min-h-[84px]` และ detect drop zone ด้วย heuristic → robust กว่า
+
+**Test matrix ก่อน refactor:**
+1. Top 1 ตัวแปร → chip ชิดขอบซ้าย ไม่มี gap
+2. Top 2 ตัวแปร Add → chips ติดกัน ไม่มีพื้นที่ระหว่าง
+3. Top 3+ ตัวแปร → ทุก chip ติดกันแบบต่อเนื่อง
+4. Side vertical → ไม่กระทบ (class ต่าง: `min-h-[12px] h-3` สำหรับ drop zone, ไม่ match `min-w-[10px]`)

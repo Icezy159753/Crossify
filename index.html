@@ -86,6 +86,41 @@
         };
         console.log('[TB_Setting] global createWritable hook installed');
       }
+
+      /* Serialize showSaveFilePicker — prevent "File picker already active" toast.
+         A duplicate call (e.g. user double-clicks Save, or bundle retries while first
+         picker is still open) is rejected silently with AbortError, which bundles
+         treat as a user-cancelled pick (no error toast). */
+      if (typeof window.showSaveFilePicker === 'function') {
+        var _origShowSSFP = window.showSaveFilePicker;
+        var _ssfpActive = false;
+        window.showSaveFilePicker = function () {
+          if (_ssfpActive) {
+            console.warn('[CX] showSaveFilePicker suppressed — picker already active');
+            return new Promise(function () { });
+          }
+          _ssfpActive = true;
+          var p;
+          try { p = _origShowSSFP.apply(this, arguments); }
+          catch (e) { _ssfpActive = false; throw e; }
+          return Promise.resolve(p).finally(function () { _ssfpActive = false; });
+        };
+      }
+      if (typeof window.showOpenFilePicker === 'function') {
+        var _origShowOFP = window.showOpenFilePicker;
+        var _ofpActive = false;
+        window.showOpenFilePicker = function () {
+          if (_ofpActive) {
+            console.warn('[CX] showOpenFilePicker suppressed — picker already active');
+            return new Promise(function () { });
+          }
+          _ofpActive = true;
+          var p;
+          try { p = _origShowOFP.apply(this, arguments); }
+          catch (e) { _ofpActive = false; throw e; }
+          return Promise.resolve(p).finally(function () { _ofpActive = false; });
+        };
+      }
     })();
   </script>
   <!-- Script 4 — Inject TB_Setting sheet into settings xlsx on Save (both saveAs and File System Access API) -->
@@ -200,9 +235,14 @@
             }
 
             var currentStore = (typeof window.__cxGetTbPresetStore === 'function') ? window.__cxGetTbPresetStore() : {};
-            var merged = Object.assign({}, currentStore, newStore);
+            /* If TB_Setting exists in file, trust it as source-of-truth and drop old presets.
+               If no TB_Setting, keep current in-memory store. */
+            var merged = ws ? Object.assign({}, newStore) : Object.assign({}, currentStore);
             if (typeof window.__cxSetTbPresetStore === 'function') {
               window.__cxSetTbPresetStore(merged);
+              if (typeof cxSyncPresetHintsFromStore === 'function') {
+                try { cxSyncPresetHintsFromStore(merged); } catch (_eh) { }
+              }
               console.log('[TB_Setting] ✅ Restored T2B presets back to app state!');
             }
           }, 800);
@@ -432,15 +472,52 @@
       }
       window.__cxInterceptSaveAs = function (blob, filename, originalAction) {
         console.log('[TB_Setting] interceptedSaveAs called:', filename);
-        if (typeof filename === 'string' && /\.xlsx$/i.test(filename) && _isSettingsFilename(filename)) {
-          _processBlob(blob, filename, originalAction).catch(function (err) {
-            console.error('[TB_Setting] inject failed:', err);
+        if (typeof filename === 'string' && /\.xlsx$/i.test(filename)) {
+          if (_isSettingsFilename(filename)) {
+            _processBlob(blob, filename, originalAction).catch(function (err) {
+              console.error('[TB_Setting] inject failed:', err);
+              originalAction();
+            });
+            return;
+          }
+          /* Table-export files: resize all data columns to uniform narrow width */
+          _resizeTableExportColumns(blob, filename, originalAction).catch(function (err) {
+            console.error('[TB_Setting] table resize failed:', err);
             originalAction();
           });
           return;
         }
         originalAction();
       };
+
+      /* Resize all data columns to a uniform narrow width in exported crosstab files.
+         Row-label columns (A, B) stay readable; every column from C onward is 7 chars.
+         Skips the Index/TOC sheet (detected by having 'Index' name). */
+      async function _resizeTableExportColumns(blob, filename, originalAction) {
+        var ExcelJS = await _getExcelJS();
+        if (!ExcelJS) { originalAction(); return; }
+        var buf = await blob.arrayBuffer();
+        var wb = new ExcelJS.Workbook();
+        await wb.xlsx.load(buf);
+        wb.worksheets.forEach(function (ws) {
+          if (!ws || !ws.columns || ws.name === 'Index') return;
+          try {
+            var last = ws.columnCount || ws.actualColumnCount || ws.columns.length;
+            for (var c = 1; c <= last; c++) {
+              var col = ws.getColumn(c);
+              if (c === 1) col.width = 16;          /* row group label */
+              else if (c === 2) col.width = 14;     /* row leaf label */
+              else col.width = 5.5;                 /* uniform narrow data column */
+            }
+          } catch (_rcErr) { /* non-fatal */ }
+        });
+        var newBuf = await wb.xlsx.writeBuffer();
+        var newBlob = new Blob([newBuf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+        var _tempSave = window.__cxInterceptSaveAs;
+        window.__cxInterceptSaveAs = null;
+        window.saveAs(newBlob, filename);
+        window.__cxInterceptSaveAs = _tempSave;
+      }
 
       async function _processBlob(blob, filename, originalAction) {
         var ExcelJS = await _getExcelJS();
@@ -898,24 +975,35 @@
     /* Tailwind's h-screen / min-h-screen inside the app use physical 100vh — override
        so they fill the zoomed viewport fully */
     .h-screen, .min-h-screen { min-height: 125vh !important; }
-    /* Compact results table: smaller cell padding + font for a cleaner look */
-    [class*="overflow-auto"] table {
-      table-layout: auto !important;
+    /* Compact + uniform Results table.
+       Widths + table-layout: fixed applied by JS (normalizeResultsTableColumns).
+       Height locked here so empty "-" rows match data-row heights.
+       min-width: 0 overrides tailwind 'min-w-[980px]' on the render table, which
+       was stretching small (few-col) tables to 980px and making cols look huge. */
+    #root table {
+      border-collapse: collapse !important;
+      width: auto !important;
+      min-width: 0 !important;
+      max-width: none !important;
     }
-    [class*="overflow-auto"] table th,
-    [class*="overflow-auto"] table td {
-      padding: 3px 8px !important;
-      font-size: 11px !important;
-    }
-    /* All data columns (col 3+) equal width for a uniform professional look.
-       Cols 1-2 are row labels (group + leaf) and keep their natural width. */
-    [class*="overflow-auto"] table td:nth-child(n+3),
-    [class*="overflow-auto"] table th:nth-child(n+3) {
-      width: 70px !important;
-      min-width: 70px !important;
-      max-width: 70px !important;
-      text-align: center !important;
+    #root table th, #root table td {
+      padding: 2px 6px !important;
+      font-size: 10.5px !important;
+      vertical-align: middle !important;
       word-break: break-word !important;
+      text-align: center !important;
+      box-sizing: border-box !important;
+      overflow: hidden !important;
+    }
+    /* Uniform row height — data rows show 2 lines (count + percent),
+       empty rows show "-" but MUST occupy the same vertical space. */
+    #root table tbody tr {
+      height: 36px !important;
+    }
+    #root table tbody td {
+      height: 36px !important;
+      min-height: 36px !important;
+      line-height: 1.25 !important;
     }
   </style>
 </head>
@@ -1300,9 +1388,61 @@
       var styleEl = document.createElement('style');
       styleEl.textContent = [
         '.cursor-grab .opacity-0.transition-opacity { display: none !important; }',
-        '.flex-shrink-0.space-y-2 { display: none !important; }'
+        '.flex-shrink-0.space-y-2 { display: none !important; }',
+        /* Results table: expand container to nearly full viewport */
+        '.overflow-auto.rounded-lg.border.border-gray-200.select-none { max-height: calc(100vh - 110px) !important; overflow: auto !important; border-top-color: transparent !important; }',
+        /* Sticky thead — feels "outside the frame": solid bg + drop shadow below, no top border on container */
+        '.overflow-auto.rounded-lg.border.border-gray-200.select-none table { border-collapse: separate !important; border-spacing: 0 !important; }',
+        '.overflow-auto.rounded-lg.border.border-gray-200.select-none table thead { position: sticky !important; top: 0 !important; z-index: 30 !important; }',
+        '.overflow-auto.rounded-lg.border.border-gray-200.select-none table thead th { background-clip: padding-box !important; }',
+        '.overflow-auto.rounded-lg.border.border-gray-200.select-none table thead tr:last-child th { box-shadow: 0 4px 6px -2px rgba(31,78,120,0.25), 0 2px 0 #1F4E78; }',
+        /* Top/Side chip containers: tighten spacing between variable pills */
+        '.flex.min-h-\\[84px\\].flex-nowrap.items-start.gap-1 { gap: 0 !important; }',
+        /* Tighten Top axis chip spacing (bundle uses "flex flex-wrap items-start gap-px min-h-[84px]") */
+        '.min-h-\\[84px\\].flex-wrap { gap: 0 !important; }',
+        '.min-h-\\[84px\\].flex-nowrap { gap: 0 !important; }',
+        '.min-h-\\[84px\\] > * { margin: 0 !important; }',
+        '.min-h-\\[84px\\] > * > div:first-child:not(.min-w-\\[86px\\]):not(.min-h-\\[42px\\]) { display: none !important; }'
       ].join('\n');
       document.head.appendChild(styleEl);
+
+      /* JS failsafe — flatten Top axis chip spacing at runtime */
+      var _cxTightenTimer = null;
+      function cxTightenTopChips() {
+        try {
+          var containers = document.querySelectorAll('[class*="min-h-[84px]"]');
+          for (var i = 0; i < containers.length; i++) {
+            var c = containers[i];
+            c.style.gap = '0';
+            c.style.columnGap = '0';
+            var kids = c.children;
+            for (var j = 0; j < kids.length; j++) {
+              var k = kids[j];
+              k.style.margin = '0';
+              /* Check if first grandchild is a thin spacer (< 20px wide) → hide */
+              if (k.children && k.children[0]) {
+                var gc = k.children[0];
+                var cls = String(gc.className || '');
+                /* Heuristic: drop zones have "rounded" but no chip-like sizing */
+                if (cls.indexOf('min-w-[10px]') >= 0 || cls.indexOf(' w-2 ') >= 0 || /\bw-2\b/.test(cls)) {
+                  gc.style.display = 'none';
+                }
+              }
+            }
+          }
+        } catch (e) { }
+      }
+      function cxTightenDebounced() {
+        if (_cxTightenTimer) return;
+        _cxTightenTimer = setTimeout(function () {
+          _cxTightenTimer = null;
+          cxTightenTopChips();
+        }, 150);
+      }
+      try {
+        new MutationObserver(cxTightenDebounced).observe(document.body, { childList: true, subtree: true });
+      } catch (e) { }
+      setTimeout(cxTightenTopChips, 800);
 
       var varMenuEl = null;
 
@@ -2059,6 +2199,85 @@
         }
         return null;
       }
+
+      /* ── Mark sidebar variables that have T2B/Net applied ── */
+      var _cxMarkT2BTimer = null;
+      function cxMarkT2BVariables() {
+        try {
+          var ov = (window.__cxVariableOverrides && typeof window.__cxVariableOverrides === 'object') ? window.__cxVariableOverrides : {};
+          var tb = (typeof window.__cxGetTbPresetStore === 'function') ? (window.__cxGetTbPresetStore() || {}) : {};
+          function hasNet(name) {
+            if (!name) return false;
+            var o = ov[name];
+            if (!o || typeof o !== 'object') return false;
+            if (Array.isArray(o.netGroups) && o.netGroups.length) return true;
+            if (Array.isArray(o.groups) && o.groups.length) return true;
+            return false;
+          }
+          function hasT2B(name) {
+            if (!name) return false;
+            var o = ov[name];
+            if (o && typeof o === 'object') {
+              if (Array.isArray(o.customSummaries) && o.customSummaries.length) return true;
+              if (Array.isArray(o.summaries) && o.summaries.length) return true;
+              if (typeof o.summaryPreset === 'string' && o.summaryPreset) return true;
+            }
+            if (tb[name] && typeof tb[name] === 'object') return true;
+            return false;
+          }
+          function mkMarker(kind) {
+            var el = document.createElement('span');
+            el.setAttribute('data-cx-mark', kind);
+            el.textContent = kind === 'net' ? 'Net' : 'T2B';
+            var bg = kind === 'net' ? '#ede9fe' : '#dcfce7';
+            var fg = kind === 'net' ? '#5b21b6' : '#166534';
+            var bd = kind === 'net' ? '#c4b5fd' : '#86efac';
+            el.style.cssText = 'display:inline-flex;align-items:center;margin-left:4px;padding:1px 5px;border-radius:4px;background:' + bg + ';color:' + fg + ';font-size:9px;font-weight:700;border:1px solid ' + bd + ';flex-shrink:0;pointer-events:none;line-height:1.2';
+            return el;
+          }
+          var rows = document.querySelectorAll('[draggable="true"]');
+          for (var i = 0; i < rows.length; i++) {
+            var row = rows[i];
+            var cls = String(row.className || '');
+            if (cls.indexOf('cursor-grab') < 0) continue;
+            var fb = fiberOf3(row);
+            var name = varNameFromFiber3(fb);
+            if (!name) continue;
+            var existingNet = row.querySelector('[data-cx-mark="net"]');
+            var existingT2B = row.querySelector('[data-cx-mark="t2b"]');
+            // legacy marker cleanup
+            var legacy = row.querySelector('[data-cx-t2b-marker]');
+            if (legacy) legacy.remove();
+            var net = hasNet(name);
+            var t2b = hasT2B(name);
+            if (net) { if (!existingNet) row.appendChild(mkMarker('net')); }
+            else { if (existingNet) existingNet.remove(); }
+            if (t2b) { if (!existingT2B) row.appendChild(mkMarker('t2b')); }
+            else { if (existingT2B) existingT2B.remove(); }
+            if (net || t2b) {
+              var tip = 'มีการ Apply ' + [net ? 'Net groups' : '', t2b ? 'T2B / Summary' : ''].filter(Boolean).join(' + ');
+              row.setAttribute('title', tip);
+              row.setAttribute('data-cx-applied', '1');
+            } else if (row.getAttribute('data-cx-applied') === '1') {
+              row.removeAttribute('data-cx-applied');
+              var tt = row.getAttribute('title') || '';
+              if (tt.indexOf('มีการ Apply') === 0) row.removeAttribute('title');
+            }
+          }
+        } catch (e) { }
+      }
+      function cxMarkT2BVariablesDebounced() {
+        if (_cxMarkT2BTimer) return;
+        _cxMarkT2BTimer = setTimeout(function () {
+          _cxMarkT2BTimer = null;
+          cxMarkT2BVariables();
+        }, 120);
+      }
+      try {
+        var _cxMarkT2BObs = new MutationObserver(cxMarkT2BVariablesDebounced);
+        _cxMarkT2BObs.observe(document.body, { childList: true, subtree: true });
+      } catch (e) { }
+      setTimeout(cxMarkT2BVariables, 1500);
       function scoreVarLikeArray(arr) {
         if (!Array.isArray(arr) || arr.length === 0) return 0;
         var hit = 0;
@@ -2479,14 +2698,41 @@
         container.innerHTML = '';
         var hook = _hook || getDatasetHook();
         if (!hook) { container.innerHTML = '<div style="text-align:center;padding:40px;font-size:13px;color:#94a3b8">ไม่พบข้อมูล</div>'; return; }
-        var vars = (hook.data.variables || []).filter(function (v) {
-          return v && v.name && v._derived === true && v.gridRole !== 'side';
+        var ov = (window.__cxVariableOverrides && typeof window.__cxVariableOverrides === 'object') ? window.__cxVariableOverrides : {};
+        var tb = (typeof window.__cxGetTbPresetStore === 'function') ? (window.__cxGetTbPresetStore() || {}) : {};
+        function hasAppliedOverrides(name) {
+          var o = ov[name];
+          if (o && typeof o === 'object') {
+            if (Array.isArray(o.netGroups) && o.netGroups.length) return true;
+            if (Array.isArray(o.groups) && o.groups.length) return true;
+            if (Array.isArray(o.customSummaries) && o.customSummaries.length) return true;
+            if (Array.isArray(o.summaries) && o.summaries.length) return true;
+            if (typeof o.summaryPreset === 'string' && o.summaryPreset) return true;
+          }
+          if (tb[name] && typeof tb[name] === 'object') return true;
+          return false;
+        }
+        var vars = [];
+        var derivedMap = Object.create(null);
+        (hook.data.variables || []).forEach(function (v) {
+          if (v && v.name && v._derived === true && v.gridRole !== 'side') {
+            vars.push(v);
+            derivedMap[v.name] = true;
+          }
         });
+        try {
+          getAllApplyVars().forEach(function (gv) {
+            if (!gv || !gv.name) return;
+            if (derivedMap[gv.name]) return;
+            if (hasAppliedOverrides(gv.name)) vars.push(gv);
+          });
+        } catch (e) { }
         if (vars.length === 0) {
           container.innerHTML = '<div style="text-align:center;padding:40px;font-size:13px;color:#94a3b8">ยังไม่มีตัวแปรที่สร้างไว้</div>';
           return;
         }
         vars.forEach(function (v, idx) {
+          var isApplied = (v._derived !== true) && hasAppliedOverrides(v.name);
           var row = document.createElement('div');
           row.style.cssText = 'display:flex;align-items:center;gap:12px;padding:12px 14px;border-radius:12px;border:1.5px solid #e2e8f0;margin-bottom:8px;background:#fff;transition:all 0.15s';
           row.addEventListener('mouseover', function () { row.style.borderColor = '#93c5fd'; row.style.boxShadow = '0 2px 8px rgba(59,130,246,0.08)'; });
@@ -2499,8 +2745,16 @@
           var info = document.createElement('div');
           info.style.cssText = 'flex:1;min-width:0';
           var nameEl = document.createElement('div');
-          nameEl.style.cssText = 'font-size:13px;font-weight:700;color:#1e293b;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
-          nameEl.textContent = v.name;
+          nameEl.style.cssText = 'font-size:13px;font-weight:700;color:#1e293b;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:flex;align-items:center;gap:6px';
+          var nameTxt = document.createElement('span');
+          nameTxt.textContent = v.name;
+          nameEl.appendChild(nameTxt);
+          if (isApplied) {
+            var tag = document.createElement('span');
+            tag.style.cssText = 'font-size:9px;font-weight:700;color:#047857;background:#ecfdf5;border:1px solid #a7f3d0;border-radius:4px;padding:1px 6px';
+            tag.textContent = 'Applied Net/T2B';
+            nameEl.appendChild(tag);
+          }
           var labelEl = document.createElement('div');
           labelEl.style.cssText = 'font-size:11px;color:#64748b;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-top:1px';
           labelEl.textContent = v.label || '';
@@ -2536,11 +2790,32 @@
           });
 
           var delBtn = document.createElement('button');
-          delBtn.textContent = 'ลบ';
+          delBtn.textContent = isApplied ? 'ล้าง' : 'ลบ';
+          delBtn.title = isApplied ? 'ล้างค่า Net/T2B ที่ apply ไว้' : 'ลบตัวแปรนี้';
           delBtn.style.cssText = 'padding:6px 14px;border:1.5px solid #fca5a5;background:#fef2f2;color:#dc2626;border-radius:8px;cursor:pointer;font-size:11px;font-weight:600;font-family:inherit';
           delBtn.addEventListener('mouseover', function () { delBtn.style.background = '#fee2e2'; });
           delBtn.addEventListener('mouseout', function () { delBtn.style.background = '#fef2f2'; });
-          delBtn.addEventListener('click', function () { deleteCreatedVar(v.name); });
+          delBtn.addEventListener('click', function () {
+            if (isApplied) {
+              if (!confirm('ล้างค่า Net/T2B ที่ apply ไว้ใน "' + v.name + '" ?')) return;
+              var oo = window.__cxVariableOverrides || {};
+              if (oo[v.name]) {
+                delete oo[v.name].netGroups;
+                delete oo[v.name].groups;
+                delete oo[v.name].customSummaries;
+                delete oo[v.name].summaries;
+                delete oo[v.name].summaryPreset;
+              }
+              if (typeof window.__cxGetTbPresetStore === 'function' && typeof window.__cxSetTbPresetStore === 'function') {
+                var tbs = window.__cxGetTbPresetStore() || {};
+                if (tbs[v.name]) { delete tbs[v.name]; window.__cxSetTbPresetStore(tbs); }
+              }
+              try { cxMarkT2BVariables(); } catch (e) { }
+              renderManageList();
+            } else {
+              deleteCreatedVar(v.name);
+            }
+          });
 
           btns.appendChild(editBtn); btns.appendChild(applyBtn); btns.appendChild(delBtn);
           row.appendChild(numBadge); row.appendChild(info); row.appendChild(btns);
@@ -2647,19 +2922,78 @@
           }, 0);
         }
       }
+      function _cxParseMA(name) {
+        if (!name) return null;
+        var m = String(name).trim().match(/^(.*?)(?:[\$\x26](\d+)|_O(\d+))$/i);
+        if (!m) return null;
+        var base = (m[1] || '').trim();
+        var idx = parseInt(m[2] != null ? m[2] : m[3], 10);
+        if (!base || !isFinite(idx)) return null;
+        return { base: base, index: idx, groupName: base + '_O' };
+      }
+      function _cxGroupingSrc(v) {
+        var longSrc = v.longName || v.name;
+        if (_cxParseMA(longSrc)) return longSrc;
+        if (v.name && v.name !== longSrc && _cxParseMA(v.name)) return v.name;
+        return longSrc;
+      }
       function getAllApplyVars() {
         var hook = _hook || getDatasetHook();
         var all = (hook && hook.data && hook.data.variables) ? hook.data.variables : [];
-        return all.filter(function (v) {
+        var filtered = all.filter(function (v) {
           if (!v || !v.name) return false;
           if (v.gridRole === 'side') return false;
           if (v.isString && Object.keys(v.valueLabels || {}).length === 0) return false;
           return true;
-        }).map(function (v) {
-          var next = Object.assign({}, v);
-          next.displayName = resolveVarDisplayName(v);
-          return next;
         });
+        var result = [];
+        var groups = Object.create(null);
+        var seenGroupNames = Object.create(null);
+        filtered.forEach(function (v) {
+          if (v.isGroupedMA === true || v.isGroupedMa === true) {
+            if (seenGroupNames[v.name]) return;
+            seenGroupNames[v.name] = true;
+            var next = Object.assign({}, v);
+            next.displayName = resolveVarDisplayName(v);
+            next._isMAGroup = true;
+            next._memberNames = Array.isArray(v.memberNames) ? v.memberNames.slice() : [];
+            result.push(next);
+            return;
+          }
+          var parsed = _cxParseMA(_cxGroupingSrc(v));
+          if (parsed) {
+            var gn = parsed.groupName;
+            if (!groups[gn]) {
+              groups[gn] = { idx: result.length, first: v, members: [v] };
+              result.push(null);
+            } else {
+              groups[gn].members.push(v);
+            }
+            return;
+          }
+          var nextV = Object.assign({}, v);
+          nextV.displayName = resolveVarDisplayName(v);
+          result.push(nextV);
+        });
+        Object.keys(groups).forEach(function (gn) {
+          var g = groups[gn];
+          if (seenGroupNames[gn]) { result[g.idx] = null; return; }
+          var first = g.first;
+          var baseLabel = String(first.label || first.longName || '').replace(/\s*[-_]\s*\d+\s*$/, '').trim();
+          result[g.idx] = {
+            name: gn,
+            displayName: gn,
+            label: baseLabel || gn,
+            longName: first.longName || gn,
+            valueLabels: first.valueLabels || {},
+            isString: false,
+            isMA: true,
+            isGroupedMA: true,
+            _isMAGroup: true,
+            _memberNames: g.members.map(function (m) { return m.name; })
+          };
+        });
+        return result.filter(Boolean);
       }
       function varSignature(v) {
         var vl = (v && v.valueLabels && typeof v.valueLabels === 'object') ? v.valueLabels : {};
@@ -2700,7 +3034,15 @@
         if (!srcList || !tgtList || !stat || !srcNameEl) return;
 
         var all = getAllApplyVars();
-        if (!_applySourceVarName && all.length > 0) _applySourceVarName = all[0].name;
+        if (!_applySourceVarName && all.length > 0) {
+          var firstWithSim = all.find(function (v) {
+            if (!v || !v.name) return false;
+            if (!varSignature(v)) return false;
+            return getSimilarTargets(v.name).length > 0;
+          });
+          _applySourceVarName = (firstWithSim && firstWithSim.name) || all[0].name;
+          resetApplySelectionBySimilarity();
+        }
         var src = all.find(function (v) { return v.name === _applySourceVarName; }) || null;
         srcNameEl.textContent = src
           ? ((src.displayName || src.name) + (src.displayName && src.displayName !== src.name ? ' [' + src.name + ']' : '') + (src.label ? ' — ' + src.label : ''))
@@ -2749,7 +3091,7 @@
         var similar = getSimilarTargets(_applySourceVarName);
         tgtList.innerHTML = '';
         if (similar.length === 0) {
-          tgtList.innerHTML = '<div style="padding:18px;text-align:center;color:#94a3b8;font-size:12px">ไม่พบตัวแปรที่มี Code/Label เหมือนกัน</div>';
+          tgtList.innerHTML = '<div style="flex:1;display:flex;align-items:center;justify-content:center;min-height:180px;text-align:center;color:#94a3b8;font-size:12px;padding:24px">ไม่พบตัวแปรที่มี Code/Label เหมือนกัน<br/><span style="font-size:10px;opacity:0.8">ลองเลือกตัวแปรต้นทางอื่น</span></div>';
         } else {
           similar.forEach(function (v) {
             var on = !!_applySelected[v.name];
@@ -2802,6 +3144,8 @@
         t.textContent = 'Apply Net/T2B จาก ' + _applySourceVarName + ' ไป ' + targets.length + ' ตัวแปรแล้ว';
         document.body.appendChild(t);
         setTimeout(function () { t.remove(); }, 2800);
+        try { cxMarkT2BVariables(); } catch (e) { }
+        try { switchTab('manage'); } catch (e) { }
       }
       function buildApplyPanel() {
         var panel = document.createElement('div');
@@ -2821,9 +3165,9 @@
         var search = mkInput('ค้นหาตัวแปร...', 'text');
         search.addEventListener('input', function () { _applyFilterQ = search.value || ''; renderApplyPanel(); });
         var cols = document.createElement('div');
-        cols.style.cssText = 'display:grid;grid-template-columns:1fr 1fr;gap:10px;min-height:0;flex:1';
+        cols.style.cssText = 'display:flex;flex-direction:row;gap:10px;min-height:0;flex:1 1 auto;width:100%';
         var srcCol = document.createElement('div');
-        srcCol.style.cssText = 'display:flex;flex-direction:column;min-height:0;gap:6px';
+        srcCol.style.cssText = 'display:flex;flex-direction:column;min-height:0;min-width:0;gap:6px;flex:1 1 0';
         var srcT = document.createElement('div');
         srcT.style.cssText = 'font-size:11px;font-weight:700;color:#475569';
         srcT.textContent = 'ตัวแปรต้นทาง (SA/MA)';
@@ -2832,7 +3176,7 @@
         srcList.style.cssText = 'flex:1;min-height:0;overflow:auto;border:1px solid #e2e8f0;border-radius:10px;padding:6px;display:flex;flex-direction:column;gap:4px;background:#f8fafc';
         srcCol.appendChild(srcT); srcCol.appendChild(srcList);
         var tgtCol = document.createElement('div');
-        tgtCol.style.cssText = 'display:flex;flex-direction:column;min-height:0;gap:6px';
+        tgtCol.style.cssText = 'display:flex;flex-direction:column;min-height:0;min-width:0;gap:6px;flex:1 1 0';
         var tgtT = document.createElement('div');
         tgtT.style.cssText = 'font-size:11px;font-weight:700;color:#475569';
         tgtT.textContent = 'ตัวแปรปลายทาง (Code + Label เหมือนกัน)';
@@ -3780,7 +4124,11 @@
               if (!emptyCandidate && Object.keys(v).length === 0) emptyCandidate = v;
               var looksLike = Object.keys(v).some(function (k) {
                 var val = v[k];
-                return val && typeof val === 'object' && ('labels' in val || 'order' in val || 'weights' in val);
+                return val && typeof val === 'object' && (
+                  'labels' in val || 'order' in val || 'weights' in val ||
+                  'groups' in val || 'netGroups' in val ||
+                  'customSummaries' in val || 'summaries' in val || 'summaryPreset' in val
+                );
               });
               if (looksLike) return v;
             }
@@ -3822,16 +4170,43 @@
           window.__cxVariableOverrides = ov;
         }
       }
+      window.__cxPresetHintStore = window.__cxPresetHintStore || {};
+      function cxSetPresetHint(varName, presetId) {
+        if (!varName || !presetId) return;
+        var key = String(varName).trim().toLowerCase();
+        if (!key) return;
+        window.__cxPresetHintStore[key] = String(presetId).trim();
+      }
+      function cxGetPresetHint(varName) {
+        if (!varName) return '';
+        var key = String(varName).trim().toLowerCase();
+        return (window.__cxPresetHintStore && window.__cxPresetHintStore[key]) || '';
+      }
+      function cxSyncPresetHintsFromStore(store) {
+        if (!store || typeof store !== 'object') return;
+        Object.keys(store).forEach(function (k) {
+          var entry = store[k];
+          if (!entry) return;
+          var preset = '';
+          if (typeof entry === 'string') preset = entry;
+          else if (typeof entry === 'object') preset = entry.preset || entry.presetId || entry.setting || entry.value || '';
+          if (preset) cxSetPresetHint(k, preset);
+        });
+      }
 
       window.__cxGetTbPresetStore = function () {
         cxSyncGlobalSettingsFromOverrides();
-        return cxCloneJson(window.__cxGlobalSettingsState.tbPresets, {}) || {};
+        try { cxCleanupOrphanTbPresets(); } catch (_e) { }
+        var out = cxCloneJson(window.__cxGlobalSettingsState.tbPresets, {}) || {};
+        try { cxSyncPresetHintsFromStore(out); } catch (_e2) { }
+        return out;
       };
 
       window.__cxSetTbPresetStore = function (store) {
         var next = cxCloneJson(window.__cxGlobalSettingsState, { tbPresets: {}, sigSettings: { enabled: false, level: 95, sigLetters: '' } });
         next.tbPresets = cxCloneJson(store, {}) || {};
         cxPersistGlobalSettings(next);
+        try { cxSyncPresetHintsFromStore(next.tbPresets); } catch (_e3) { }
       };
 
       window.__cxLoadSigSettings = function () {
@@ -3854,6 +4229,59 @@
         setTimeout(cxSyncGlobalSettingsFromOverrides, 1200);
         setTimeout(cxSyncGlobalSettingsFromOverrides, 2500);
       }
+
+      /* Drop orphan TB presets — keys for variables not present in current dataset.
+         Keeps MA group names (BASE_O) whose base has members in the dataset. */
+      function cxCleanupOrphanTbPresets() {
+        try {
+          var hook = (typeof getDatasetHook === 'function') ? getDatasetHook() : null;
+          var vars = (hook && hook.data && Array.isArray(hook.data.variables)) ? hook.data.variables : null;
+          if (!vars || vars.length === 0) return false;
+          var valid = Object.create(null);
+          var maGroupsValid = Object.create(null);
+          vars.forEach(function (v) {
+            if (!v || !v.name) return;
+            var nm = String(v.name).trim();
+            if (nm) {
+              valid[nm] = true;
+              valid[nm.toLowerCase()] = true;
+            }
+            var ln = v.longName ? String(v.longName).trim() : '';
+            if (ln) {
+              valid[ln] = true;
+              valid[ln.toLowerCase()] = true;
+            }
+            var srcs = [v.longName, v.name];
+            for (var i = 0; i < srcs.length; i++) {
+              var src = srcs[i];
+              if (!src) continue;
+              var m = String(src).trim().match(/^(.*?)(?:[\$\x26](\d+)|_O(\d+))$/i);
+              if (m && m[1]) {
+                var gk = m[1].trim() + '_O';
+                maGroupsValid[gk] = true;
+                maGroupsValid[gk.toLowerCase()] = true;
+              }
+            }
+          });
+          var store = (window.__cxGlobalSettingsState && window.__cxGlobalSettingsState.tbPresets) || {};
+          var removed = [];
+          var kept = {};
+          Object.keys(store).forEach(function (k) {
+            var kt = String(k == null ? '' : k).trim();
+            var kl = kt.toLowerCase();
+            if (valid[kt] || valid[kl] || maGroupsValid[kt] || maGroupsValid[kl]) kept[k] = store[k];
+            else removed.push(k);
+          });
+          if (removed.length > 0 && typeof window.__cxSetTbPresetStore === 'function') {
+            console.log('[CX] Removing orphan TB presets (not in dataset):', removed);
+            window.__cxSetTbPresetStore(kept);
+            return true;
+          }
+          return false;
+        } catch (e) { console.warn('[CX] orphan cleanup err:', e); return false; }
+      }
+      setTimeout(cxCleanupOrphanTbPresets, 3000);
+      setTimeout(cxCleanupOrphanTbPresets, 6000);
 
       var PRESETS = [
         { id: 'tb_low_good', title: 'TB (1 ดี)', desc: '1=ดี · TB+BB', factorOnly: false, group: 'tb' },
@@ -4251,6 +4679,7 @@
           var storedJr = window.__cxGetTbPresetStore();
           storedJr[varName] = { preset: preset, summaries: [], memberLabels: memberLabelsJr };
           window.__cxSetTbPresetStore(storedJr);
+          if (typeof cxSetPresetHint === 'function') cxSetPresetHint(varName, preset);
           return true;
         }
 
@@ -4288,6 +4717,7 @@
         var stored = window.__cxGetTbPresetStore();
         stored[varName] = { preset: preset, summaries: summaries, memberLabels: memberLabels };
         window.__cxSetTbPresetStore(stored);
+        if (typeof cxSetPresetHint === 'function') cxSetPresetHint(varName, preset);
 
         setTimeout(function () { styleSummaryRows(modalEl); }, 120);
         setTimeout(function () { styleSummaryRows(modalEl); }, 400);
@@ -4721,6 +5151,58 @@
           labelToIdx[String(last).trim()] = ri;
         }
 
+        /* Net group injection (per-section, so multi-var SIDE gets Net rows per variable) */
+        var _secNetGroups = (ov && Array.isArray(ov.groups)) ? ov.groups : null;
+        if (_secNetGroups && _secNetGroups.length) {
+          function _depthOfSecNet(g) {
+            var d = 0, cur = g, guard = 0;
+            while (cur && cur.parentId && guard++ < 16) {
+              var par = _secNetGroups.find(function (x) { return x.id === cur.parentId; });
+              if (!par) break;
+              d++; cur = par;
+            }
+            return d;
+          }
+          var _existingNetLabelsSec = Object.create(null);
+          for (var _rsi = lo; _rsi < hi; _rsi++) {
+            var _rvLC = String(result.rowValues[_rsi] == null ? '' : result.rowValues[_rsi]).trim().toLowerCase();
+            if (_rvLC) _existingNetLabelsSec[_rvLC] = true;
+          }
+          _secNetGroups.forEach(function (g) {
+            var _gnameLC = String(g.name || 'Net').trim().toLowerCase();
+            if (_gnameLC && (_existingNetLabelsSec[_gnameLC] || _existingNetLabelsSec['net : ' + _gnameLC] || _existingNetLabelsSec['net: ' + _gnameLC])) return;
+            var memberIdxsN = [];
+            (g.members || []).forEach(function (mCode) {
+              var mt = String(mCode).trim();
+              if (labelToIdx[mt] != null) { memberIdxsN.push(labelToIdx[mt]); return; }
+              var lbl = (info && info.memberLabels && info.memberLabels[mCode]) || (labels && labels[mCode]);
+              if (lbl != null && labelToIdx[String(lbl).trim()] != null) memberIdxsN.push(labelToIdx[String(lbl).trim()]);
+            });
+            if (!memberIdxsN.length) return;
+            memberIdxsN.sort(function (a, b) { return a - b; });
+            var netCountsN = [];
+            for (var ciN = 0; ciN < colCount; ciN++) {
+              var sN = 0;
+              memberIdxsN.forEach(function (rix) { sN += (result.counts[rix] || [])[ciN] || 0; });
+              netCountsN.push(sN);
+            }
+            var totalNN = memberIdxsN.reduce(function (a, rix) { return a + (result.rowTotalsN[rix] || 0); }, 0);
+            var dN = _depthOfSecNet(g);
+            var indentN = '';
+            for (var iiN = 0; iiN < dN + 1; iiN++) indentN += '   ';
+            var labelN = indentN + (g.name || 'Net');
+            extra.push({
+              rv: labelN,
+              rt: 'net',
+              rp: cxRowPathForInjected(result, lo, hi, labelN),
+              ct: netCountsN,
+              rtn: totalNN,
+              _phase: 'pre',
+              _insertBeforeRi: memberIdxsN[0]
+            });
+          });
+        }
+
         if (info && info.summaries && info.summaries.length) {
           var _seenSumCodes = {};
           info.summaries.forEach(function (sum) {
@@ -4921,7 +5403,21 @@
             totalN: bases[s].totalN,
             colTotalsN: (bases[s].colTotalsN || []).slice()
           });
+          var vName = (chainVars && chainVars[s]) || branchVars[s] || branchVars[0];
+          var extras = cxSectionExtraRows(result, lo, hi, vName, overrides || {});
+          var preExtras = [];
+          var postExtras = [];
+          for (var _ex = 0; _ex < extras.length; _ex++) {
+            if (extras[_ex] && extras[_ex]._phase === 'pre') preExtras.push(extras[_ex]);
+            else postExtras.push(extras[_ex]);
+          }
+          preExtras.sort(function (a, b) { return (a._insertBeforeRi || 0) - (b._insertBeforeRi || 0); });
+          var preIdx = 0;
           for (var ri = lo; ri < hi; ri++) {
+            while (preIdx < preExtras.length && preExtras[preIdx]._insertBeforeRi === ri) {
+              pushRow(preExtras[preIdx]);
+              preIdx++;
+            }
             var rtt = (result.rowTypes && result.rowTypes[ri]) || 'data';
             pushRow({
               rv: result.rowValues[ri],
@@ -4931,10 +5427,12 @@
               rtn: result.rowTotalsN[ri] || 0
             });
           }
-          var vName = (chainVars && chainVars[s]) || branchVars[s] || branchVars[0];
-          var extras = cxSectionExtraRows(result, lo, hi, vName, overrides || {});
-          for (var ex = 0; ex < extras.length; ex++) {
-            pushRow(extras[ex]);
+          while (preIdx < preExtras.length) {
+            pushRow(preExtras[preIdx]);
+            preIdx++;
+          }
+          for (var ex = 0; ex < postExtras.length; ex++) {
+            pushRow(postExtras[ex]);
           }
         }
 
@@ -5054,6 +5552,136 @@
         });
       }
 
+      /* Normalize result table columns with UNIFORM widths + rowspan-safe text-align:
+         - Col 0 (row group label) : 130px, left-aligned
+         - Col 1 (row leaf label)  : 150px, left-aligned
+         - Col 2+                  : 62px each, center-aligned (equal for every table)
+         Colgroup + explicit table width + table-layout: fixed make the layout authoritative
+         so Total, Male, Female, SES A-E all render identical widths. */
+      var COL_W_GROUP = 120, COL_W_LEAF = 140, COL_W_DATA = 58;
+      function normalizeResultsTableColumns() {
+        document.querySelectorAll('#root table').forEach(function (tbl) {
+          try {
+            var headerRows = tbl.querySelectorAll('thead > tr');
+            var bodyRows = tbl.querySelectorAll('tbody > tr');
+            if (!bodyRows.length && !headerRows.length) return;
+
+            /* Count total columns by summing colspans of the widest row in body or header. */
+            function sumColspans(tr) {
+              var cnt = 0;
+              for (var i = 0; i < tr.children.length; i++) {
+                cnt += (parseInt(tr.children[i].getAttribute('colspan'), 10) || 1);
+              }
+              return cnt;
+            }
+            var nCols = 0;
+            bodyRows.forEach(function (tr) {
+              var c = sumColspans(tr);
+              if (c > nCols) nCols = c;
+            });
+            /* If body rows under-count (due to rowspan shifts), also check last header row. */
+            if (headerRows.length) {
+              var hC = sumColspans(headerRows[headerRows.length - 1]);
+              if (hC > nCols) nCols = hC;
+            }
+            if (!nCols) return;
+
+            /* Rebuild colgroup only if column count changed or colgroup is missing */
+            var existing = tbl.querySelector('colgroup');
+            var needsRebuild = !existing || existing.__cxNCols !== nCols
+              || existing.children.length !== nCols;
+            if (needsRebuild) {
+              if (existing && existing.parentNode) existing.parentNode.removeChild(existing);
+              var cg = document.createElement('colgroup');
+              cg.__cxNCols = nCols;
+              for (var ci = 0; ci < nCols; ci++) {
+                var col = document.createElement('col');
+                var w = (ci === 0) ? COL_W_GROUP : (ci === 1) ? COL_W_LEAF : COL_W_DATA;
+                col.style.setProperty('width', w + 'px', 'important');
+                cg.appendChild(col);
+              }
+              tbl.insertBefore(cg, tbl.firstChild);
+            }
+            /* Always (re)set table-level sizing so React re-renders can't strip it. */
+            var totalW = COL_W_GROUP + COL_W_LEAF + COL_W_DATA * Math.max(0, nCols - 2);
+            tbl.style.setProperty('width', totalW + 'px', 'important');
+            tbl.style.setProperty('max-width', totalW + 'px', 'important');
+            tbl.style.setProperty('table-layout', 'fixed', 'important');
+
+            /* Also set explicit width on every th/td in the first body row + every
+               thead LEAF cell (last header row). Provides redundant column sizing so
+               colspan'd group headers don't distort layout. */
+            function setCellWidth(cell, colIdx, cs) {
+              if (cs > 1) return; /* skip colspan cells */
+              var w = (colIdx === 0) ? COL_W_GROUP : (colIdx === 1) ? COL_W_LEAF : COL_W_DATA;
+              cell.style.setProperty('width', w + 'px', 'important');
+              cell.style.setProperty('min-width', w + 'px', 'important');
+              cell.style.setProperty('max-width', w + 'px', 'important');
+            }
+            if (bodyRows[0]) {
+              var r0grid = [];
+              var r0col = 0;
+              for (var r0i = 0; r0i < bodyRows[0].children.length; r0i++) {
+                while (r0grid[r0col]) r0col++;
+                var r0cell = bodyRows[0].children[r0i];
+                var r0cs = parseInt(r0cell.getAttribute('colspan'), 10) || 1;
+                setCellWidth(r0cell, r0col, r0cs);
+                for (var r0c = 0; r0c < r0cs; r0c++) r0grid[r0col + r0c] = true;
+                r0col += r0cs;
+              }
+            }
+
+            /* Grid walk: compute REAL column index of every cell, accounting for
+               rowspan/colspan. Apply:
+               1) Exact width on every non-spanning cell (belt-and-braces vs React restyling)
+               2) text-align: left on row-label cells (col 0-1), center on everything else */
+            function widthFor(colIdx) {
+              return (colIdx === 0) ? COL_W_GROUP : (colIdx === 1) ? COL_W_LEAF : COL_W_DATA;
+            }
+            function walkAndStyle(rows) {
+              var gridX = [];
+              rows.forEach(function (tr, rowIdx) {
+                if (!gridX[rowIdx]) gridX[rowIdx] = [];
+                var colIdx = 0;
+                for (var i = 0; i < tr.children.length; i++) {
+                  while (gridX[rowIdx][colIdx]) colIdx++;
+                  var cell = tr.children[i];
+                  var cs = parseInt(cell.getAttribute('colspan'), 10) || 1;
+                  var rs = parseInt(cell.getAttribute('rowspan'), 10) || 1;
+                  for (var r = 0; r < rs; r++) {
+                    if (!gridX[rowIdx + r]) gridX[rowIdx + r] = [];
+                    for (var c = 0; c < cs; c++) gridX[rowIdx + r][colIdx + c] = true;
+                  }
+                  /* Exact width per column — only when cell spans a single column */
+                  if (cs === 1) {
+                    var w = widthFor(colIdx);
+                    cell.style.setProperty('width', w + 'px', 'important');
+                    cell.style.setProperty('min-width', w + 'px', 'important');
+                    cell.style.setProperty('max-width', w + 'px', 'important');
+                  } else {
+                    /* Spanning cells (group headers) — sum child widths */
+                    var sumW = 0;
+                    for (var sc = 0; sc < cs; sc++) sumW += widthFor(colIdx + sc);
+                    cell.style.setProperty('width', sumW + 'px', 'important');
+                    cell.style.setProperty('min-width', sumW + 'px', 'important');
+                    cell.style.setProperty('max-width', sumW + 'px', 'important');
+                  }
+                  /* Text alignment based on column position */
+                  if (colIdx <= 1) {
+                    cell.style.setProperty('text-align', 'left', 'important');
+                  } else {
+                    cell.style.setProperty('text-align', 'center', 'important');
+                  }
+                  colIdx += cs;
+                }
+              });
+            }
+            walkAndStyle(Array.prototype.slice.call(bodyRows));
+            walkAndStyle(Array.prototype.slice.call(headerRows));
+          } catch (_rszErr) { /* silent */ }
+        });
+      }
+
       /* Clean Mean column cells: strip "(xxx.x)" percentage parens so TOP Mean matches
          SIDE Mean display (just the decimal value, no percent).
          Uses offset-from-END indexing to survive rowspan-shifted cells. */
@@ -5109,7 +5737,24 @@
       }
 
       var _styleTimer = null;
+      var _colTimer = null;
+      var _colLastRunAt = 0;
       new MutationObserver(function () {
+        try {
+          if (typeof isResultsTabActive === 'function' && !isResultsTabActive(document.getElementById('root'))) {
+            return;
+          }
+        } catch (_tabChkErr) { }
+        /* Colgroup injection — fastest possible (next tick) so users never see
+           the jumping-column effect during React render. */
+        if (_colTimer) clearTimeout(_colTimer);
+        var _now = Date.now();
+        var _wait = (_now - _colLastRunAt < 90) ? 90 : 24;
+        _colTimer = setTimeout(function () {
+          _colLastRunAt = Date.now();
+          normalizeResultsTableColumns();
+        }, _wait);
+        /* Non-critical styling (summary highlights, stat cell cleanup) — can wait. */
         if (_styleTimer) clearTimeout(_styleTimer);
         _styleTimer = setTimeout(function () {
           styleResultSummaryRows();
@@ -5248,6 +5893,13 @@
       document.addEventListener('keydown', function (e) {
         if (e.key === 'Escape' && _dialog) closeDialog();
       });
+
+      /* Expose preset-building helpers so cross-script callers (S6 column injector,
+         fallback summary builder) can access them. These IIFEs share `window`. */
+      window.__cxBuildScaleSummaryPreset = buildScaleSummaryPreset;
+      window.__cxBuildFactorOnlyPreset = buildFactorOnlyPreset;
+      window.__cxIsFactorOnlyPreset = isFactorOnlyPreset;
+      window.__cxCodeRowsFromOverride = codeRowsFromOverride;
 
     })();
   </script>
@@ -6038,7 +6690,11 @@
             Object.keys(v).length > 0) {
             var looksLike = Object.keys(v).some(function (k) {
               var val = v[k];
-              return val && typeof val === 'object' && ('labels' in val || 'order' in val || 'weights' in val);
+              return val && typeof val === 'object' && (
+                'labels' in val || 'order' in val || 'weights' in val ||
+                'groups' in val || 'netGroups' in val ||
+                'customSummaries' in val || 'summaries' in val || 'summaryPreset' in val
+              );
             });
             if (looksLike) return v;
           }
@@ -6186,8 +6842,22 @@
           return d;
         }
         var colCount = (result.colValues || []).length;
+        /* Dedup: collect existing row labels/values (normalized) to avoid double-injecting
+           a Net row when the bundle has already rendered one with the same group name. */
+        var _existingRowLabels = Object.create(null);
+        for (var _ri = 0; _ri < result.rowValues.length; _ri++) {
+          var _rv = String(result.rowValues[_ri] == null ? '' : result.rowValues[_ri]).trim().toLowerCase();
+          if (_rv) _existingRowLabels[_rv] = true;
+          var _rl = (result.rowLabels && result.rowLabels[_ri]) ? String(result.rowLabels[_ri]).trim().toLowerCase() : '';
+          if (_rl) _existingRowLabels[_rl] = true;
+        }
         var netRows = [];
         groups.forEach(function (g) {
+          var gname = String(g.name || 'Net').trim().toLowerCase();
+          if (gname && (_existingRowLabels[gname] || _existingRowLabels['net : ' + gname] || _existingRowLabels['net: ' + gname])) {
+            console.log('[S6 injectNet] skip dup group', g.name);
+            return;
+          }
           var idxs = (g.members || []).map(memberToIdx).filter(function (x) { return x != null; });
           if (!idxs.length) return;
           idxs.sort(function (a, b) { return a - b; });
@@ -6272,6 +6942,9 @@
           if (/^mean$/i.test(lab) || /^min$/i.test(lab) || /^max$/i.test(lab) || /^stddev$/i.test(lab)) return 'stat';
           return t != null && t !== '' ? t : 'data';
         });
+      }
+      function cxIsDataLikeColType(t) {
+        return t !== 'stat' && t !== 'summary' && t !== 'net';
       }
 
       /* Group cols into sections by path prefix (all but last). For single-var TOP, one section
@@ -6370,7 +7043,7 @@
          each candidate var's preset memberLabels or dataset valueLabels. Returns varName or null. */
       function cxFindSectionOwnerVar(result, sec, colTypes, flat, stored, dataset) {
         for (var ci = sec.startIdx; ci < sec.endIdx; ci++) {
-          if (colTypes[ci] !== 'data') continue;
+          if (!cxIsDataLikeColType(colTypes[ci])) continue;
           var cv = result.colValues[ci];
           var cvStr = String(cv == null ? '' : cv).trim();
           if (!cvStr) continue;
@@ -6382,6 +7055,9 @@
               var lbls = info.memberLabels;
               for (var c1 in lbls) {
                 if (lbls[c1] === cv || String(lbls[c1] == null ? '' : lbls[c1]).trim() === cvStr) {
+                  return vn;
+                }
+                if (String(c1 == null ? '' : c1).trim() === cvStr) {
                   return vn;
                 }
               }
@@ -6400,12 +7076,192 @@
                   if (vls[c2] === cv || String(vls[c2] == null ? '' : vls[c2]).trim() === cvStr) {
                     return vn;
                   }
+                  if (String(c2 == null ? '' : c2).trim() === cvStr) {
+                    return vn;
+                  }
                 }
               }
             }
           }
         }
         return null;
+      }
+      function cxNormalizePresetId(preset) {
+        if (preset == null) return '';
+        var raw = String(preset).trim();
+        if (!raw) return '';
+        if (typeof PRESETS !== 'undefined' && Array.isArray(PRESETS)) {
+          var byId = PRESETS.find(function (p) { return p && p.id === raw; });
+          if (byId) return byId.id;
+          var byTitle = PRESETS.find(function (p) {
+            return p && p.title && String(p.title).trim().toLowerCase() === raw.toLowerCase();
+          });
+          if (byTitle) return byTitle.id;
+        }
+        var map = {
+          'TB (1 ดี)': 'tb_low_good',
+          'TB (5 ดี)': 'tb_high_good',
+          'T2B (1 ดี)': 't2b_low_good',
+          'T2B (5 ดี)': 't2b_high_good',
+          'T3B (1 ดี)': 't3b_low_good',
+          'T3B (5 ดี)': 't3b_high_good',
+          'Justright (code)': 'justright_code',
+          'Justright (Normal)': 'justright_code',
+          'Justright (-2..2)': 'justright_centered',
+          'Justright (0-2)': 'justright_centered'
+        };
+        if (map[raw]) return map[raw];
+        var lower = raw.toLowerCase();
+        for (var k in map) {
+          if (String(k).toLowerCase() === lower) return map[k];
+        }
+        return raw;
+      }
+      function cxFindFallbackPresetVar(flat, stored, overrides) {
+        if (!Array.isArray(flat) || !flat.length) return null;
+        for (var i = flat.length - 1; i >= 0; i--) {
+          var vn = flat[i];
+          var info = cxLookupByVarName(stored, vn);
+          if (info && Array.isArray(info.summaries) && info.summaries.length) return vn;
+          if (info && info.preset && String(info.preset).trim()) return vn;
+          var ov = cxLookupByVarName(overrides, vn);
+          var ovSumm = ov && (ov.customSummaries || ov.summaries);
+          if (ovSumm && Array.isArray(ovSumm) && ovSumm.length) return vn;
+          if (ov && typeof ov.summaryPreset === 'string' && ov.summaryPreset.trim()) return vn;
+        }
+        return null;
+      }
+      function cxLookupByVarName(obj, vn) {
+        if (!obj || !vn) return null;
+        if (obj[vn] != null) return obj[vn];
+        var want = String(vn).trim().toLowerCase();
+        var keys = Object.keys(obj);
+        for (var i = 0; i < keys.length; i++) {
+          var k = keys[i];
+          if (String(k).trim().toLowerCase() === want) return obj[k];
+        }
+        return null;
+      }
+      function cxNormalizeSummaryInfoShape(rawInfo) {
+        if (!rawInfo) return null;
+        if (typeof rawInfo === 'string') return { preset: cxNormalizePresetId(rawInfo) };
+        if (typeof rawInfo !== 'object') return null;
+        var preset = rawInfo.preset;
+        if (!preset && typeof rawInfo.presetId === 'string') preset = rawInfo.presetId;
+        if (!preset && typeof rawInfo.setting === 'string') preset = rawInfo.setting;
+        if (!preset && typeof rawInfo.value === 'string') preset = rawInfo.value;
+        var info = Object.assign({}, rawInfo);
+        if (preset) info.preset = cxNormalizePresetId(preset);
+        return info;
+      }
+      function cxFindDatasetVarByName(dataset, vn) {
+        if (!dataset || !Array.isArray(dataset.variables) || !vn) return null;
+        var vnLC = String(vn).toLowerCase();
+        return dataset.variables.find(function (v) {
+          return v && (v.name === vn || v.longName === vn
+            || (v.name && v.name.toLowerCase() === vnLC)
+            || (v.longName && v.longName.toLowerCase() === vnLC));
+        }) || null;
+      }
+      function cxResolveColSummaryInfo(vn, stored, overrides, dataset) {
+        if (!vn) return null;
+        var ov = cxLookupByVarName(overrides, vn);
+        var info = cxNormalizeSummaryInfoShape(cxLookupByVarName(stored, vn));
+        if (typeof ensureTbInfoExpanded === 'function') {
+          try { ensureTbInfoExpanded(vn); } catch (_e0) { }
+          try { if (typeof window.__cxGetTbPresetStore === 'function') stored = window.__cxGetTbPresetStore() || stored; } catch (_e1) { }
+          info = cxNormalizeSummaryInfoShape(cxLookupByVarName(stored, vn)) || info;
+        }
+
+        var ovSummaries = ov && Array.isArray(ov.customSummaries) && ov.customSummaries.length
+          ? ov.customSummaries
+          : (ov && Array.isArray(ov.summaries) && ov.summaries.length ? ov.summaries : null);
+        var preset = (info && info.preset) || (ov && typeof ov.summaryPreset === 'string' ? ov.summaryPreset.trim() : '');
+        if (!preset && typeof cxGetPresetHint === 'function') preset = cxGetPresetHint(vn);
+        preset = cxNormalizePresetId(preset);
+        if (preset && typeof cxSetPresetHint === 'function') cxSetPresetHint(vn, preset);
+        var memberLabels = {};
+        if (info && info.memberLabels && Object.keys(info.memberLabels).length) memberLabels = Object.assign({}, info.memberLabels);
+        if (ov && ov.labels && Object.keys(ov.labels).length) memberLabels = Object.assign({}, memberLabels, ov.labels);
+
+        if (ovSummaries && ovSummaries.length) {
+          return { preset: preset || null, summaries: ovSummaries, memberLabels: memberLabels };
+        }
+        if (info && Array.isArray(info.summaries) && info.summaries.length) {
+          return { preset: info.preset || null, summaries: info.summaries, memberLabels: memberLabels };
+        }
+        if (!preset || typeof buildScaleSummaryPreset !== 'function') return null;
+
+        var dvar = cxFindDatasetVarByName(dataset, vn);
+        if (!dvar || !dvar.valueLabels || !Object.keys(dvar.valueLabels).length) {
+          return { preset: preset, summaries: [], memberLabels: memberLabels };
+        }
+        var codeKeys = Object.keys(dvar.valueLabels).filter(function (k) {
+          return k != null && String(k).trim() !== '' && !isSummaryKey(k);
+        });
+        codeKeys.sort(function (a, b) {
+          var an = Number(a), bn = Number(b);
+          if (isFinite(an) && isFinite(bn)) return an - bn;
+          return String(a).localeCompare(String(b), undefined, { numeric: true, sensitivity: 'base' });
+        });
+        if (!codeKeys.length) return null;
+        var codeRows = codeKeys.map(function (k) {
+          return { key: String(k), code: String(k), label: dvar.valueLabels[k], rowKind: 'code' };
+        });
+        var built = buildScaleSummaryPreset(codeRows, preset);
+        if (!built || !Array.isArray(built.summaries) || !built.summaries.length) return null;
+        codeRows.forEach(function (r) { memberLabels[r.key] = r.label; });
+        return { preset: preset, summaries: built.summaries, memberLabels: memberLabels };
+      }
+      function cxExtractPresetForVar(vn, stored, overrides) {
+        var rawS = cxNormalizeSummaryInfoShape(cxLookupByVarName(stored, vn));
+        var rawO = cxLookupByVarName(overrides, vn) || {};
+        var p = (rawS && rawS.preset) || (typeof rawO.summaryPreset === 'string' ? rawO.summaryPreset : '');
+        if (!p && typeof cxGetPresetHint === 'function') p = cxGetPresetHint(vn);
+        p = cxNormalizePresetId(p);
+        if (p && typeof cxSetPresetHint === 'function') cxSetPresetHint(vn, p);
+        return p || '';
+      }
+      function cxBuildSummaryInfoFromSectionValues(ownerVar, presetId, sectionValues) {
+        if (!presetId) return null;
+        var builder = (typeof buildScaleSummaryPreset === 'function') ? buildScaleSummaryPreset
+          : (typeof window !== 'undefined' && typeof window.__cxBuildScaleSummaryPreset === 'function' ? window.__cxBuildScaleSummaryPreset : null);
+        if (!builder) return null;
+        var vals = (sectionValues || []).map(function (v) { return String(v == null ? '' : v).trim(); }).filter(Boolean);
+        if (!vals.length) return null;
+        var uniq = [];
+        vals.forEach(function (v) { if (uniq.indexOf(v) < 0) uniq.push(v); });
+        if (!uniq.length) return null;
+        var codeRows = uniq.map(function (lab, idx) {
+          return { key: 'c' + String(idx + 1), code: String(idx + 1), label: lab, rowKind: 'code' };
+        });
+        var built = builder(codeRows, presetId);
+        if (!built || !Array.isArray(built.summaries) || !built.summaries.length) return null;
+        var memberLabels = {};
+        codeRows.forEach(function (r) { memberLabels[r.key] = r.label; });
+        return { preset: presetId, summaries: built.summaries, memberLabels: memberLabels };
+      }
+      function cxFallbackSummaryMembersForSection(preset, sumCode, dataIdxs) {
+        if (!Array.isArray(dataIdxs) || dataIdxs.length === 0) return [];
+        var pid = cxNormalizePresetId(preset || '');
+        var lowGood = /_low_good$/.test(pid);
+        var code = String(sumCode || '').toUpperCase();
+        var first = dataIdxs[0];
+        var second = dataIdxs.length > 1 ? dataIdxs[1] : null;
+        var last = dataIdxs[dataIdxs.length - 1];
+        var penult = dataIdxs.length > 1 ? dataIdxs[dataIdxs.length - 2] : null;
+        if (lowGood) {
+          if (code === 'TB') return [first];
+          if (code === 'T2B') return second != null ? [first, second] : [first];
+          if (code === 'BB') return [last];
+          if (code === 'B2B') return penult != null ? [penult, last] : [last];
+        } else {
+          if (code === 'TB') return [last];
+          if (code === 'T2B') return penult != null ? [last, penult] : [last];
+          if (code === 'BB') return [first];
+          if (code === 'B2B') return second != null ? [first, second] : [first];
+        }
+        return [];
       }
 
       /* Inject summary columns (TB/T2B/BB/B2B/T3B/B3B) for ANY structure:
@@ -6420,7 +7276,14 @@
         if (!flat.length) return result;
 
         var stored = (typeof window.__cxGetTbPresetStore === 'function') ? window.__cxGetTbPresetStore() : {};
-        var ds = (typeof resolveLiveDataset === 'function') ? resolveLiveDataset() : null;
+        var overrides = (typeof window !== 'undefined' && window.__cxVariableOverrides && typeof window.__cxVariableOverrides === 'object')
+          ? window.__cxVariableOverrides
+          : {};
+        var ds = null;
+        try { if (typeof resolveLiveDataset === 'function') ds = resolveLiveDataset(); } catch (_erD1) { }
+        if (!ds && typeof getDatasetHook === 'function') {
+          try { var _hD = getDatasetHook(); if (_hD && _hD.data) ds = _hD.data; } catch (_erD2) { }
+        }
         var colTypes = cxNormalizedColTypes(result);
         var n = result.colValues.length;
         var colPaths = result.colPaths && result.colPaths.length === n
@@ -6433,11 +7296,41 @@
 
         /* Detect nested-outer-preset: axis is a single nested branch (length 1, depth > 1)
            with preset on the OUTER variable but not on inner. */
-        var isNestedSingleBranch = parsed.length === 1 && parsed[0].length > 1;
+        var _maxColDepth = 1;
+        for (var _cd = 0; _cd < colPaths.length; _cd++) {
+          var _cp = colPaths[_cd];
+          if (_cp && _cp.length > _maxColDepth) _maxColDepth = _cp.length;
+        }
+        var isNestedSingleBranch = (flat.length > 1 && _maxColDepth > 1) || (parsed.length === 1 && parsed[0].length > 1);
         var outerVar = isNestedSingleBranch ? parsed[0][0] : null;
         var innerVar = isNestedSingleBranch ? parsed[0][parsed[0].length - 1] : null;
-        var outerInfo = outerVar ? stored[outerVar] : null;
-        var innerInfo = innerVar ? stored[innerVar] : null;
+        if (typeof ensureTbInfoExpanded === 'function') {
+          /* Build pseudo context from outer/inner level colValues */
+          var _outerVals = [];
+          var _innerVals = [];
+          for (var _ciE = 0; _ciE < n; _ciE++) {
+            if (!cxIsDataLikeColType(colTypes[_ciE])) continue;
+            var _pE = colPaths[_ciE];
+            if (_pE && _pE.length > 0) {
+              if (_outerVals.indexOf(_pE[0]) < 0) _outerVals.push(_pE[0]);
+              var _last = _pE[_pE.length - 1];
+              if (_innerVals.indexOf(_last) < 0) _innerVals.push(_last);
+            }
+          }
+          try {
+            if (outerVar) ensureTbInfoExpanded(outerVar,
+              { rowValues: _outerVals, rowTypes: _outerVals.map(function () { return 'data'; }) },
+              0, _outerVals.length);
+          } catch (_eo) { }
+          try {
+            if (innerVar) ensureTbInfoExpanded(innerVar,
+              { rowValues: _innerVals, rowTypes: _innerVals.map(function () { return 'data'; }) },
+              0, _innerVals.length);
+          } catch (_ei) { }
+          try { stored = window.__cxGetTbPresetStore() || stored; } catch (_er) { }
+        }
+        var outerInfo = outerVar ? cxResolveColSummaryInfo(outerVar, stored, overrides, ds) : null;
+        var innerInfo = innerVar ? cxResolveColSummaryInfo(innerVar, stored, overrides, ds) : null;
         var outerHasPreset = outerInfo && outerInfo.summaries && outerInfo.summaries.length;
         var innerHasPreset = innerInfo && innerInfo.summaries && innerInfo.summaries.length;
 
@@ -6452,7 +7345,7 @@
           var siblingOrder = [];
           var siblingMap = {};
           for (var ci = 0; ci < n; ci++) {
-            if (colTypes[ci] !== 'data') continue;
+            if (!cxIsDataLikeColType(colTypes[ci])) continue;
             var p = colPaths[ci];
             if (!p || p.length <= presetLevel) continue;
             var levelVal = p[presetLevel];
@@ -6470,13 +7363,25 @@
             if (existingSumCodes[sum.code]) return;
             siblingOrder.forEach(function (sibKey) {
               var sib = siblingMap[sibKey];
+              var sibDataIdxs = [];
+              Object.keys(sib.colMap).forEach(function (k) {
+                var idx = sib.colMap[k];
+                if (typeof idx === 'number' && sibDataIdxs.indexOf(idx) < 0) sibDataIdxs.push(idx);
+              });
+              sibDataIdxs.sort(function (a, b) { return a - b; });
               var memberIdxs = [];
               (sum.members || []).forEach(function (mCode) {
                 var lbl = memberLabels[mCode] || mCode;
                 var lblKey = String(lbl == null ? '' : lbl).trim();
+                var codeKey = String(mCode == null ? '' : mCode).trim();
                 if (sib.colMap[lbl] != null) memberIdxs.push(sib.colMap[lbl]);
                 else if (sib.colMap[lblKey] != null) memberIdxs.push(sib.colMap[lblKey]);
+                else if (sib.colMap[mCode] != null) memberIdxs.push(sib.colMap[mCode]);
+                else if (sib.colMap[codeKey] != null) memberIdxs.push(sib.colMap[codeKey]);
               });
+              if (!memberIdxs.length) {
+                memberIdxs = cxFallbackSummaryMembersForSection(info.preset, sum.code, sibDataIdxs);
+              }
               if (!memberIdxs.length) return;
               var newPath = sib.path.slice(0, presetLevel).concat([sum.code]).concat(sib.path.slice(presetLevel));
               template.push({
@@ -6489,13 +7394,42 @@
         } else {
           /* ── Per-section owner-based injection (handles single-var, multi-branch, nested-inner) ── */
           var sectInfo = cxColSections(result, colTypes);
-          console.log('[S6] addColSum: flat=', flat, 'sections=', sectInfo.sections.length,
-            'stored keys=', Object.keys(stored).filter(function(k){return stored[k]&&stored[k].summaries&&stored[k].summaries.length}));
-          sectInfo.sections.forEach(function (sec) {
+          console.log('[S6 addColSum] flat=', flat, 'sections=', sectInfo.sections.length, 'storedKeys=', Object.keys(stored), 'dsVars=', ds && ds.variables ? ds.variables.length : 'NULL');
+          sectInfo.sections.forEach(function (sec, _si) {
             var ownerVar = cxFindSectionOwnerVar(result, sec, colTypes, flat, stored, ds);
-            var info = ownerVar ? stored[ownerVar] : null;
-            console.log('[S6] addColSum section', sec.prefix, '[', sec.startIdx, '..', sec.endIdx, '] owner=', ownerVar,
-              'summaries=', info && info.summaries ? info.summaries.length : 0);
+            if (!ownerVar) {
+              ownerVar = cxFindFallbackPresetVar(flat, stored, overrides);
+              if (ownerVar) console.log('[S6 addColSum] section', _si, 'fallback owner=', ownerVar);
+            }
+            if (ownerVar && typeof ensureTbInfoExpanded === 'function') {
+              /* Build pseudo row-based result from this column section so expand can detect codes */
+              var pseudoRowValues = [];
+              var pseudoRowTypes = [];
+              for (var _liX = sec.startIdx; _liX < sec.endIdx; _liX++) {
+                if (!cxIsDataLikeColType(colTypes[_liX])) continue;
+                var _p = colPaths[_liX];
+                var _last = _p && _p.length ? _p[_p.length - 1] : result.colValues[_liX];
+                pseudoRowValues.push(_last);
+                pseudoRowTypes.push('data');
+              }
+              var _pseudoCtx = { rowValues: pseudoRowValues, rowTypes: pseudoRowTypes };
+              try { ensureTbInfoExpanded(ownerVar, _pseudoCtx, 0, pseudoRowValues.length); } catch (_eE) { }
+              try { stored = window.__cxGetTbPresetStore() || stored; } catch (_eR) { }
+            }
+            var info = ownerVar ? cxResolveColSummaryInfo(ownerVar, stored, overrides, ds) : null;
+            var _fbInfo = null;
+            if ((!info || !info.summaries || !info.summaries.length) && ownerVar) {
+              var secVals = [];
+              for (var _sv = sec.startIdx; _sv < sec.endIdx; _sv++) {
+                if (!cxIsDataLikeColType(colTypes[_sv])) continue;
+                secVals.push(result.colValues[_sv]);
+              }
+              var pGuess = cxExtractPresetForVar(ownerVar, stored, overrides);
+              _fbInfo = cxBuildSummaryInfoFromSectionValues(ownerVar, pGuess, secVals);
+              console.log('[S6 addColSum] fallback build', _si, 'pGuess=', pGuess, 'secVals=', secVals, 'fbInfo=', _fbInfo);
+              if (_fbInfo && _fbInfo.summaries && _fbInfo.summaries.length) info = _fbInfo;
+            }
+            console.log('[S6 addColSum] section', _si, 'prefix=', sec.prefix, 'owner=', ownerVar, 'info=', info, 'storedOwner=', ownerVar ? stored[ownerVar] : null);
             if (!info || !info.summaries || !info.summaries.length) {
               /* No preset for this section — keep cols as-is */
               for (var j0 = sec.startIdx; j0 < sec.endIdx; j0++) template.push({ kind: 'old', idx: j0 });
@@ -6518,11 +7452,13 @@
               if (colTypes[i] === 'stat' && insertIdx === sec.endIdx) insertIdx = i;
             }
             var labelToIdx = {};
+            var sectionDataIdxs = [];
             for (var li = sec.startIdx; li < sec.endIdx; li++) {
-              if (colTypes[li] === 'stat' || colTypes[li] === 'summary') continue;
+              if (!cxIsDataLikeColType(colTypes[li])) continue;
               var cv = result.colValues[li];
               labelToIdx[cv] = li;
               labelToIdx[String(cv == null ? '' : cv).trim()] = li;
+              sectionDataIdxs.push(li);
             }
             for (var j = sec.startIdx; j < insertIdx; j++) template.push({ kind: 'old', idx: j });
             info.summaries.forEach(function (sum) {
@@ -6531,9 +7467,15 @@
               (sum.members || []).forEach(function (mCode) {
                 var lbl = memberLabels[mCode] || mCode;
                 var lblKey = String(lbl == null ? '' : lbl).trim();
+                var codeKey = String(mCode == null ? '' : mCode).trim();
                 if (labelToIdx[lbl] != null) memberIdxs.push(labelToIdx[lbl]);
                 else if (labelToIdx[lblKey] != null) memberIdxs.push(labelToIdx[lblKey]);
+                else if (labelToIdx[mCode] != null) memberIdxs.push(labelToIdx[mCode]);
+                else if (labelToIdx[codeKey] != null) memberIdxs.push(labelToIdx[codeKey]);
               });
+              if (!memberIdxs.length) {
+                memberIdxs = cxFallbackSummaryMembersForSection(info.preset, sum.code, sectionDataIdxs);
+              }
               if (!memberIdxs.length) return;
               template.push({
                 kind: 'sum', value: sum.code, type: 'summary',
@@ -6558,8 +7500,8 @@
           try { ensureTbInfoExpanded(vn); } catch (_e) { }
         }
         var stored = (typeof window.__cxGetTbPresetStore === 'function') ? window.__cxGetTbPresetStore() : {};
-        var info = stored[vn];
-        var ov = (overrides && overrides[vn]) || {};
+        var info = cxNormalizeSummaryInfoShape(cxLookupByVarName(stored, vn));
+        var ov = cxLookupByVarName(overrides, vn) || {};
         var manualWeights = ov.weights;
         var labels = ov.labels || {};
         var manualOk = manualWeights && Object.keys(manualWeights).some(function (k) {
@@ -6588,6 +7530,10 @@
            so the above paths yield nothing. Derive weights + labels directly from the
            dataset's valueLabels, ordered by code. Preset direction (_low_good/_high_good)
            determines ascending vs descending weights. */
+        if (!Object.keys(weights).length && (!info || !info.preset) && typeof cxGetPresetHint === 'function') {
+          var hinted = cxGetPresetHint(vn);
+          if (hinted) info = Object.assign({}, info || {}, { preset: cxNormalizePresetId(hinted) });
+        }
         if (!Object.keys(weights).length && info && info.preset) {
           var ds = (typeof resolveLiveDataset === 'function') ? resolveLiveDataset() : null;
           if (ds && Array.isArray(ds.variables)) {
@@ -6629,7 +7575,11 @@
         if (!flat.length) return result;
 
         var stored = (typeof window.__cxGetTbPresetStore === 'function') ? window.__cxGetTbPresetStore() : {};
-        var ds = (typeof resolveLiveDataset === 'function') ? resolveLiveDataset() : null;
+        var ds = null;
+        try { if (typeof resolveLiveDataset === 'function') ds = resolveLiveDataset(); } catch (_erD1) { }
+        if (!ds && typeof getDatasetHook === 'function') {
+          try { var _hD = getDatasetHook(); if (_hD && _hD.data) ds = _hD.data; } catch (_erD2) { }
+        }
         var colTypes = cxNormalizedColTypes(result);
         var n = result.colValues.length;
         var colPaths = result.colPaths && result.colPaths.length === n
@@ -6651,7 +7601,12 @@
           return Object.keys(labelToWeight).length ? labelToWeight : null;
         }
 
-        var isNestedSingleBranch = parsed.length === 1 && parsed[0].length > 1;
+        var _maxColDepthM = 1;
+        for (var _cmd = 0; _cmd < colPaths.length; _cmd++) {
+          var _cmp = colPaths[_cmd];
+          if (_cmp && _cmp.length > _maxColDepthM) _maxColDepthM = _cmp.length;
+        }
+        var isNestedSingleBranch = (flat.length > 1 && _maxColDepthM > 1) || (parsed.length === 1 && parsed[0].length > 1);
         var outerVar = isNestedSingleBranch ? parsed[0][0] : null;
         var innerVar = isNestedSingleBranch ? parsed[0][parsed[0].length - 1] : null;
         var outerInfo = outerVar ? stored[outerVar] : null;
@@ -6670,7 +7625,7 @@
           var siblingOrder = [];
           var siblingMap = {};
           for (var ci = 0; ci < n; ci++) {
-            if (colTypes[ci] !== 'data') continue;
+            if (!cxIsDataLikeColType(colTypes[ci])) continue;
             var p = colPaths[ci];
             if (!p || p.length <= presetLevel) continue;
             var levelVal = p[presetLevel];
@@ -6712,21 +7667,36 @@
           sectInfo.sections.forEach(function (sec) {
             var ownerVar = cxFindSectionOwnerVar(result, sec, colTypes, flat, stored, ds);
             var ltw = ownerVar ? buildLabelToWeight(ownerVar) : null;
+            var infoM = ownerVar ? cxResolveColSummaryInfo(ownerVar, stored, overrides || {}, ds) : null;
+            if ((!infoM || !infoM.preset) && ownerVar) {
+              var pM = cxExtractPresetForVar(ownerVar, stored, overrides || {});
+              if (pM) infoM = Object.assign({}, infoM || {}, { preset: pM });
+            }
             var hasMean = false;
             for (var hi = sec.startIdx; hi < sec.endIdx; hi++) {
               var cv0 = String(result.colValues[hi] == null ? '' : result.colValues[hi]).trim();
               if (colTypes[hi] === 'stat' && /^mean$/i.test(cv0)) { hasMean = true; break; }
             }
             var weightedCols = [];
-            if (ltw && !hasMean) {
-              for (var wi = sec.startIdx; wi < sec.endIdx; wi++) {
-                var t = colTypes[wi];
-                if (t === 'stat' || t === 'summary' || t === 'net') continue;
+            var dataIdxs = [];
+            for (var wi = sec.startIdx; wi < sec.endIdx; wi++) {
+              var t = colTypes[wi];
+              if (t === 'stat' || t === 'summary' || t === 'net') continue;
+              dataIdxs.push(wi);
+              if (!hasMean && ltw) {
                 var cv = result.colValues[wi];
                 var key = String(cv == null ? '' : cv).trim();
                 var w = ltw[cv];
                 if (w == null) w = ltw[key];
                 if (w != null) weightedCols.push({ idx: wi, weight: w });
+              }
+            }
+            if (!hasMean && weightedCols.length === 0 && dataIdxs.length > 0 && infoM && infoM.preset) {
+              var lowGoodM = /_low_good$/.test(String(infoM.preset));
+              for (var di = 0; di < dataIdxs.length; di++) {
+                var idx = dataIdxs[di];
+                var wAuto = lowGoodM ? (dataIdxs.length - di) : (di + 1);
+                weightedCols.push({ idx: idx, weight: wAuto });
               }
             }
             for (var j = sec.startIdx; j < sec.endIdx; j++) template.push({ kind: 'old', idx: j });
@@ -6764,7 +7734,7 @@
         if (!colVarStr || !Array.isArray(result.counts)) return result;
         var parsed = parseAxis(colVarStr);
         var flat = flatVars(parsed);
-        if (!flat.length || !overrides) return result;
+        if (!flat.length || !overrides) { console.log('[S6 injColNet] bail — flat/overrides', {flat: flat, hasOv: !!overrides}); return result; }
 
         /* Find variable in axis that has groups (prefer innermost) */
         function getOv(varName) {
@@ -6781,6 +7751,13 @@
           if (o && Array.isArray(o.groups) && o.groups.length) {
             netVar = flat[li]; netLevel = li; ov = o; break;
           }
+        }
+        console.log('[S6 injColNet] flat=', flat, 'netVar=', netVar, 'netLevel=', netLevel, 'groups=', ov && ov.groups ? ov.groups.length : 0);
+        if (ov) {
+          var _dbgPaths = [];
+          var _rawPaths = result.colPaths || [];
+          for (var _di = 0; _di < Math.min(_rawPaths.length, 6); _di++) _dbgPaths.push(_rawPaths[_di]);
+          console.log('[S6 injColNet] sample colPaths=', JSON.stringify(_dbgPaths), 'colValues=', (result.colValues || []).slice(0, 6));
         }
         if (!ov) return result;
         var groups = ov.groups;
@@ -6801,8 +7778,29 @@
         }
 
         var isInnermost = (netLevel === flat.length - 1);
+        /* Shallow-path detection: if max path depth ≤ netLevel+1, the axis is not
+           truly nested (e.g. Add mode where variables are parallel), so treat as innermost
+           to insert one Net column per-section instead of per-sibling. */
+        if (!isInnermost) {
+          var _maxDepth = 0;
+          for (var _pi = 0; _pi < colPaths.length; _pi++) {
+            var _pp = colPaths[_pi];
+            if (_pp && _pp.length > _maxDepth) _maxDepth = _pp.length;
+          }
+          if (_maxDepth <= netLevel + 1) {
+            console.log('[S6 injColNet] shallow path detected — switching to innermost mode', { netLevel: netLevel, maxDepth: _maxDepth });
+            isInnermost = true;
+          }
+        }
         var template = [];
         var anyInserted = false;
+
+        /* Dedup: collect existing column labels to skip groups already rendered by bundle */
+        var _existingColLabels = Object.create(null);
+        for (var _ci2 = 0; _ci2 < result.colValues.length; _ci2++) {
+          var _cv2 = String(result.colValues[_ci2] == null ? '' : result.colValues[_ci2]).trim().toLowerCase();
+          if (_cv2) _existingColLabels[_cv2] = true;
+        }
 
         if (isInnermost) {
           /* Per-section injection, insert before first member */
@@ -6810,7 +7808,7 @@
           sectInfo.sections.forEach(function (sec) {
             var codeToIdx = {};
             for (var li2 = sec.startIdx; li2 < sec.endIdx; li2++) {
-              if (colTypes[li2] !== 'data') continue;
+              if (!cxIsDataLikeColType(colTypes[li2])) continue;
               var cv = String(result.colValues[li2] == null ? '' : result.colValues[li2]).trim();
               var paths = colPaths[li2];
               var last = paths && paths.length ? String(paths[paths.length - 1] || cv).trim() : cv;
@@ -6825,7 +7823,13 @@
             }
             var netCols = [];
             groups.forEach(function (g) {
+              var gnameLC = String(g.name || 'Net').trim().toLowerCase();
+              if (gnameLC && (_existingColLabels[gnameLC] || _existingColLabels['net : ' + gnameLC] || _existingColLabels['net: ' + gnameLC])) {
+                console.log('[S6 injColNet] skip dup group', g.name);
+                return;
+              }
               var idxs = (g.members || []).map(memberToIdxI).filter(function (x) { return x != null; });
+              console.log('[S6 injColNet] group=', g.name, 'members=', g.members, '→ idxs=', idxs, 'codeToIdx keys=', Object.keys(codeToIdx));
               if (!idxs.length) return;
               idxs.sort(function (a, b) { return a - b; });
               var d = depthOf(g);
@@ -6865,11 +7869,95 @@
             }
           });
         } else {
-          /* Outer/middle level: aggregate across sibling tuples */
+          /* === Unified outer/add-mode/nested handler ===
+             Try per-section injection first (add-mode / shallow): each cxColSections
+             section gets its own codeToIdx built from innermost path values. If any
+             section's members match → insert Net cols inside that section. If NO
+             section matches directly, fall back to "new cross-section" emission
+             (true nested case where Net aggregates across sibling tuples). */
+          var _addTemplate = [];
+          var _addInserted = false;
+          var _sInfoA = cxColSections(result, colTypes);
+          var _curIdxA = 0;
+          _sInfoA.sections.forEach(function (sec) {
+            while (_curIdxA < sec.startIdx) {
+              _addTemplate.push({ kind: 'old', idx: _curIdxA });
+              _curIdxA++;
+            }
+            var codeToIdxA = {};
+            for (var liA = sec.startIdx; liA < sec.endIdx; liA++) {
+              if (!cxIsDataLikeColType(colTypes[liA])) continue;
+              var cvA = String(result.colValues[liA] == null ? '' : result.colValues[liA]).trim();
+              var pathsA = colPaths[liA];
+              var lastA = pathsA && pathsA.length ? String(pathsA[pathsA.length - 1] || cvA).trim() : cvA;
+              codeToIdxA[cvA] = liA;
+              codeToIdxA[lastA] = liA;
+            }
+            function memberToIdxA(memberCode) {
+              if (codeToIdxA[memberCode] != null) return codeToIdxA[memberCode];
+              var labA = labels[memberCode];
+              if (labA != null && codeToIdxA[String(labA).trim()] != null) return codeToIdxA[String(labA).trim()];
+              return null;
+            }
+            var netColsA = [];
+            groups.forEach(function (g) {
+              var gnameLCa = String(g.name || 'Net').trim().toLowerCase();
+              if (gnameLCa && (_existingColLabels[gnameLCa] || _existingColLabels['net : ' + gnameLCa] || _existingColLabels['net: ' + gnameLCa])) return;
+              var idxsA = (g.members || []).map(memberToIdxA).filter(function (x) { return x != null; });
+              if (!idxsA.length) return;
+              idxsA.sort(function (a, b) { return a - b; });
+              var dA = depthOf(g);
+              var indentA = '';
+              for (var iiA = 0; iiA < dA + 1; iiA++) indentA += '   ';
+              netColsA.push({ insertBefore: idxsA[0], depth: dA, label: indentA + (g.name || 'Net'), members: idxsA });
+            });
+            if (!netColsA.length) {
+              for (var kA = sec.startIdx; kA < sec.endIdx; kA++) _addTemplate.push({ kind: 'old', idx: kA });
+              _curIdxA = sec.endIdx;
+              return;
+            }
+            _addInserted = true;
+            netColsA.sort(function (a, b) { return a.insertBefore - b.insertBefore || a.depth - b.depth; });
+            var niA = 0;
+            for (var kkA = sec.startIdx; kkA < sec.endIdx; kkA++) {
+              while (niA < netColsA.length && netColsA[niA].insertBefore === kkA) {
+                var ncA = netColsA[niA];
+                _addTemplate.push({
+                  kind: 'net', value: ncA.label, type: 'net',
+                  path: sec.prefix.concat([ncA.label]), members: ncA.members
+                });
+                niA++;
+              }
+              _addTemplate.push({ kind: 'old', idx: kkA });
+            }
+            while (niA < netColsA.length) {
+              var ncA2 = netColsA[niA];
+              _addTemplate.push({
+                kind: 'net', value: ncA2.label, type: 'net',
+                path: sec.prefix.concat([ncA2.label]), members: ncA2.members
+              });
+              niA++;
+            }
+            _curIdxA = sec.endIdx;
+          });
+          while (_curIdxA < n) {
+            _addTemplate.push({ kind: 'old', idx: _curIdxA });
+            _curIdxA++;
+          }
+          console.log('[S6 injColNet outer] add-mode attempt: inserted=', _addInserted, 'sections=', _sInfoA.sections.length);
+          if (_addInserted) {
+            template = _addTemplate;
+            anyInserted = true;
+            if (!anyInserted) return result;
+            return cxApplyColumnTemplate(result, template);
+          }
+
+          /* Nested fallback: members match at outer level across sibling tuples.
+             Build new columns with path = [..., Net:label, innerVals...] */
           var siblingOrder = [];
           var siblingMap = {};
           for (var ci = 0; ci < n; ci++) {
-            if (colTypes[ci] !== 'data') continue;
+            if (!cxIsDataLikeColType(colTypes[ci])) continue;
             var p = colPaths[ci];
             if (!p || p.length <= netLevel) continue;
             var levelVal = p[netLevel];
@@ -6888,9 +7976,34 @@
             if (lab != null && siblingEntry.colMap[String(lab).trim()] != null) return siblingEntry.colMap[String(lab).trim()];
             return null;
           }
-          for (var kk = 0; kk < n; kk++) template.push({ kind: 'old', idx: kk });
+          /* Find insertAtIdx = first col whose path[netLevel] matches any member.
+             Net section(s) will be inserted BEFORE this col so they appear before
+             member sections (Samut/Nonth/Pathu) instead of at the end. */
+          var _insertAtIdx = n;
+          groups.forEach(function (g) {
+            for (var _iCol = 0; _iCol < n; _iCol++) {
+              var _pp = colPaths[_iCol];
+              if (!_pp || _pp.length <= netLevel) continue;
+              var _outer = String(_pp[netLevel] == null ? '' : _pp[netLevel]).trim();
+              var match = (g.members || []).some(function (mc) {
+                var _mt = String(mc).trim();
+                if (_outer === _mt) return true;
+                var _lab = labels[mc];
+                return _lab != null && String(_lab).trim() === _outer;
+              });
+              if (match) { if (_iCol < _insertAtIdx) _insertAtIdx = _iCol; break; }
+            }
+          });
+          /* Collect Net col entries first (we'll splice them in at _insertAtIdx) */
+          var _netEntriesOuter = [];
+          console.log('[S6 injColNet outer] nested fallback: netLevel=', netLevel, 'siblings=', siblingOrder.length, 'groupsN=', groups.length, 'insertAtIdx=', _insertAtIdx);
           /* Emit Net groups (group-major, sibling-minor) */
           groups.forEach(function (g) {
+            var gnameLCo = String(g.name || 'Net').trim().toLowerCase();
+            if (gnameLCo && (_existingColLabels[gnameLCo] || _existingColLabels['net : ' + gnameLCo] || _existingColLabels['net: ' + gnameLCo])) {
+              console.log('[S6 injColNet outer] skip dup group', g.name);
+              return;
+            }
             var d = depthOf(g);
             var indent = '';
             for (var ii = 0; ii < d + 1; ii++) indent += '   ';
@@ -6900,13 +8013,18 @@
               var idxs = (g.members || []).map(function (mc) { return memberToIdxO(sib, mc); }).filter(function (x) { return x != null; });
               if (!idxs.length) return;
               var newPath = sib.path.slice(0, netLevel).concat([label]).concat(sib.path.slice(netLevel));
-              template.push({
+              _netEntriesOuter.push({
                 kind: 'net', value: label, type: 'net',
                 path: newPath, members: idxs
               });
               anyInserted = true;
             });
           });
+          /* Rebuild template: old[0..insertAt) + Net entries + old[insertAt..n) */
+          template = [];
+          for (var _k1 = 0; _k1 < _insertAtIdx; _k1++) template.push({ kind: 'old', idx: _k1 });
+          for (var _ne = 0; _ne < _netEntriesOuter.length; _ne++) template.push(_netEntriesOuter[_ne]);
+          for (var _k2 = _insertAtIdx; _k2 < n; _k2++) template.push({ kind: 'old', idx: _k2 });
         }
 
         if (!anyInserted) return result;
@@ -7578,6 +8696,9 @@
          ══════════════════════════════════════════════════════ */
       var _hooked = false;
       var _hookedHook = null;
+      var _tabHooked = false;
+      var _tabHookRef = null;
+      var _forceResultsUntil = 0;
       var _hookAttempts = 0;
       var _tablesHookRef = null;
       var _lastDatasetKey = null; /* track SPSS file identity */
@@ -7627,6 +8748,7 @@
         _hookAttempts++;
         var hook = resolveLiveTablesHook(preferredEl);
         if (!hook) return false;
+        tryHookTabDispatch(preferredEl);
         if (_hooked && _hookedHook === hook) return true;
 
         _tablesHookRef = hook;
@@ -7664,6 +8786,39 @@
         _hooked = true;
         _hookedHook = hook;
         console.log('[S6] dispatch hooked successfully');
+        return true;
+      }
+
+      function tryHookTabDispatch(preferredEl) {
+        var th = resolveLiveTablesHook(preferredEl);
+        var tabHook = th ? findTabsHook(th) : null;
+        if (!tabHook || !tabHook.queue) return false;
+        if (_tabHooked && _tabHookRef === tabHook) return true;
+        if (tabHook.queue.dispatch && tabHook.queue.dispatch.__cxTabWrapped) {
+          _tabHooked = true;
+          _tabHookRef = tabHook;
+          return true;
+        }
+
+        var orig = tabHook.queue.dispatch;
+        tabHook.queue.__cxOrigDispatch = orig;
+        var wrapped = function cxWrappedTabDispatch(action) {
+          var od = tabHook.queue.__cxOrigDispatch || orig;
+          var guardOn = Date.now() < _forceResultsUntil;
+          if (!guardOn) return od(action);
+          if (typeof action === 'function') {
+            return od(function (prev) {
+              var next = action(prev);
+              return (next === 'design') ? 'results' : next;
+            });
+          }
+          if (action === 'design') return od('results');
+          return od(action);
+        };
+        wrapped.__cxTabWrapped = true;
+        tabHook.queue.dispatch = wrapped;
+        _tabHooked = true;
+        _tabHookRef = tabHook;
         return true;
       }
 
@@ -7848,6 +9003,9 @@
 
       function augmentTablesArray(tables) {
         var ov = findOverrides(resolveLiveTablesHook());
+        if ((!ov || Object.keys(ov).length === 0) && typeof window !== 'undefined' && window.__cxVariableOverrides && Object.keys(window.__cxVariableOverrides).length > 0) {
+          ov = window.__cxVariableOverrides;
+        }
         return tables.map(function (t) {
           if (t.result && !t.result.__cxAugmented) {
             var h = _hookedHook || resolveLiveTablesHook();
@@ -8099,6 +9257,29 @@
         return false;
       }
 
+      function isResultsTabActive(seedEl) {
+        var h = resolveLiveTablesHook(seedEl);
+        var tabHook = h ? findTabsHook(h) : null;
+        return !!(tabHook && tabHook.memoizedState === 'results');
+      }
+
+      function forceResultsTab(seedEl) {
+        var h = resolveLiveTablesHook(seedEl);
+        var tabHook = h ? findTabsHook(h) : null;
+        if (tabHook && tabHook.queue && typeof tabHook.queue.dispatch === 'function') {
+          if (tabHook.memoizedState !== 'results') {
+            try { tabHook.queue.dispatch('results'); } catch (_tdErr) { }
+          }
+          return true;
+        }
+        return false;
+      }
+
+      function startResultsGuard(seedEl, ms) {
+        _forceResultsUntil = Date.now() + Math.max(1200, ms || 1800);
+        try { tryHookTabDispatch(seedEl); } catch (_rgHookErr) { }
+      }
+
       function runWithoutTop(tableData, triggerEl) {
         if (!tableData || !tableData.rowVar) return;
         console.log('[S6] runWithoutTop:', tableData.id, 'rowVar:', tableData.rowVar);
@@ -8276,6 +9457,68 @@
         runWithoutTop(pending, btn);
       }, true);
 
+      /* ── Click on a Table in TABLES LIST → ALWAYS switch to Results tab.
+         Keep it smooth: one switch + short tab-dispatch guard (anti-bounce to design). ── */
+      var _tblSwitchTimer = null;
+      var _tblSwitchRaf = null;
+      function isTablesListRow(el) {
+        if (!el) return false;
+        /* Tables list rows have a selection checkbox; variable rows do not. */
+        if (!el.querySelector || !el.querySelector('input[type="checkbox"]')) return false;
+        var f = fiberOf(el);
+        var t = f ? getTableFromFiber(f) : null;
+        return !!(t && typeof t.id === 'string' && ('rowVar' in t) && ('colVar' in t));
+      }
+      document.addEventListener('mousedown', function (e) {
+        try {
+          var row = e.target && e.target.closest ? e.target.closest('[draggable="true"]') : null;
+          if (!row) return;
+          if (!isTablesListRow(row)) return;
+          /* Start guard as early as possible (before click handlers that may set design). */
+          startResultsGuard(row, 2200);
+        } catch (_mdErr) { }
+      }, true);
+      document.addEventListener('click', function (e) {
+        try {
+          /* Capture any click inside a draggable row; verify it's a TABLE row via fiber. */
+          var row = e.target && e.target.closest ? e.target.closest('[draggable="true"]') : null;
+          if (!row) return;
+          if (!isTablesListRow(row)) return;
+          /* Debounce rapid click bursts on the same row */
+          var now = Date.now();
+          if (row.__cxResultsEnforcedAt && now - row.__cxResultsEnforcedAt < 120) return;
+          row.__cxResultsEnforcedAt = now;
+
+          if (_tblSwitchTimer) { clearTimeout(_tblSwitchTimer); _tblSwitchTimer = null; }
+          if (_tblSwitchRaf) {
+            try { cancelAnimationFrame(_tblSwitchRaf); } catch (_rafErr) { }
+            _tblSwitchRaf = null;
+          }
+
+          /* Wait one paint so React table-select update lands first, then force Results. */
+          var runNextFrame = (typeof requestAnimationFrame === 'function')
+            ? requestAnimationFrame
+            : function (fn) { return setTimeout(fn, 0); };
+          _tblSwitchRaf = runNextFrame(function () {
+            _tblSwitchRaf = null;
+            try {
+              startResultsGuard(row, 2200);
+              forceResultsTab(row);
+            } catch (_inErr0) { }
+
+            /* One extra delayed pass for very slow render loops. */
+            _tblSwitchTimer = setTimeout(function () {
+              _tblSwitchTimer = null;
+              try {
+                if (!isResultsTabActive(row) && !forceResultsTab(row)) {
+                  showResultsTabFallback();
+                }
+              } catch (_inErr1) { }
+            }, 120);
+          });
+        } catch (_clErr) { }
+      }, true);
+
       /* Also intercept Run All to handle no-colVar tables */
       function _s6ShowToast(msg) {
         try {
@@ -8365,6 +9608,25 @@
             _tablesHookRef = null;
             _hookAttempts = 0;
             window._cxSettingSavedVars = {};
+            /* Clean tbPresetStore of variables not present in the new dataset */
+            try {
+              var newDs = resolveLiveDataset();
+              if (newDs && Array.isArray(newDs.variables) && typeof window.__cxGetTbPresetStore === 'function'
+                  && typeof window.__cxSetTbPresetStore === 'function') {
+                var validNames = Object.create(null);
+                newDs.variables.forEach(function (v) {
+                  if (v && v.name) validNames[String(v.name).toLowerCase()] = true;
+                  if (v && v.longName) validNames[String(v.longName).toLowerCase()] = true;
+                });
+                var store = window.__cxGetTbPresetStore() || {};
+                var cleaned = {};
+                Object.keys(store).forEach(function (k) {
+                  if (validNames[String(k).toLowerCase()]) cleaned[k] = store[k];
+                });
+                window.__cxSetTbPresetStore(cleaned);
+                console.log('[S6] tbPresetStore cleaned:', Object.keys(store).length, '→', Object.keys(cleaned).length);
+              }
+            } catch (_clErr) { console.warn('[S6] preset cleanup failed:', _clErr); }
             /* Re-enable buttons after React finishes re-rendering */
             setTimeout(function () { tryHookDispatch(); enableNoTopRun(); }, 500);
             setTimeout(function () { tryHookDispatch(); enableNoTopRun(); }, 1500);
