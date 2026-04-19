@@ -2278,6 +2278,232 @@
         _cxMarkT2BObs.observe(document.body, { childList: true, subtree: true });
       } catch (e) { }
       setTimeout(cxMarkT2BVariables, 1500);
+
+      /* ── Variable Type Filter chips (SA/MA/A/#/All) above sidebar variable list ── */
+      var _cxVarTypeFilter = 'all';  /* 'all' | 'SA' | 'MA' | 'A' | '#' */
+
+      function cxGetRowVarType(row) {
+        var spans = row.querySelectorAll('span');
+        for (var j = 0; j < spans.length; j++) {
+          var t = (spans[j].textContent || '').trim();
+          if (t === 'SA' || t === 'MA' || t === 'A' || t === '#') return t;
+        }
+        return null;
+      }
+      function cxFindSidebarSearchInput() {
+        var inputs = document.querySelectorAll('input[placeholder]');
+        for (var i = 0; i < inputs.length; i++) {
+          var ph = inputs[i].getAttribute('placeholder') || '';
+          if (ph.indexOf('ค้นหาตัวแปร') >= 0) return inputs[i];
+        }
+        return null;
+      }
+      function cxClassifyVarType(v) {
+        if (!v) return null;
+        if (v.isGroupedMA === true || v.isGroupedMa === true || v.isMA === true) return 'MA';
+        if (v.isString === true) return 'A';
+        if (!v.valueLabels || Object.keys(v.valueLabels).length === 0) return '#';
+        return 'SA';
+      }
+      function cxBadgeStyleForType(t) {
+        if (t === 'MA') return { bg: '#d1fae5', fg: '#065f46', border: '#6ee7b7' };
+        if (t === 'A') return { bg: '#fef3c7', fg: '#92400e', border: '#fcd34d' };
+        if (t === '#') return { bg: '#f3f4f6', fg: '#6b7280', border: '#d1d5db' };
+        return { bg: '#dbeafe', fg: '#1e40af', border: '#93c5fd' };
+      }
+      function cxFindVirtualListContainer() {
+        var inp = cxFindSidebarSearchInput();
+        if (!inp) return null;
+        /* VirtualVarList has structure: <div flex flex-col> <div searchBox> <div flex-1 overflow-y-auto> ... </div> </div> */
+        var parent = inp.closest('.flex.flex-col.h-full') || inp.closest('.flex.flex-col');
+        if (!parent) {
+          /* fallback: walk up to find a div containing a descendant with overflow-y-auto */
+          parent = inp.parentElement;
+          while (parent && !parent.querySelector('.overflow-y-auto')) parent = parent.parentElement;
+        }
+        if (!parent) return null;
+        return parent.querySelector('.overflow-y-auto') || parent.querySelector('.flex-1');
+      }
+      /* Try to reuse bundle's drag/click behavior by copying attributes from existing rendered rows */
+      function cxSnapshotRowBehavior() {
+        var rows = document.querySelectorAll('[draggable="true"]');
+        for (var i = 0; i < rows.length; i++) {
+          var r = rows[i];
+          var cls = String(r.className || '');
+          if (cls.indexOf('cursor-grab') >= 0) {
+            return { className: cls };
+          }
+        }
+        return null;
+      }
+      function cxGetSidebarVariablesFromFiber() {
+        /* Extract VirtualVarList's `variables` prop (processed catalog with MA groups) */
+        var input = cxFindSidebarSearchInput();
+        if (!input) return null;
+        var key = Object.keys(input).find(function (k) { return k.indexOf('__reactFiber') === 0; });
+        if (!key) return null;
+        var f = input[key];
+        for (var depth = 0; depth < 20 && f; depth++) {
+          var p = f.memoizedProps;
+          if (p && Array.isArray(p.variables) && p.variables.length > 0) {
+            var first = p.variables[0];
+            if (first && typeof first === 'object' && typeof first.name === 'string') return p.variables;
+          }
+          f = f.return;
+        }
+        return null;
+      }
+      function cxApplyVarTypeFilter() {
+        try {
+          var container = cxFindVirtualListContainer();
+          if (!container) return;
+          /* Always clear the React search first so 'variables' count reflects full dataset */
+          var input = cxFindSidebarSearchInput();
+          if (input && input.value) cxSetReactInputValue(input, '');
+
+          var customList = document.getElementById('cx-custom-var-list');
+          if (_cxVarTypeFilter === 'all') {
+            /* Remove custom list, show virtual list again */
+            if (customList) customList.remove();
+            container.style.display = '';
+            return;
+          }
+          /* Get variables from VirtualVarList's own prop (processed catalog: raw members replaced by MA groups) */
+          var vars = cxGetSidebarVariablesFromFiber();
+          if (!vars) {
+            var hook = (typeof getDatasetHook === 'function') ? getDatasetHook() : null;
+            vars = (hook && hook.data && Array.isArray(hook.data.variables)) ? hook.data.variables : [];
+          }
+          if (!vars.length) return;
+          var filtered = vars.filter(function (v) {
+            if (!v || !v.name) return false;
+            return cxClassifyVarType(v) === _cxVarTypeFilter;
+          });
+          /* Hide virtual list */
+          container.style.display = 'none';
+          /* Build/update custom list */
+          if (!customList) {
+            customList = document.createElement('div');
+            customList.id = 'cx-custom-var-list';
+            customList.style.cssText = 'flex:1;overflow-y:auto;padding:4px 6px;display:flex;flex-direction:column;gap:2px;font-family:inherit';
+            container.parentElement.insertBefore(customList, container);
+          }
+          customList.innerHTML = '';
+          if (filtered.length === 0) {
+            customList.innerHTML = '<div style="padding:16px;text-align:center;color:#9ca3af;font-size:11px">ไม่พบตัวแปรชนิด ' + _cxVarTypeFilter + '</div>';
+            return;
+          }
+          var snap = cxSnapshotRowBehavior();
+          filtered.forEach(function (v) {
+            var t = cxClassifyVarType(v);
+            var bg = cxBadgeStyleForType(t);
+            var row = document.createElement('div');
+            row.setAttribute('draggable', 'true');
+            row.setAttribute('data-cx-custom-row', v.name);
+            row.className = (snap && snap.className) || 'group flex items-start gap-1.5 px-2 py-1.5 rounded cursor-grab active:bg-blue-100 select-none';
+            row.style.cssText = 'cursor:grab';
+            var badge = document.createElement('span');
+            badge.textContent = t;
+            badge.style.cssText = 'display:inline-flex;align-items:center;justify-content:center;min-width:22px;height:16px;padding:0 3px;border-radius:3px;font-size:8px;font-weight:700;flex-shrink:0;background:' + bg.bg + ';color:' + bg.fg + ';border:1px solid ' + bg.border + ';margin-top:2px';
+            var txt = document.createElement('div');
+            txt.style.cssText = 'min-width:0;flex:1;overflow:hidden';
+            var nm = document.createElement('div');
+            nm.style.cssText = 'font-size:12px;font-weight:700;color:#1e293b;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+            nm.textContent = v.name;
+            var lb = document.createElement('div');
+            lb.style.cssText = 'font-size:10px;color:#64748b;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-top:1px';
+            lb.textContent = v.label || v.longName || '';
+            txt.appendChild(nm);
+            txt.appendChild(lb);
+            row.appendChild(badge);
+            row.appendChild(txt);
+            /* Bridge drag: set dataTransfer like bundle does via mime types */
+            row.addEventListener('dragstart', function (e) {
+              try {
+                e.dataTransfer.effectAllowed = 'copy';
+                e.dataTransfer.setData('text/plain', v.name);
+                /* Common mime types the bundle might expect */
+                e.dataTransfer.setData('application/x-crossify-var', v.name);
+                e.dataTransfer.setData('text/crossify-var', v.name);
+              } catch (e2) { }
+            });
+            /* Click → open editor (try to find bundle's var-editor mechanism) */
+            row.addEventListener('dblclick', function () {
+              if (typeof tryOpenAppVariableEditor === 'function') {
+                try { tryOpenAppVariableEditor(v.name); } catch (e3) { }
+              }
+            });
+            customList.appendChild(row);
+          });
+        } catch (e) { console.warn('[cxApplyVarTypeFilter]', e); }
+      }
+      var _cxFilterApplyTimer = null;
+      function cxApplyVarTypeFilterDebounced() {
+        if (_cxFilterApplyTimer) return;
+        _cxFilterApplyTimer = setTimeout(function () {
+          _cxFilterApplyTimer = null;
+          cxApplyVarTypeFilter();
+        }, 60);
+      }
+      function cxMountVarTypeChips() {
+        try {
+          if (document.getElementById('cx-vartype-chips')) return;  /* already mounted */
+          /* Find sidebar search input */
+          var searchInputs = document.querySelectorAll('input[placeholder]');
+          var target = null;
+          for (var i = 0; i < searchInputs.length; i++) {
+            var ph = searchInputs[i].getAttribute('placeholder') || '';
+            if (ph.indexOf('ค้นหาตัวแปร') >= 0) { target = searchInputs[i]; break; }
+          }
+          if (!target) return;
+          var wrap = document.createElement('div');
+          wrap.id = 'cx-vartype-chips';
+          wrap.style.cssText = 'display:flex;gap:3px;padding:4px 8px 6px 8px;flex-wrap:wrap;align-items:center';
+          var types = [
+            { key: 'all', label: 'All', bg: '#eff6ff', fg: '#1d4ed8', border: '#93c5fd' },
+            { key: 'SA', label: 'SA', bg: '#dbeafe', fg: '#1e40af', border: '#93c5fd' },
+            { key: 'MA', label: 'MA', bg: '#d1fae5', fg: '#065f46', border: '#6ee7b7' },
+            { key: 'A', label: 'A', bg: '#fef3c7', fg: '#92400e', border: '#fcd34d' },
+            { key: '#', label: '#', bg: '#f3f4f6', fg: '#374151', border: '#d1d5db' }
+          ];
+          types.forEach(function (t) {
+            var btn = document.createElement('button');
+            btn.type = 'button';
+            btn.setAttribute('data-cx-vartype-btn', t.key);
+            btn.textContent = t.label;
+            btn.style.cssText = 'padding:3px 8px;border-radius:6px;font-size:10px;font-weight:700;cursor:pointer;border:1px solid ' + t.border + ';background:' + t.bg + ';color:' + t.fg + ';font-family:inherit';
+            btn.addEventListener('click', function () {
+              _cxVarTypeFilter = t.key;
+              cxUpdateVarTypeChipStyles();
+              cxApplyVarTypeFilter();
+            });
+            wrap.appendChild(btn);
+          });
+          /* Insert after the search input's parent */
+          var parent = target.parentElement;
+          if (parent && parent.parentElement) {
+            parent.parentElement.insertBefore(wrap, parent.nextSibling);
+          }
+          cxUpdateVarTypeChipStyles();
+        } catch (e) { }
+      }
+      function cxUpdateVarTypeChipStyles() {
+        var btns = document.querySelectorAll('[data-cx-vartype-btn]');
+        for (var i = 0; i < btns.length; i++) {
+          var active = btns[i].getAttribute('data-cx-vartype-btn') === _cxVarTypeFilter;
+          btns[i].style.outline = active ? '2px solid #1d4ed8' : 'none';
+          btns[i].style.outlineOffset = active ? '1px' : '0';
+          btns[i].style.fontWeight = active ? '800' : '700';
+        }
+      }
+      try {
+        new MutationObserver(function () {
+          cxMountVarTypeChips();
+          if (_cxVarTypeFilter !== 'all') cxApplyVarTypeFilterDebounced();
+        }).observe(document.body, { childList: true, subtree: true });
+      } catch (e) { }
+      setTimeout(cxMountVarTypeChips, 1000);
+      setTimeout(cxMountVarTypeChips, 2500);
       function scoreVarLikeArray(arr) {
         if (!Array.isArray(arr) || arr.length === 0) return 0;
         var hit = 0;
