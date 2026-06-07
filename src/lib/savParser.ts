@@ -211,7 +211,7 @@ function collapseVeryLongStringSegments(vars: SpssVariable[]) {
     }
   }
 
-  if (segmentIndexes.size === 0) return vars
+  if (segmentIndexes.size === 0) return vars.slice()
   return vars.filter((_, index) => !segmentIndexes.has(index))
 }
 

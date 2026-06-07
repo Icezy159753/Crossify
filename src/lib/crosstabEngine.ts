@@ -1,16 +1,8 @@
 ﻿/** Pure-JS crosstab engine — stores raw counts, % computed dynamically */
 
-const ASYNC_YIELD_EVERY = 250
+import { yieldToBrowser } from './browserScheduler'
 
-function yieldToBrowser() {
-  return new Promise<void>(resolve => {
-    if (typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function') {
-      window.requestAnimationFrame(() => resolve())
-      return
-    }
-    setTimeout(() => resolve(), 0)
-  })
-}
+const ASYNC_YIELD_EVERY = 250
 
 export interface CrosstabConfig {
   rowVar: string
@@ -40,11 +32,15 @@ export interface CrosstabResult {
   rowTotalsN: number[]
   colTotalsN: number[]
   grandTotal: number
+  unweightedGrandTotal?: number
+  unweightedColTotalsN?: number[]
   rowSectionBases?: Array<{
     startIndex: number
     label: string
     totalN: number
     colTotalsN: number[]
+    unweightedTotalN?: number
+    unweightedColTotalsN?: number[]
   }>
 }
 
@@ -245,4 +241,3 @@ export async function computeCrosstabAsync(
     grandTotal,
   }
 }
-

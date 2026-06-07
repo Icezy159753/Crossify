@@ -1,0 +1,15 @@
+# Static web deploy only needs index.html + public/ (assets, logo) + vercel.json.
+# Everything below is dev tooling, desktop builds, or large data — exclude from the upload.
+node_modules
+.git
+.npm-cache
+dist
+desktop
+release-desktop-save-no-modal-real
+public/downloads
+*.sav
+*.xlsx
+*.bak-*
+*.bak
+.agents
+coverage

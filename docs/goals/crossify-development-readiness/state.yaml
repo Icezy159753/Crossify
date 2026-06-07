@@ -1,0 +1,189 @@
+# GoalBuddy v2 state.yaml
+# Board truth lives here. goal.md is the editable charter; notes/ holds long receipts only.
+
+version: 2
+
+goal:
+  title: "Crossify Development Readiness"
+  slug: "crossify-development-readiness"
+  kind: specific
+  tranche: "Use GoalBuddy to discover, choose, execute, verify, and audit safe Crossify development slices without disturbing existing user changes."
+  status: active
+  intake:
+    original_request: "เอามาช่วยเลยรันเลย"
+    interpreted_outcome: "GoalBuddy is installed and used to structure ongoing Crossify development with a ready board and verifiable execution loop."
+    input_shape: specific
+    audience: "Crossify maintainer and day-to-day app user"
+    authority: approved
+    proof_type: test
+    completion_proof: "GoalBuddy doctor is ready, board checker passes, and future slices record receipts plus verification commands."
+    likely_misfire: "Create only process files without advancing safe Crossify work, or over-refactor the app before discovery and judging."
+    blind_spots_considered:
+      - "Dirty worktree contains pre-existing app and generated asset changes."
+      - "src/App.tsx is large and currently disables ESLint and TypeScript checking."
+      - "Some Thai text and comments show mojibake."
+      - "The Vite server is already running on port 5173."
+    existing_plan_facts:
+      - "npm test passed: 19 files, 377 tests."
+      - "npm run build passed with empty chunk warnings for arquero and exceljs."
+      - "npm run lint passed."
+      - "http://localhost:5173/ returned 200 OK."
+
+rules:
+  pm_owns_state: true
+  one_active_task: true
+  max_write_workers: 1
+  no_implementation_without_worker_or_pm_task: true
+  no_completion_without_judge_or_pm_audit: true
+  planning_is_not_completion: true
+  queued_required_worker_blocks_completion: true
+  continuous_until_full_outcome: true
+  missing_input_or_credentials_do_not_stop_goal: true
+  preserve_and_validate_existing_plan: true
+  intake_misfire_must_be_audited: true
+
+agents:
+  scout: installed
+  worker: installed
+  judge: installed
+
+active_task: T999
+
+tasks:
+  - id: T001
+    type: scout
+    assignee: Scout
+    status: done
+    reasoning_hint: default
+    objective: "Map Crossify repo purpose, architecture, current dirty changes, verification commands, and the safest high-value improvement candidates."
+    inputs:
+      - "AGENTS.md"
+      - "package.json"
+      - "vite.config.ts"
+      - "src/App.tsx"
+      - "src/lib"
+      - "src/components"
+      - "src/hooks"
+      - "tests via *.test.ts"
+      - "git status and git diff --stat"
+    constraints:
+      - "Read-only."
+      - "Do not edit implementation files."
+      - "Preserve existing user changes."
+      - "Prefer concrete file-path evidence over generic advice."
+    expected_output:
+      - "Repo map"
+      - "Current health and verification commands"
+      - "Risk list"
+      - "Ranked improvement candidates"
+      - "Candidate next tasks"
+    receipt:
+      result: done
+      summary: "Mapped Crossify as a Vite/React/Vitest app for SPSS SAV crosstab workflows, Excel export, settings roundtrip, variable grouping, filters, and batch export."
+      evidence:
+        - "package.json scripts: dev, build, test, lint."
+        - "Core UI state is concentrated in src/App.tsx; components live in src/components; pure workflow/data helpers live in src/lib and src/hooks."
+        - "Verification passed before board creation: npm test, npm run build, npm run lint."
+        - "Local server responded 200 OK on http://localhost:5173/."
+        - "Dirty worktree predates this board and includes src/App.tsx, src/lib/crosstabEngine.ts, src/lib/excelExport.ts, generated assets, AGENTS.md, and local data files."
+      risks:
+        - "src/App.tsx is high-risk because it is large and disables ESLint/TypeScript checking."
+        - "loadWorkspaceSnapshot exists but no call site was found, so snapshot restore intent may be incomplete."
+        - "Build passes but reports empty chunks for arquero and exceljs due manualChunks in vite.config.ts."
+        - "Some Thai text/comments appear mojibake in src/App.tsx and src/hooks/useBatchExportFlow.ts."
+      candidates:
+        - "Low-risk cleanup: remove empty manualChunks warning in vite.config.ts and verify build."
+        - "Medium-risk feature completion: wire workspace snapshot restore with focused behavior checks."
+        - "Medium-risk quality: isolate App.tsx helpers into typed modules before reducing ts-nocheck."
+        - "Content/encoding cleanup: repair mojibake strings only after confirming intended Thai copy."
+  - id: T002
+    type: judge
+    assignee: Judge
+    status: done
+    reasoning_hint: default
+    objective: "Review Scout findings and choose the first safe implementation task for Crossify."
+    inputs:
+      - "T001 receipt"
+      - "Current dirty diff"
+      - "Goal constraints"
+    constraints:
+      - "Do not implement."
+      - "Pick small reviewable work."
+      - "Avoid broad refactors of src/App.tsx unless the allowed files and tests are tightly bounded."
+    expected_output:
+      - "Decision"
+      - "Exact Worker objective"
+      - "allowed_files"
+      - "verify"
+      - "stop_if"
+      - "Blocked or deferred tasks"
+    receipt:
+      result: done
+      decision: "Choose the smallest verified improvement first: remove the Vite empty manual chunk warning."
+      rationale:
+        - "It is low-risk, isolated to build config, and does not touch user-facing crosstab behavior."
+        - "It improves build signal quality before larger App.tsx or restore work."
+        - "It can be verified with npm run build, then npm test/lint if desired."
+      worker_task: "Update vite.config.ts to stop forcing arquero and exceljs manual chunks when they currently build as empty chunks."
+      allowed_files:
+        - "vite.config.ts"
+      verify:
+        - "npm run build"
+      stop_if:
+        - "Build output changes in a way that removes needed lazy-loaded assets."
+        - "The change requires touching source files outside vite.config.ts."
+  - id: T003
+    type: worker
+    assignee: Worker
+    status: done
+    reasoning_hint: default
+    objective: "Update vite.config.ts to stop forcing arquero and exceljs manual chunks when they currently build as empty chunks."
+    allowed_files:
+      - "vite.config.ts"
+    verify:
+      - "npm run build"
+    stop_if:
+      - "Need files outside allowed_files."
+      - "Behavior is ambiguous."
+      - "Verification fails twice."
+      - "Change would overwrite unrelated user work."
+    receipt:
+      result: done
+      changed_files:
+        - "vite.config.ts"
+      summary: "Removed forced manualChunks for arquero and exceljs so Vite no longer emits empty chunk warnings."
+      commands:
+        - command: "npm run build"
+          status: pass
+      verification:
+        - command: "npm run build"
+          result: passed
+          note: "Build completed successfully and no empty chunk warnings were emitted."
+  - id: T999
+    type: judge
+    assignee: Judge
+    status: active
+    reasoning_hint: default
+    objective: "Audit whether the implemented Crossify slice satisfies the selected tranche and original request to use GoalBuddy productively."
+    inputs:
+      - "All done task receipts"
+      - "Last verification"
+      - "Current dirty diff"
+    constraints:
+      - "Do not implement."
+      - "Reject completion if required Worker work is still queued or active."
+      - "Reject completion if the broader tranche still has safe local follow-up slices."
+    expected_output:
+      - "complete | not_complete"
+      - "full_outcome_complete: true | false"
+      - "missing evidence"
+      - "next task if not complete"
+    receipt: null
+
+checks:
+  dirty_fingerprint: "pre-existing dirty worktree plus GoalBuddy board files"
+  last_verification:
+    result: passed
+    task: "T003"
+    commands:
+      - "npm run build"

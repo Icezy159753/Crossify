@@ -179,6 +179,48 @@ describe('materializeColumnAugment › multi-level colPaths', () => {
   })
 })
 
+describe('materializeColumnAugment › stale colPaths', () => {
+  const result = makeResult(['A', 'B', 'C'], [[10, 20, 30]])
+  result.colPaths = [['Group', 'A']]
+
+  const out = materializeColumnAugment(result, {
+    specs: [{ kind: 'summary', label: 'Net', memberIndexes: [1, 2] }],
+  })
+
+  it('fills missing original paths from column labels before inserting summaries', () => {
+    expect(out.colPaths).toEqual([['Group', 'A'], ['B'], ['C'], ['Net']])
+  })
+})
+
+describe('materializeColumnAugment › unweighted base totals', () => {
+  const result = makeResult(['A', 'B', 'C'], [[10, 20, 30]])
+  result.unweightedGrandTotal = 60
+  result.unweightedColTotalsN = [10, 20, 30]
+  result.rowSectionBases = [{
+    startIndex: 0,
+    label: 'Section',
+    totalN: 60,
+    colTotalsN: [10, 20, 30],
+    unweightedTotalN: 60,
+    unweightedColTotalsN: [10, 20, 30],
+  }]
+
+  const out = materializeColumnAugment(result, {
+    specs: [{ kind: 'summary', label: 'Net', memberIndexes: [1, 2], insertBoundary: 1 }],
+  })
+
+  it('inserts matching weighted and unweighted totals for new summary columns', () => {
+    expect(out.colValues).toEqual(['A', 'Net', 'B', 'C'])
+    expect(out.colTotalsN).toEqual([10, 50, 20, 30])
+    expect(out.unweightedColTotalsN).toEqual([10, 50, 20, 30])
+  })
+
+  it('keeps row section base arrays aligned with displayed columns', () => {
+    expect(out.rowSectionBases?.[0].colTotalsN).toEqual([10, 50, 20, 30])
+    expect(out.rowSectionBases?.[0].unweightedColTotalsN).toEqual([10, 50, 20, 30])
+  })
+})
+
 // ─── multi-row counts ─────────────────────────────────────────────────────────
 
 describe('materializeColumnAugment › multiple rows', () => {

@@ -3,16 +3,31 @@
   "private": true,
   "version": "0.0.1",
   "type": "module",
+  "main": "desktop/main.cjs",
   "scripts": {
     "dev": "vite --port 5173",
     "build": "tsc -b && vite build",
+    "desktop:dev": "npm run build && electron .",
+    "desktop:build": "npm run build && electron-builder --win portable -c.win.signAndEditExecutable=false && node tools/sync-desktop-download.mjs",
     "check:encoding": "node tools/check-encoding.mjs",
+    "check:static-bundle": "node tools/check-static-bundle-markers.mjs",
+    "check:overlay-runtime": "node tools/check-overlay-runtime-boundary.mjs",
+    "check:runtime-contract": "node tools/check-static-runtime-contract.mjs",
+    "check:risk-budget": "node tools/check-risk-budget.mjs",
+    "smoke:local-runtime": "node tools/smoke-local-runtime.mjs",
+    "smoke:real-spss": "node tools/smoke-real-spss-load.mjs",
+    "smoke:session-stability": "node tools/smoke-session-stability.mjs",
+    "smoke:batch-export-names": "node tools/smoke-batch-export-names.mjs",
+    "smoke:t2b-no-leak": "node tools/smoke-t2b-no-leak-stacked.mjs",
+    "smoke:cloud-save-guard": "node tools/smoke-cloud-save-guard.mjs",
+    "verify:full": "node tools/verify-full.mjs",
     "download:binary": "node tools/download-byte-safe.mjs",
     "test": "vitest run",
     "lint": "eslint .",
     "preview": "vite preview"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.105.4",
     "arquero": "^6.0.1",
     "exceljs": "^4.4.0",
     "file-saver": "^2.0.5",
@@ -21,6 +36,44 @@
     "react-dom": "^18.3.1",
     "react-dropzone": "^14.3.8",
     "xlsx": "^0.18.5"
+  },
+  "build": {
+    "appId": "com.crossify.desktop",
+    "productName": "Crossify",
+    "directories": {
+      "output": "release-desktop-save-direct"
+    },
+    "files": [
+      "desktop/**/*",
+      "dist/**/*",
+      "!dist/downloads/**/*",
+      "assets/crossify.ico",
+      "package.json"
+    ],
+    "asar": true,
+    "asarUnpack": [
+      "dist/**/*"
+    ],
+    "win": {
+      "icon": "assets/crossify.ico",
+      "target": [
+        "portable"
+      ],
+      "artifactName": "Crossify-Desktop-${version}.exe",
+      "signAndEditExecutable": false
+    },
+    "fileAssociations": [
+      {
+        "ext": "crossify",
+        "name": "Crossify Table",
+        "description": "Crossify Table project",
+        "role": "Editor",
+        "icon": "assets/crossify.ico"
+      }
+    ],
+    "portable": {
+      "artifactName": "Crossify-Desktop-${version}.exe"
+    }
   },
   "devDependencies": {
     "@eslint/js": "^9.39.4",
@@ -31,12 +84,16 @@
     "@types/react-dom": "^18.3.5",
     "@vitejs/plugin-react": "^4.3.4",
     "autoprefixer": "^10.4.20",
+    "electron": "^42.0.1",
+    "electron-builder": "^26.8.1",
     "eslint": "^9.39.4",
     "eslint-plugin-react-hooks": "^7.0.1",
     "eslint-plugin-react-refresh": "^0.5.2",
     "fake-indexeddb": "^6.2.5",
     "globals": "^17.4.0",
     "jsdom": "^29.0.2",
+    "playwright": "^1.60.0",
+    "playwright-core": "^1.60.0",
     "postcss": "^8.5.1",
     "tailwindcss": "^3.4.17",
     "typescript": "~5.6.2",

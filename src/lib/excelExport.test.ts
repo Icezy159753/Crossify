@@ -10,6 +10,7 @@ import {
   buildHeaderGroups,
   buildRowDisplayPaths,
   buildRowSectionMeta,
+  normalizeRowSectionBases,
   normalizeRowStructure,
 } from './excelExport'
 import type { CrosstabResult } from './crosstabEngine'
@@ -170,6 +171,33 @@ describe('buildRowSectionMeta', () => {
     expect(byStart.size).toBe(0)
     expect(covered.size).toBe(0)
   })
+
+  it('normalizes stale section starts before building row spans', () => {
+    const { byStart, covered } = buildRowSectionMeta([
+      { startIndex: 2, label: 'Section A' },
+      { startIndex: 8, label: 'Section B' },
+    ], 4)
+    expect(byStart.get(0)).toEqual({ label: 'Section A', span: 3 })
+    expect(byStart.get(3)).toEqual({ label: 'Section B', span: 1 })
+    expect(covered.has(1)).toBe(true)
+    expect(covered.has(2)).toBe(true)
+  })
+})
+
+describe('normalizeRowSectionBases', () => {
+  it('sorts, clamps, dedupes, and anchors the first section at row zero', () => {
+    const sections = normalizeRowSectionBases([
+      { startIndex: 9, label: 'Late' },
+      { startIndex: 2, label: 'First' },
+      { startIndex: 2, label: 'Duplicate' },
+      { startIndex: -1, label: 'Before' },
+    ], 4)
+    expect(sections).toEqual([
+      { startIndex: 0, label: 'Before' },
+      { startIndex: 2, label: 'First' },
+      { startIndex: 3, label: 'Late' },
+    ])
+  })
 })
 
 // ─── normalizeRowStructure ────────────────────────────────────────────────────
@@ -201,7 +229,7 @@ describe('normalizeRowStructure', () => {
     const sectionBases = [{ startIndex: 0, label: 'Sec', totalN: 3, colTotalsN: [3] }]
     const out = normalizeRowStructure(baseResult, [['Sec', 'r0']], ['Variable', 'Category'], sectionBases)
     expect(out.rowPaths).toEqual([['Sec', 'r0']])
-    expect(out.rowSectionBases).toBe(sectionBases)
+    expect(out.rowSectionBases).toEqual(sectionBases)
   })
 
   it('returns inputs unchanged when rowLevelLabels has >1 entry (even without sectionBases)', () => {

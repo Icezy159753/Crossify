@@ -1,0 +1,2474 @@
+# GoalBuddy v2 state.yaml
+# Board truth lives here. goal.md is the editable charter; notes/ holds long receipts only.
+
+version: 2
+
+goal:
+  title: "Crossify System Refactor"
+  slug: "crossify-system-refactor"
+  kind: specific
+  tranche: "Audit and refactor Crossify in safe verified slices while preserving behavior and fixing concrete discovered bugs."
+  status: active
+  intake:
+    original_request: "ตรวจสอบและ Refactor code ทั้งระบบให้ดูแลง่ายขึ้นและไม่พังทุกอย่างต้องใช้งานได้เหมือนเดิม และแก้ Bug ทุกฟังชั่นที่มี ถ้าเจอ Bug หลักๆคือ Refactor Code"
+    interpreted_outcome: "Crossify becomes easier to maintain through verified incremental refactors, with concrete discovered bugs fixed and existing workflows preserved."
+    input_shape: specific
+    audience: "Crossify maintainer and SPSS crosstab users"
+    authority: approved
+    proof_type: test
+    completion_proof: "Receipts show audited risks, implemented refactor slices, fixed bugs, and passing verification for affected behavior."
+    likely_misfire: "A broad rewrite breaks behavior or creates churn without improving maintainability."
+    blind_spots_considered:
+      - "Existing dirty worktree includes user or generated changes."
+      - "src/App.tsx is very large and disables static checks."
+      - "Generated public assets and local data files should not be cleaned up unless explicitly selected."
+      - "Some bugs may only appear with real SAV workflows and cannot be claimed fixed without reproduction."
+    existing_plan_facts:
+      - "GoalBuddy is installed and doctor-ready."
+      - "Prior baseline passed npm test, npm run build, and npm run lint."
+      - "Local Vite server is running on port 5173."
+
+rules:
+  pm_owns_state: true
+  one_active_task: true
+  max_write_workers: 1
+  no_implementation_without_worker_or_pm_task: true
+  no_completion_without_judge_or_pm_audit: true
+  planning_is_not_completion: true
+  queued_required_worker_blocks_completion: true
+  continuous_until_full_outcome: true
+  missing_input_or_credentials_do_not_stop_goal: true
+  preserve_and_validate_existing_plan: true
+  intake_misfire_must_be_audited: true
+
+agents:
+  scout: installed
+  worker: installed
+  judge: installed
+
+active_task: T999
+
+tasks:
+  - id: T001
+    type: scout
+    assignee: Scout
+    status: done
+    reasoning_hint: high
+    objective: "Audit the codebase and dirty diff to identify maintainability hotspots, concrete bug risks, coverage gaps, and the safest first refactor slices."
+    inputs:
+      - "AGENTS.md"
+      - "package.json"
+      - "vite.config.ts"
+      - "src/App.tsx"
+      - "src/components"
+      - "src/hooks"
+      - "src/lib"
+      - "src/types"
+      - "existing tests"
+      - "git status and diffs"
+    constraints:
+      - "Read-only."
+      - "Do not edit implementation files."
+      - "Preserve existing user changes."
+      - "Ground findings in file paths and verification evidence."
+    expected_output:
+      - "Architecture map"
+      - "Maintainability hotspots"
+      - "Concrete bug risks"
+      - "Coverage gaps"
+      - "Ranked safe refactor candidates"
+      - "Recommended first Worker task"
+    receipt:
+      result: done
+      summary: "Audited baseline health, file sizes, dirty diff, and maintainability risks."
+      evidence:
+        - "npm test passed: 19 files, 377 tests."
+        - "npm run lint passed."
+        - "npm run build passed."
+        - "Largest source file is src/App.tsx at about 172 KB."
+        - "src/App.tsx has eslint-disable and ts-nocheck at lines 1-2."
+        - "loadWorkspaceSnapshot exists in src/App.tsx but has no call site."
+        - "Existing dirty worktree includes app source, generated assets, local docs, and data files."
+      hotspots:
+        - "src/App.tsx centralizes UI state, persistence helpers, file loading, table operations, variable editor, run/export logic, and JSX."
+        - "Workspace snapshot persistence is embedded in App, lacks unit tests, and is only half wired."
+        - "Build config cleanup from the prior GoalBuddy readiness slice is already verified."
+      bug_risks:
+        - "Snapshot restore is likely incomplete because saveWorkspaceSnapshot exists but loadWorkspaceSnapshot is unused."
+        - "App.tsx static checking is disabled, so future refactors need tests around extracted helpers."
+      recommended_first_slice: "Extract workspace snapshot IndexedDB helpers into src/lib/workspaceSnapshot.ts with fake-indexeddb tests, then update App imports without changing runtime behavior."
+  - id: T002
+    type: judge
+    assignee: Judge
+    status: done
+    reasoning_hint: high
+    objective: "Choose the first safe refactor/bug-fix Worker task from Scout findings."
+    inputs:
+      - "T001 receipt"
+      - "Current dirty diff"
+      - "Goal constraints"
+    constraints:
+      - "Do not implement."
+      - "Choose a small reversible slice."
+      - "Avoid touching generated assets."
+      - "Require verification commands."
+    expected_output:
+      - "Decision"
+      - "Exact Worker objective"
+      - "allowed_files"
+      - "verify"
+      - "stop_if"
+    receipt:
+      result: done
+      decision: "Proceed with a small behavior-preserving extraction of workspace snapshot storage."
+      rationale:
+        - "It reduces App.tsx responsibility without changing UI behavior."
+        - "It adds missing test coverage around IndexedDB snapshot persistence."
+        - "It sets up the next bug-fix slice for actual restore wiring."
+      worker_task: "Create src/lib/workspaceSnapshot.ts and src/lib/workspaceSnapshot.test.ts, replace local App.tsx snapshot helpers with imports, and verify tests/build/lint."
+      allowed_files:
+        - "src/App.tsx"
+        - "src/lib/workspaceSnapshot.ts"
+        - "src/lib/workspaceSnapshot.test.ts"
+        - "docs/goals/crossify-system-refactor/state.yaml"
+      verify:
+        - "npm test -- workspaceSnapshot"
+        - "npm test"
+        - "npm run build"
+        - "npm run lint"
+      stop_if:
+        - "App runtime behavior must change to complete the extraction."
+        - "Need to touch generated assets."
+        - "Existing dirty user changes conflict with the extraction."
+  - id: T003
+    type: worker
+    assignee: Worker
+    status: done
+    reasoning_hint: default
+    objective: "Extract workspace snapshot IndexedDB helpers into a tested lib module and update App.tsx to import them without changing runtime behavior."
+    allowed_files:
+      - "src/App.tsx"
+      - "src/lib/workspaceSnapshot.ts"
+      - "src/lib/workspaceSnapshot.test.ts"
+      - "docs/goals/crossify-system-refactor/state.yaml"
+    verify:
+      - "npm test -- workspaceSnapshot"
+      - "npm test"
+      - "npm run build"
+      - "npm run lint"
+    stop_if:
+      - "Need files outside allowed_files."
+      - "Behavior is ambiguous."
+      - "Verification fails twice."
+      - "Change would overwrite unrelated user work."
+    receipt:
+      result: done
+      changed_files:
+        - "src/App.tsx"
+        - "src/lib/workspaceSnapshot.ts"
+        - "src/lib/workspaceSnapshot.test.ts"
+        - "docs/goals/crossify-system-refactor/state.yaml"
+      commands:
+        - command: "npm test -- workspaceSnapshot"
+          status: pass
+        - command: "npm test"
+          status: pass
+        - command: "npm run build"
+          status: pass
+        - command: "npm run lint"
+          status: pass
+      summary: "Extracted workspace snapshot IndexedDB persistence into a tested lib module and updated App.tsx to import saveWorkspaceSnapshot, preserving runtime behavior while reducing App responsibility."
+      fixed_or_prevented_bugs:
+        - "Added regression coverage for missing snapshot, save/load, and overwrite behavior."
+  - id: T004
+    type: worker
+    assignee: Worker
+    status: done
+    reasoning_hint: default
+    objective: "Wire best-effort workspace snapshot restore on startup when the user is returning to an open workspace."
+    allowed_files:
+      - "src/App.tsx"
+      - "docs/goals/crossify-system-refactor/state.yaml"
+    verify:
+      - "npm test"
+      - "npm run build"
+      - "npm run lint"
+    stop_if:
+      - "Restore behavior needs a user-facing product decision."
+      - "Need to change snapshot schema or generated assets."
+      - "Verification fails twice."
+    receipt:
+      result: done
+      changed_files:
+        - "src/App.tsx"
+        - "docs/goals/crossify-system-refactor/state.yaml"
+      commands:
+        - command: "npm test"
+          status: pass
+        - command: "npm run build"
+          status: pass
+        - command: "npm run lint"
+          status: pass
+      summary: "Wired best-effort workspace snapshot restore when sessionStorage indicates the workspace should reopen and no dataset is currently loaded."
+      fixed_bugs:
+        - "Returning to an open workspace after refresh could leave the app past the landing screen without restored dataset/state even though snapshots were being saved."
+      notes:
+        - "Restore is deliberately best-effort and does not block fresh workspace startup if IndexedDB is unavailable."
+  - id: T005
+    type: worker
+    assignee: Worker
+    status: done
+    reasoning_hint: default
+    objective: "Fix disappearing column-net columns when a Net group name matches an existing data column label."
+    allowed_files:
+      - "index.html"
+      - "docs/goals/crossify-system-refactor/state.yaml"
+    verify:
+      - "npm test"
+      - "npm run build"
+      - "npm run lint"
+      - "Invoke-WebRequest http://localhost:5173/"
+    stop_if:
+      - "The fix requires changing generated asset bundles."
+      - "Verification fails twice."
+    receipt:
+      result: done
+      changed_files:
+        - "index.html"
+        - "docs/goals/crossify-system-refactor/state.yaml"
+      commands:
+        - command: "npm test"
+          status: pass
+        - command: "npm run build"
+          status: pass
+        - command: "npm run lint"
+          status: pass
+        - command: "Invoke-WebRequest http://localhost:5173/"
+          status: pass
+      summary: "Adjusted bundled column-net duplicate detection to ignore ordinary data columns and only skip already injected net/summary columns."
+      fixed_bugs:
+        - "Creating a Net column with a name that already exists as a normal data column, such as UPC, was treated as a duplicate and skipped, making the requested Net column disappear."
+  - id: T006
+    type: worker
+    assignee: Worker
+    status: done
+    reasoning_hint: default
+    objective: "Align source PreviewTable base-row rendering with bundled behavior by supporting unweighted base rows."
+    allowed_files:
+      - "src/components/PreviewTable.tsx"
+      - "docs/goals/crossify-system-refactor/state.yaml"
+    verify:
+      - "npm test"
+      - "npm run build"
+      - "npm run lint"
+    stop_if:
+      - "Requires changing generated bundles."
+      - "Rendering behavior differs from existing bundled app output."
+    receipt:
+      result: done
+      changed_files:
+        - "src/components/PreviewTable.tsx"
+        - "docs/goals/crossify-system-refactor/state.yaml"
+      commands:
+        - command: "npm test"
+          status: pass
+        - command: "npm run build"
+          status: pass
+        - command: "npm run lint"
+          status: pass
+      summary: "Aligned source PreviewTable with bundled behavior by rendering Unweighted Base rows and rounded base counts when unweighted totals are present."
+  - id: T007
+    type: worker
+    assignee: Worker
+    status: done
+    reasoning_hint: default
+    objective: "Fix column header misalignment after injected Net columns by normalizing stale or missing column paths."
+    allowed_files:
+      - "src/components/PreviewTable.tsx"
+      - "src/lib/excelExport.ts"
+      - "src/lib/columnAugment.ts"
+      - "src/lib/columnAugment.test.ts"
+      - "public/assets/index-DsrIxxwV.js"
+      - "public/assets/excelExport-CFUKVLbe.js"
+      - "docs/goals/crossify-system-refactor/state.yaml"
+    verify:
+      - "npm test"
+      - "npm run build"
+      - "npm run lint"
+      - "Invoke-WebRequest http://localhost:5173/"
+    stop_if:
+      - "Requires redesigning the crosstab data model."
+      - "Verification fails twice."
+      - "Change would overwrite unrelated user work."
+    receipt:
+      result: done
+      changed_files:
+        - "src/components/PreviewTable.tsx"
+        - "src/lib/excelExport.ts"
+        - "src/lib/columnAugment.ts"
+        - "src/lib/columnAugment.test.ts"
+        - "public/assets/index-DsrIxxwV.js"
+        - "public/assets/excelExport-CFUKVLbe.js"
+        - "docs/goals/crossify-system-refactor/state.yaml"
+      commands:
+        - command: "npm test"
+          status: pass
+        - command: "npm run build"
+          status: pass
+        - command: "npm run lint"
+          status: pass
+        - command: "Invoke-WebRequest http://localhost:5173/"
+          status: pass
+      summary: "Normalized column paths anywhere result columns are rendered, augmented, or exported so stale or missing colPaths fall back to their matching colValues instead of shortening the header model."
+      fixed_bugs:
+        - "Injected Net/summary columns could leave the top header row misaligned when colPaths was shorter than colValues."
+      tests_added:
+        - "Regression coverage for materializeColumnAugment filling missing original column paths."
+  - id: T999
+    type: judge
+    assignee: Judge
+    status: active
+    reasoning_hint: high
+    objective: "Audit whether the current refactor tranche preserved behavior and improved maintainability without unverified bug claims."
+    inputs:
+      - "All done task receipts"
+      - "Last verification"
+      - "Current dirty diff"
+    constraints:
+      - "Do not implement."
+      - "Reject completion if required Worker work is still queued or active."
+      - "Reject completion if verification is stale or missing."
+    expected_output:
+      - "complete | not_complete"
+      - "full_outcome_complete: true | false"
+      - "fixed bugs"
+      - "remaining risks"
+      - "next task if not complete"
+    receipt: null
+  - id: T008
+    type: worker
+    assignee: Worker
+    status: done
+    reasoning_hint: default
+    objective: "Fix extra trailing body cells in base rows when totals arrays are longer than displayed columns."
+    allowed_files:
+      - "src/components/PreviewTable.tsx"
+      - "public/assets/index-DsrIxxwV.js"
+      - "docs/goals/crossify-system-refactor/state.yaml"
+    verify:
+      - "npm test"
+      - "npm run build"
+      - "npm run lint"
+      - "Invoke-WebRequest http://localhost:5173/"
+    stop_if:
+      - "Requires changing crosstab calculation semantics."
+      - "Verification fails twice."
+      - "Change would overwrite unrelated user work."
+    receipt:
+      result: done
+      changed_files:
+        - "src/components/PreviewTable.tsx"
+        - "public/assets/index-DsrIxxwV.js"
+        - "docs/goals/crossify-system-refactor/state.yaml"
+      commands:
+        - command: "npm test"
+          status: pass
+        - command: "npm run build"
+          status: pass
+        - command: "npm run lint"
+          status: pass
+        - command: "Invoke-WebRequest http://localhost:5173/"
+          status: pass
+      summary: "Clamped base-row column total rendering to the displayed column count so stale longer totals arrays cannot create trailing body cells without headers."
+      fixed_bugs:
+        - "Base and Unweighted Base rows could render extra rightmost cells after Net/section operations, making the table appear to have a missing header column."
+  - id: T009
+    type: worker
+    assignee: Worker
+    status: done
+    reasoning_hint: default
+    objective: "Keep unweighted base totals aligned when column Net or summary columns are inserted."
+    allowed_files:
+      - "src/lib/columnAugment.ts"
+      - "src/lib/columnAugment.test.ts"
+      - "index.html"
+      - "docs/goals/crossify-system-refactor/state.yaml"
+    verify:
+      - "npm test"
+      - "npm run build"
+      - "npm run lint"
+      - "Invoke-WebRequest http://localhost:5173/"
+    stop_if:
+      - "Requires changing how Net membership is defined."
+      - "Verification fails twice."
+      - "Change would overwrite unrelated user work."
+    receipt:
+      result: done
+      changed_files:
+        - "src/lib/columnAugment.ts"
+        - "src/lib/columnAugment.test.ts"
+        - "index.html"
+        - "docs/goals/crossify-system-refactor/state.yaml"
+      commands:
+        - command: "npm test"
+          status: pass
+        - command: "npm run build"
+          status: pass
+        - command: "npm run lint"
+          status: pass
+        - command: "Invoke-WebRequest http://localhost:5173/"
+          status: pass
+      summary: "Rebuilt weighted and unweighted base totals through the same column template used for inserted Net/summary columns, including row section base arrays."
+      fixed_bugs:
+        - "Unweighted Base values could shift left or become missing in the last displayed column after inserting a column Net group."
+      tests_added:
+        - "Regression coverage for inserted summary columns preserving unweighted and row-section base totals."
+  - id: T010
+    type: worker
+    assignee: Worker
+    status: done
+    reasoning_hint: default
+    objective: "Fix Top Net labeling and remove slow workspace snapshot restore/persist behavior from refresh, Home, SPSS load, and export flows."
+    allowed_files:
+      - "src/App.tsx"
+      - "src/lib/netGroupInjector.ts"
+      - "src/lib/netGroupInjector.test.ts"
+      - "index.html"
+      - "public/assets/index-DsrIxxwV.js"
+      - "docs/goals/crossify-system-refactor/state.yaml"
+    verify:
+      - "npm test"
+      - "npm run build"
+      - "npm run lint"
+      - "Invoke-WebRequest http://localhost:5173/"
+    stop_if:
+      - "Requires changing saved settings schema."
+      - "Verification fails twice."
+      - "Change would overwrite unrelated user work."
+    receipt:
+      result: done
+      changed_files:
+        - "src/App.tsx"
+        - "src/lib/netGroupInjector.ts"
+        - "src/lib/netGroupInjector.test.ts"
+        - "index.html"
+        - "public/assets/index-DsrIxxwV.js"
+        - "docs/goals/crossify-system-refactor/state.yaml"
+      commands:
+        - command: "npm test"
+          status: pass
+        - command: "npm run build"
+          status: pass
+        - command: "npm run lint"
+          status: pass
+        - command: "Invoke-WebRequest http://localhost:5173/"
+          status: pass
+        - command: "Browser reload http://localhost:5173/"
+          status: pass
+      summary: "Top/Side Net labels now share the Net prefix, refresh starts at the landing page, heavy workspace snapshot restore/persist is disabled, and Excel-related modules are pre-warmed while idle."
+      fixed_bugs:
+        - "Top-axis Net columns displayed raw group names without the 'Net :' prefix."
+        - "Refreshing after entering workspace reopened a blank workspace instead of the first page."
+        - "Loading SPSS and export flows could block on writing the full dataset snapshot to IndexedDB."
+      performance_notes:
+        - "Save/export modules are warmed during idle time to reduce first-click delay."
+  - id: T011
+    type: worker
+    assignee: Worker
+    status: done
+    reasoning_hint: default
+    objective: "Remove unused workspace snapshot source/test module after snapshot restore/persist was disabled for performance."
+    allowed_files:
+      - "src/lib/workspaceSnapshot.ts"
+      - "src/lib/workspaceSnapshot.test.ts"
+      - "docs/goals/crossify-system-refactor/state.yaml"
+    verify:
+      - "npm test"
+      - "npm run build"
+      - "npm run lint"
+      - "Invoke-WebRequest http://localhost:5173/"
+    stop_if:
+      - "Any runtime source still imports workspaceSnapshot."
+      - "Removing the files changes user-visible behavior."
+      - "Verification fails twice."
+    receipt:
+      result: done
+      changed_files:
+        - "src/lib/workspaceSnapshot.ts"
+        - "src/lib/workspaceSnapshot.test.ts"
+        - "docs/goals/crossify-system-refactor/state.yaml"
+      commands:
+        - command: "rg -n \"workspaceSnapshot|saveWorkspaceSnapshot|loadWorkspaceSnapshot\" -S src index.html public/assets/index-DsrIxxwV.js"
+          status: pass
+        - command: "npm test"
+          status: pass
+        - command: "npm run build"
+          status: pass
+        - command: "npm run lint"
+          status: pass
+        - command: "Invoke-WebRequest http://localhost:5173/"
+          status: pass
+      summary: "Removed the unused workspace snapshot source module and its tests after snapshot restore/persist was disabled for refresh and load performance."
+      maintainability_notes:
+        - "The project no longer carries tests for an unused IndexedDB snapshot API."
+        - "Source references to workspaceSnapshot/saveWorkspaceSnapshot/loadWorkspaceSnapshot are gone."
+  - id: T012
+    type: worker
+    assignee: Worker
+    status: done
+    reasoning_hint: default
+    objective: "Centralize Net label formatting so variable editor rows and injected result rows cannot drift."
+    allowed_files:
+      - "src/lib/netLabels.ts"
+      - "src/lib/netLabels.test.ts"
+      - "src/lib/variableEditorUtils.ts"
+      - "src/lib/variableEditorUtils.test.ts"
+      - "src/lib/netGroupInjector.ts"
+      - "docs/goals/crossify-system-refactor/state.yaml"
+    verify:
+      - "npm test"
+      - "npm run build"
+      - "npm run lint"
+      - "Invoke-WebRequest http://localhost:5173/"
+    stop_if:
+      - "Net label output changes from the verified T010 behavior."
+      - "Requires changing saved settings schema."
+      - "Verification fails twice."
+    receipt:
+      result: done
+      changed_files:
+        - "src/lib/netLabels.ts"
+        - "src/lib/netLabels.test.ts"
+        - "src/lib/variableEditorUtils.ts"
+        - "src/lib/netGroupInjector.ts"
+        - "docs/goals/crossify-system-refactor/state.yaml"
+      commands:
+        - command: "npm test"
+          status: pass
+        - command: "npm run build"
+          status: pass
+        - command: "npm run lint"
+          status: pass
+        - command: "Invoke-WebRequest http://localhost:5173/"
+          status: pass
+      summary: "Centralized Net prefix and display-label formatting in src/lib/netLabels.ts, then reused it from variable editor display rows and result Net injection."
+      maintainability_notes:
+        - "Top/Side Net label rules now share one tested formatter instead of separate local helpers."
+        - "variableEditorUtils still re-exports getNetPrefix for existing callers."
+      notes:
+        - "A filtered Vitest command hit a Windows/esbuild config read issue; the full npm test verification passed."
+  - id: T013
+    type: worker
+    assignee: Worker
+    status: done
+    reasoning_hint: default
+    objective: "Centralize column path normalization used by preview, Excel export, and column augmentation."
+    allowed_files:
+      - "src/lib/columnPaths.ts"
+      - "src/lib/columnPaths.test.ts"
+      - "src/components/PreviewTable.tsx"
+      - "src/lib/excelExport.ts"
+      - "src/lib/columnAugment.ts"
+      - "docs/goals/crossify-system-refactor/state.yaml"
+    verify:
+      - "npm test"
+      - "npm run build"
+      - "npm run lint"
+      - "Invoke-WebRequest http://localhost:5173/"
+    stop_if:
+      - "Column/header rendering output changes."
+      - "Excel export structure changes."
+      - "Verification fails twice."
+    receipt:
+      result: done
+      changed_files:
+        - "src/lib/columnPaths.ts"
+        - "src/lib/columnPaths.test.ts"
+        - "src/components/PreviewTable.tsx"
+        - "src/lib/excelExport.ts"
+        - "src/lib/columnAugment.ts"
+        - "docs/goals/crossify-system-refactor/state.yaml"
+      commands:
+        - command: "rg -n \"function normalizeColumnPaths|normalizeColumnPaths\\(\" src"
+          status: pass
+        - command: "npm test"
+          status: pass
+        - command: "npm run build"
+          status: pass
+        - command: "npm run lint"
+          status: pass
+        - command: "Invoke-WebRequest http://localhost:5173/"
+          status: pass
+      summary: "Centralized column path normalization in src/lib/columnPaths.ts and reused it from preview rendering, Excel export, and column augmentation."
+      maintainability_notes:
+        - "Column/header fallback behavior now has one tested source instead of duplicate local helpers."
+        - "Existing path arrays are copied before reuse to avoid accidental mutation by future callers."
+  - id: T014
+    type: worker
+    assignee: Worker
+    status: done
+    reasoning_hint: default
+    objective: "Extract shared crosstab table layout helpers from PreviewTable and Excel export into one tested module."
+    allowed_files:
+      - "src/lib/tableLayout.ts"
+      - "src/components/PreviewTable.tsx"
+      - "src/lib/excelExport.ts"
+      - "docs/goals/crossify-system-refactor/state.yaml"
+    verify:
+      - "npm test"
+      - "npm run build"
+      - "npm run lint"
+      - "Invoke-WebRequest http://localhost:5173/"
+    stop_if:
+      - "Rendered table layout or Excel export layout changes."
+      - "Existing excelExport utility tests cannot keep passing through re-exports."
+      - "Verification fails twice."
+    receipt:
+      result: done
+      changed_files:
+        - "src/lib/tableLayout.ts"
+        - "src/components/PreviewTable.tsx"
+        - "src/lib/excelExport.ts"
+        - "docs/goals/crossify-system-refactor/state.yaml"
+      commands:
+        - command: "rg -n \"function buildHeaderGroups|function buildRowDisplayPaths|function buildRowSectionMeta|function normalizeRowStructure|from './tableLayout'|from '../lib/tableLayout'\" src/components/PreviewTable.tsx src/lib/excelExport.ts src/lib/tableLayout.ts"
+          status: pass
+        - command: "npm test"
+          status: pass
+        - command: "npm run build"
+          status: pass
+        - command: "npm run lint"
+          status: pass
+        - command: "Invoke-WebRequest http://localhost:5173/"
+          status: pass
+      summary: "Moved shared crosstab layout helpers into src/lib/tableLayout.ts and reused them from preview rendering and Excel export, while preserving excelExport re-exports for existing tests/callers."
+      maintainability_notes:
+        - "Preview and Excel export now share header grouping, row display path, section-span, and row-structure normalization behavior."
+        - "Existing excelExport utility tests still cover the moved helpers through compatibility re-exports."
+  - id: T015
+    type: worker
+    assignee: Worker
+    status: done
+    reasoning_hint: default
+    objective: "Extract table/filter model helpers from App.tsx as the first step toward table action modules."
+    allowed_files:
+      - "src/lib/tableModel.ts"
+      - "src/lib/tableModel.test.ts"
+      - "src/App.tsx"
+      - "docs/goals/crossify-system-refactor/state.yaml"
+    verify:
+      - "npm test"
+      - "npm run build"
+      - "npm run lint"
+      - "Invoke-WebRequest http://localhost:5173/"
+    stop_if:
+      - "Table creation or filter comparison behavior changes."
+      - "Action extraction requires touching UI markup."
+      - "Verification fails twice."
+    receipt:
+      result: done
+      changed_files:
+        - "src/lib/tableModel.ts"
+        - "src/lib/tableModel.test.ts"
+        - "src/App.tsx"
+        - "docs/goals/crossify-system-refactor/state.yaml"
+      commands:
+        - command: "npm test"
+          status: pass
+        - command: "npm run build"
+          status: pass
+        - command: "npm run lint"
+          status: pass
+        - command: "Invoke-WebRequest http://localhost:5173/"
+          status: pass
+      summary: "Extracted table/filter model helpers from App.tsx into src/lib/tableModel.ts with unit coverage for table creation, active filter detection, clone behavior, and comparable filters."
+      maintainability_notes:
+        - "App.tsx no longer owns the default table/filter shape."
+        - "This provides a stable base for extracting table action hooks next."
+  - id: T016
+    type: worker
+    assignee: Worker
+    status: done
+    reasoning_hint: default
+    objective: "Extract table action handlers from App.tsx into useTableActions."
+    allowed_files:
+      - "src/hooks/useTableActions.ts"
+      - "src/App.tsx"
+      - "docs/goals/crossify-system-refactor/state.yaml"
+    verify:
+      - "npm test"
+      - "npm run build"
+      - "npm run lint"
+      - "Invoke-WebRequest http://localhost:5173/"
+    stop_if:
+      - "Table add/delete/copy/paste/drag behavior changes."
+      - "Verification fails twice."
+    receipt:
+      result: done
+      changed_files:
+        - "src/hooks/useTableActions.ts"
+        - "src/App.tsx"
+        - "docs/goals/crossify-system-refactor/state.yaml"
+      commands:
+        - command: "rg -n \"setCopiedTablesBuffer|dragTableRef|const addTable = useCallback|const handleTableClick = useCallback|from './hooks/useTableActions'\" src/App.tsx src/hooks/useTableActions.ts"
+          status: pass
+        - command: "npm test"
+          status: pass
+        - command: "npm run build"
+          status: pass
+        - command: "npm run lint"
+          status: pass
+        - command: "Invoke-WebRequest http://localhost:5173/"
+          status: pass
+      summary: "Moved table add/create/click/delete/rename/duplicate/copy/paste/select/context-menu/drag/folder assignment handlers into useTableActions while preserving the existing handler names used by App JSX."
+      maintainability_notes:
+        - "App.tsx now delegates table-list behavior to a hook with its own copied-table buffer and drag ref."
+        - "Header-menu duplicate and paste actions now route through the same hook behavior as row/context actions."
+  - id: T017
+    type: worker
+    assignee: Worker
+    status: done
+    reasoning_hint: default
+    objective: "Extract Top/Side table designer axis handlers from App.tsx into useTableDesignerActions."
+    allowed_files:
+      - "src/hooks/useTableDesignerActions.ts"
+      - "src/App.tsx"
+      - "docs/goals/crossify-system-refactor/state.yaml"
+    verify:
+      - "npm test"
+      - "npm run build"
+      - "npm run lint"
+      - "Invoke-WebRequest http://localhost:5173/"
+    stop_if:
+      - "Top/Side drop, nest, remove, reorder, move, or clear behavior changes."
+      - "Verification fails twice."
+    receipt:
+      result: done
+      changed_files:
+        - "src/hooks/useTableDesignerActions.ts"
+        - "src/App.tsx"
+        - "docs/goals/crossify-system-refactor/state.yaml"
+      commands:
+        - command: "npm test"
+          status: pass
+        - command: "npm run build"
+          status: pass
+        - command: "npm run lint"
+          status: pass
+        - command: "Invoke-WebRequest http://localhost:5173/"
+          status: pass
+      summary: "Moved Top/Side drop, nest, remove, reorder, move, and clear handlers into useTableDesignerActions while preserving App JSX handler names."
+      maintainability_notes:
+        - "Axis manipulation behavior now lives beside its appStateUtils dependencies instead of in the App component body."
+        - "App.tsx kept only the hook wiring for the designer workflow."
+  - id: T018
+    type: worker
+    assignee: Worker
+    status: done
+    reasoning_hint: default
+    objective: "Extract filter editing handlers from App.tsx into useFilterActions."
+    allowed_files:
+      - "src/hooks/useFilterActions.ts"
+      - "src/App.tsx"
+      - "docs/goals/crossify-system-refactor/state.yaml"
+    verify:
+      - "npm test"
+      - "npm run build"
+      - "npm run lint"
+      - "Invoke-WebRequest http://localhost:5173/"
+    stop_if:
+      - "Filter description, group, condition, drag-drop, or clear behavior changes."
+      - "Verification fails twice."
+    receipt:
+      result: done
+      changed_files:
+        - "src/hooks/useFilterActions.ts"
+        - "src/App.tsx"
+        - "docs/goals/crossify-system-refactor/state.yaml"
+      commands:
+        - command: "npm test"
+          status: pass
+        - command: "npm run build"
+          status: pass
+        - command: "npm run lint"
+          status: pass
+        - command: "Invoke-WebRequest http://localhost:5173/"
+          status: pass
+      summary: "Moved filter batch-apply, description/root join, group, condition, clear, and filter drag-drop handlers into useFilterActions."
+      maintainability_notes:
+        - "Filter mutation rules are now isolated from App.tsx and continue to share tableModel clone/default-filter helpers."
+        - "App.tsx now wires filter UI handlers through a dedicated hook."
+  - id: T019
+    type: worker
+    assignee: Worker
+    status: done
+    reasoning_hint: default
+    objective: "Extract variable list selection, drag, and quick action handlers from App.tsx."
+    allowed_files:
+      - "src/hooks/useVariableListActions.ts"
+      - "src/App.tsx"
+      - "docs/goals/crossify-system-refactor/state.yaml"
+    verify:
+      - "npm test"
+      - "npm run build"
+      - "npm run lint"
+      - "Invoke-WebRequest http://localhost:5173/"
+    stop_if:
+      - "Variable list selection, drag, or quick-add behavior changes."
+      - "Verification fails twice."
+    receipt:
+      result: done
+      changed_files:
+        - "src/hooks/useVariableListActions.ts"
+        - "src/App.tsx"
+        - "docs/goals/crossify-system-refactor/state.yaml"
+      commands:
+        - command: "npm test"
+          status: pass
+        - command: "npm run build"
+          status: pass
+        - command: "npm run lint"
+          status: pass
+        - command: "Invoke-WebRequest http://localhost:5173/"
+          status: pass
+      summary: "Moved variable catalog selection, drag start, clear selection, and quick actions for Top/Side/Filter/Table into useVariableListActions."
+      maintainability_notes:
+        - "Catalog interaction state now lives outside App.tsx and reuses existing table/filter action hooks through callbacks."
+        - "Quick actions retain ordered multi-select behavior through the variable catalog order."
+  - id: T020
+    type: worker
+    assignee: Worker
+    status: done
+    reasoning_hint: default
+    objective: "Centralize filter runtime/case filtering used by run, batch export, and filtered-case debug access."
+    allowed_files:
+      - "src/lib/filterRuntime.ts"
+      - "src/lib/filterRuntime.test.ts"
+      - "src/App.tsx"
+      - "docs/goals/crossify-system-refactor/state.yaml"
+    verify:
+      - "npm test"
+      - "npm run build"
+      - "npm run lint"
+      - "Invoke-WebRequest http://localhost:5173/"
+    stop_if:
+      - "Filtered case selection changes for labeled SPSS values or grouped variables."
+      - "Verification fails twice."
+    receipt:
+      result: done
+      changed_files:
+        - "src/lib/filterRuntime.ts"
+        - "src/lib/filterRuntime.test.ts"
+        - "src/App.tsx"
+        - "docs/goals/crossify-system-refactor/state.yaml"
+      commands:
+        - command: "rg -n \"evaluateFilterSpec|filterCasesForTable|buildFilterRuntime|__cxGetFilteredCases|getValueKeys\" src/App.tsx src/lib/filterRuntime.ts"
+          status: pass
+        - command: "npm test"
+          status: pass
+        - command: "npm run build"
+          status: pass
+        - command: "npm run lint"
+          status: pass
+        - command: "Invoke-WebRequest http://localhost:5173/"
+          status: pass
+      summary: "Moved filter runtime construction and case filtering into src/lib/filterRuntime.ts and reused it from single-table run, batch export, and the __cxGetFilteredCases debug hook."
+      fixed_or_prevented_bugs:
+        - "Prevents run and batch export filter semantics from drifting when labeled SPSS values need reverse-mapping to codes."
+      tests_added:
+        - "Regression coverage for labeled SPSS values mapping back to filter codes."
+  - id: T021
+    type: worker
+    assignee: Worker
+    status: done
+    reasoning_hint: default
+    objective: "Extract settings schema/version/default output helpers from settingsIO."
+    allowed_files:
+      - "src/lib/settingsSchema.ts"
+      - "src/lib/settingsSchema.test.ts"
+      - "src/lib/settingsIO.ts"
+      - "docs/goals/crossify-system-refactor/state.yaml"
+    verify:
+      - "npm test"
+      - "npm run build"
+      - "npm run lint"
+      - "Invoke-WebRequest http://localhost:5173/"
+    stop_if:
+      - "Saved settings version or output defaults change unexpectedly."
+      - "Verification fails twice."
+    receipt:
+      result: done
+      changed_files:
+        - "src/lib/settingsSchema.ts"
+        - "src/lib/settingsSchema.test.ts"
+        - "src/lib/settingsIO.ts"
+        - "docs/goals/crossify-system-refactor/state.yaml"
+      commands:
+        - command: "rg -n \"version: '1\\.9'|parsed\\.version ===|DEFAULT_OUTPUT_SETTINGS|SETTINGS_VERSION|normalizeOutputSettings|isSupportedSettingsVersion\" src/lib/settingsIO.ts src/lib/settingsSchema.ts"
+          status: pass
+        - command: "npm test"
+          status: pass
+        - command: "npm run build"
+          status: pass
+        - command: "npm run lint"
+          status: pass
+        - command: "Invoke-WebRequest http://localhost:5173/"
+          status: pass
+      summary: "Centralized settings version, supported-version detection, default output settings, and output normalization in src/lib/settingsSchema.ts."
+      maintainability_notes:
+        - "settingsIO now uses shared schema helpers instead of inline version chains and duplicated defaults."
+        - "Output settings loaded from hidden JSON are normalized so older/missing fields receive defaults."
+  - id: T022
+    type: worker
+    assignee: Worker
+    status: done
+    reasoning_hint: default
+    objective: "Add a static bundle marker check to reduce source/bundle drift risk for critical local fixes."
+    allowed_files:
+      - "tools/check-static-bundle-markers.mjs"
+      - "package.json"
+      - "docs/goals/crossify-system-refactor/state.yaml"
+    verify:
+      - "npm run check:static-bundle"
+      - "npm test"
+      - "npm run build"
+      - "npm run lint"
+      - "Invoke-WebRequest http://localhost:5173/"
+    stop_if:
+      - "The check requires changing app runtime behavior."
+      - "Verification fails twice."
+    receipt:
+      result: done
+      changed_files:
+        - "tools/check-static-bundle-markers.mjs"
+        - "package.json"
+        - "docs/goals/crossify-system-refactor/state.yaml"
+      commands:
+        - command: "npm run check:static-bundle"
+          status: pass
+        - command: "npm test"
+          status: pass
+        - command: "npm run build"
+          status: pass
+        - command: "npm run lint"
+          status: pass
+        - command: "Invoke-WebRequest http://localhost:5173/"
+          status: pass
+      summary: "Added npm run check:static-bundle to assert critical source/index/static-bundle markers stay present for Net labels, idle prewarm, and disabled workspace snapshot persistence."
+      maintainability_notes:
+        - "This gives future fixes a quick guard against patching source while the local static bundle keeps old behavior."
+  - id: T023
+    type: worker
+    assignee: Worker
+    status: done
+    reasoning_hint: default
+    objective: "Extract current-table Excel export action from App.tsx."
+    allowed_files:
+      - "src/hooks/useExportActions.ts"
+      - "src/App.tsx"
+      - "docs/goals/crossify-system-refactor/state.yaml"
+    verify:
+      - "npm test"
+      - "npm run build"
+      - "npm run lint"
+      - "Invoke-WebRequest http://localhost:5173/"
+    stop_if:
+      - "Export button behavior changes."
+      - "Verification fails twice."
+    receipt:
+      result: done
+      changed_files:
+        - "src/hooks/useExportActions.ts"
+        - "src/App.tsx"
+        - "docs/goals/crossify-system-refactor/state.yaml"
+      commands:
+        - command: "npm test"
+          status: pass
+        - command: "npm run build"
+          status: pass
+        - command: "npm run lint"
+          status: pass
+        - command: "Invoke-WebRequest http://localhost:5173/"
+          status: pass
+      summary: "Moved current-table Excel export orchestration into useExportActions, keeping App.tsx responsible only for wiring active table, dataset, config, and UI state setters."
+      maintainability_notes:
+        - "Export button behavior is now isolated from App component body and can be expanded without adding more inline App logic."
+  - id: T024
+    type: worker
+    assignee: Worker
+    status: done
+    reasoning_hint: default
+    objective: "Extract folder sidebar actions from App.tsx."
+    allowed_files:
+      - "src/hooks/useFolderActions.ts"
+      - "src/App.tsx"
+      - "docs/goals/crossify-system-refactor/state.yaml"
+    verify:
+      - "npm test"
+      - "npm run build"
+      - "npm run lint"
+      - "Invoke-WebRequest http://localhost:5173/"
+    stop_if:
+      - "Folder add/rename/delete/toggle behavior changes."
+      - "Verification fails twice."
+    receipt:
+      result: done
+      changed_files:
+        - "src/hooks/useFolderActions.ts"
+        - "src/App.tsx"
+        - "docs/goals/crossify-system-refactor/state.yaml"
+      commands:
+        - command: "npm test"
+          status: pass
+        - command: "npm run build"
+          status: pass
+        - command: "npm run lint"
+          status: pass
+        - command: "Invoke-WebRequest http://localhost:5173/"
+          status: pass
+      summary: "Moved folder add, rename, delete, and expand/collapse handlers into useFolderActions."
+      maintainability_notes:
+        - "Sidebar folder behavior is now separate from App.tsx and stays colocated with table-folder cleanup rules."
+  - id: T025
+    type: worker
+    assignee: Worker
+    status: done
+    reasoning_hint: default
+    objective: "Extract remaining variable editor actions from App.tsx."
+    allowed_files:
+      - "src/hooks/useVariableEditorActions.ts"
+      - "src/types/variableOverride.ts"
+      - "src/App.tsx"
+    verify:
+      - "npm test"
+      - "npm run build"
+      - "npm run lint"
+      - "Invoke-WebRequest http://localhost:5173/"
+    receipt:
+      result: done
+      changed_files:
+        - "src/hooks/useVariableEditorActions.ts"
+        - "src/types/variableOverride.ts"
+        - "src/App.tsx"
+      commands:
+        - command: "npm test"
+          status: pass
+        - command: "npm run build"
+          status: pass
+        - command: "npm run lint"
+          status: pass
+        - command: "Invoke-WebRequest http://localhost:5173/"
+          status: pass
+      summary: "Moved variable editor open/save/apply/sort/net/scale actions into useVariableEditorActions and moved VariableOverride/NumericStat into a shared type module."
+  - id: T026
+    type: worker
+    assignee: Worker
+    status: done
+    reasoning_hint: default
+    objective: "Extract settings load/save workflow and restore missing settings facade exports."
+    allowed_files:
+      - "src/hooks/useSettingsActions.ts"
+      - "src/lib/settingsIO.ts"
+      - "src/App.tsx"
+    verify:
+      - "npm test"
+      - "npm run build"
+      - "npm run lint"
+      - "Invoke-WebRequest http://localhost:5173/"
+    receipt:
+      result: done
+      changed_files:
+        - "src/hooks/useSettingsActions.ts"
+        - "src/lib/settingsIO.ts"
+        - "src/App.tsx"
+      commands:
+        - command: "npm test"
+          status: pass
+        - command: "npm run build"
+          status: pass
+        - command: "npm run lint"
+          status: pass
+      summary: "Moved settings save/load orchestration into useSettingsActions and added typed buildAllSettings, exportSettingsToExcel, parseSettingsFromExcel, and restoreAllSettings exports used by source workflows."
+  - id: T027
+    type: worker
+    assignee: Worker
+    status: done
+    reasoning_hint: default
+    objective: "Extract batch settings export workflow from App.tsx."
+    allowed_files:
+      - "src/hooks/useBatchExportActions.ts"
+      - "src/App.tsx"
+    verify:
+      - "npm test"
+      - "npm run build"
+      - "npm run lint"
+    receipt:
+      result: done
+      changed_files:
+        - "src/hooks/useBatchExportActions.ts"
+        - "src/App.tsx"
+      commands:
+        - command: "npm test"
+          status: pass
+        - command: "npm run build"
+          status: pass
+        - command: "npm run lint"
+          status: pass
+      summary: "Moved multi-settings batch export orchestration into useBatchExportActions."
+  - id: T028
+    type: worker
+    assignee: Worker
+    status: done
+    reasoning_hint: default
+    objective: "Add a shared result computation facade for single and batch run paths."
+    allowed_files:
+      - "src/lib/resultPipeline.ts"
+      - "src/hooks/useBatchExportActions.ts"
+      - "src/App.tsx"
+    verify:
+      - "npm test"
+      - "npm run build"
+      - "npm run lint"
+    receipt:
+      result: done
+      changed_files:
+        - "src/lib/resultPipeline.ts"
+        - "src/hooks/useBatchExportActions.ts"
+        - "src/App.tsx"
+      commands:
+        - command: "npm test"
+          status: pass
+        - command: "npm run build"
+          status: pass
+        - command: "npm run lint"
+          status: pass
+      summary: "Centralized result computation entry through computeTableResult so run-one and batch-run paths no longer duplicate legacy compute dispatch."
+  - id: T029
+    type: worker
+    assignee: Worker
+    status: done
+    reasoning_hint: default
+    objective: "Clarify and verify the source/static bundle boundary."
+    allowed_files:
+      - "index.html"
+      - "tools/check-static-bundle-markers.mjs"
+    verify:
+      - "npm run check:static-bundle"
+      - "Invoke-WebRequest http://localhost:5173/"
+    receipt:
+      result: done
+      changed_files:
+        - "index.html"
+      commands:
+        - command: "npm run check:static-bundle"
+          status: pass
+        - command: "Invoke-WebRequest http://localhost:5173/"
+          status: pass
+      summary: "Replaced garbled bundle warning with a clear ASCII entrypoint warning while preserving the fixed static bundle reference."
+  - id: T030
+    type: worker
+    assignee: Worker
+    status: done
+    reasoning_hint: default
+    objective: "Move settings session and lock helpers into a typed shared module."
+    allowed_files:
+      - "src/lib/settingsSession.ts"
+      - "src/lib/settingsIO.ts"
+      - "src/App.tsx"
+    verify:
+      - "npm test"
+      - "npm run build"
+      - "npm run lint"
+    receipt:
+      result: done
+      changed_files:
+        - "src/lib/settingsSession.ts"
+        - "src/lib/settingsIO.ts"
+        - "src/App.tsx"
+      commands:
+        - command: "npm test"
+          status: pass
+        - command: "npm run build"
+          status: pass
+        - command: "npm run lint"
+          status: pass
+      summary: "Extracted settings session id, editor identity, and active lock creation into settingsSession to reduce duplicated ts-nocheck logic in App.tsx."
+  - id: T031
+    type: worker
+    assignee: Worker
+    status: done
+    reasoning_hint: default
+    objective: "Add and run regression tests against Edit 500+Booster.sav."
+    allowed_files:
+      - "src/lib/edit500booster.regression.test.ts"
+      - "src/lib/resultPipeline.ts"
+      - "src/App.tsx"
+      - "docs/goals/crossify-system-refactor/state.yaml"
+    verify:
+      - "npm test"
+      - "npm run build"
+      - "npm run lint"
+      - "npm run check:static-bundle"
+      - "Invoke-WebRequest http://localhost:5173/"
+    receipt:
+      result: done
+      changed_files:
+        - "src/lib/edit500booster.regression.test.ts"
+        - "src/lib/resultPipeline.ts"
+        - "src/App.tsx"
+        - "docs/goals/crossify-system-refactor/state.yaml"
+      commands:
+        - command: "npm test"
+          status: pass
+        - command: "npm run build"
+          status: pass
+        - command: "npm run lint"
+          status: pass
+        - command: "npm run check:static-bundle"
+          status: pass
+        - command: "Invoke-WebRequest http://localhost:5173/"
+          status: pass
+      summary: "Added fixture-backed regression coverage for Edit 500+Booster.sav: parse 1,415 real cases, verify area_group x area_group keeps the final column populated, and verify q021 x area_group appended Net summary column stays aligned."
+  - id: T032
+    type: worker
+    assignee: Worker
+    status: done
+    reasoning_hint: default
+    objective: "Expand Edit 500+Booster.sav regression coverage across table axes, Net, T2B, MRSET, Grid, derived variables, and settings roundtrip."
+    allowed_files:
+      - "src/lib/edit500booster.regression.test.ts"
+      - "src/lib/variableGrouping.ts"
+      - "docs/goals/crossify-system-refactor/state.yaml"
+    verify:
+      - "npm test"
+      - "npm run build"
+      - "npm run lint"
+      - "npm run check:static-bundle"
+      - "Invoke-WebRequest http://localhost:5173/"
+    receipt:
+      result: done
+      changed_files:
+        - "src/lib/edit500booster.regression.test.ts"
+        - "src/lib/variableGrouping.ts"
+        - "docs/goals/crossify-system-refactor/state.yaml"
+      commands:
+        - command: "npm test"
+          status: pass
+          detail: "25 files, 405 tests passed."
+        - command: "npm run build"
+          status: pass
+        - command: "npm run lint"
+          status: pass
+        - command: "npm run check:static-bundle"
+          status: pass
+        - command: "Invoke-WebRequest http://localhost:5173/"
+          status: pass
+          detail: "HTTP 200."
+      summary: "Expanded fixture-backed regression matrix for Edit 500+Booster.sav to cover parse size/key variables, final-column preservation, appended top Net alignment, swapped row/column axes, T2B/TB summary column insertion, row Net insertion, custom MRSET computation, derived variable crosstab, Grid TOP/SIDE computation, and Net/T2B settings workbook roundtrip."
+      fixed_or_prevented_bugs:
+        - "Preserved Grid user-created metadata in the variable catalog so Grid TOP/SIDE variables are not mistaken for ordinary grouped variables."
+        - "Protected against future regressions where summary columns or final columns disappear after Net/T2B/Grid operations."
+  - id: T033
+    type: worker
+    assignee: Worker
+    status: done
+    reasoning_hint: default
+    objective: "Add broad app-action regression coverage for the extracted UI workflow hooks and batch export orchestration."
+    allowed_files:
+      - "src/hooks/appActions.regression.test.ts"
+      - "docs/goals/crossify-system-refactor/state.yaml"
+    verify:
+      - "npm test"
+      - "npm run build"
+      - "npm run lint"
+      - "npm run check:static-bundle"
+      - "Invoke-WebRequest http://localhost:5173/"
+      - "Browser render smoke check http://localhost:5173/"
+    receipt:
+      result: done
+      changed_files:
+        - "src/hooks/appActions.regression.test.ts"
+        - "docs/goals/crossify-system-refactor/state.yaml"
+      commands:
+        - command: "npm test"
+          status: pass
+          detail: "26 files, 412 tests passed."
+        - command: "npm run build"
+          status: pass
+        - command: "npm run lint"
+          status: pass
+        - command: "npm run check:static-bundle"
+          status: pass
+        - command: "Invoke-WebRequest http://localhost:5173/"
+          status: pass
+          detail: "HTTP 200."
+        - command: "Browser render smoke check http://localhost:5173/"
+          status: pass
+          detail: "Rendered Crossify landing page and browser logs returned no error/warn entries."
+      summary: "Added regression coverage for table actions, Top/Side designer actions, filter editing, variable-list quick actions, folder actions, variable editor Net/T2B/apply-to-many flow, and batch settings export success/skip handling."
+      coverage_notes:
+        - "This expands automated coverage across the main app state mutation surfaces that back user UI actions."
+        - "It complements the fixture-backed SPSS regression matrix from T032 rather than replacing visual/manual QA for browser-only file picker behavior."
+  - id: T034
+    type: worker
+    assignee: Worker
+    status: done
+    reasoning_hint: default
+    objective: "Fix garbled user-visible Thai/arrow text in menus, prompts, and the static local bundle."
+    allowed_files:
+      - "src/App.tsx"
+      - "index.html"
+      - "public/assets/index-DsrIxxwV.js"
+      - "docs/goals/crossify-system-refactor/state.yaml"
+    verify:
+      - "npm test"
+      - "npm run build"
+      - "npm run lint"
+      - "npm run check:static-bundle"
+      - "Invoke-WebRequest http://localhost:5173/"
+      - "Browser DOM scan for garbled menu text"
+    receipt:
+      result: done
+      changed_files:
+        - "src/App.tsx"
+        - "index.html"
+        - "public/assets/index-DsrIxxwV.js"
+        - "docs/goals/crossify-system-refactor/state.yaml"
+      commands:
+        - command: "npm test"
+          status: pass
+          detail: "26 files, 412 tests passed."
+        - command: "npm run build"
+          status: pass
+        - command: "npm run lint"
+          status: pass
+        - command: "npm run check:static-bundle"
+          status: pass
+        - command: "Invoke-WebRequest http://localhost:5173/"
+          status: pass
+          detail: "HTTP 200."
+        - command: "Browser DOM scan for garbled menu text"
+          status: pass
+          detail: "Rendered Crossify page had no detected garbled markers and no browser warn/error logs."
+      summary: "Corrected garbled visible labels for variable editor sort arrows, derived-variable/new-variable prompts, duplicate MA-group alert text, paste/delete fallback alerts, and the static bundle empty-state message."
+  - id: T035
+    type: pm
+    assignee: PM
+    status: done
+    reasoning_hint: default
+    objective: "Run a maintenance/bug health check and keep local Crossify available on port 5173."
+    inputs:
+      - "Current source and static bundle"
+      - "Automated test suite"
+      - "Local Vite server"
+    constraints:
+      - "Do not revert unrelated dirty worktree changes."
+      - "Only patch concrete user-visible issues found during the health check."
+    receipt:
+      result: done
+      changed_files:
+        - "public/assets/index-DsrIxxwV.js"
+        - "docs/goals/crossify-system-refactor/state.yaml"
+      commands:
+        - command: "rg scan for garbled/user-visible risk markers"
+          status: pass
+          detail: "Found and fixed two additional static bundle user-visible strings."
+        - command: "npm test"
+          status: pass
+          detail: "26 files, 412 tests passed."
+        - command: "npm run build"
+          status: pass
+        - command: "npm run lint"
+          status: pass
+        - command: "npm run check:static-bundle"
+          status: pass
+        - command: "Invoke-WebRequest http://localhost:5173/"
+          status: pass
+          detail: "HTTP 200."
+        - command: "Browser health check http://localhost:5173/"
+          status: pass
+          detail: "Rendered Crossify, workspace entry visible, no garbled markers in DOM, no warn/error logs."
+      summary: "Verified current app health, fixed remaining static bundle garbled text for no-data error/filter status, confirmed automated checks pass, and confirmed Crossify is available on localhost:5173."
+      remaining_risks:
+        - "src/App.tsx still has eslint-disable and @ts-nocheck and remains large, though many action paths have been extracted into hooks/libs."
+        - "index.html still contains sizeable compatibility overlay scripts and some garbled comments; user-visible text was prioritized."
+        - "Manual browser-only file-picker behavior cannot be exhaustively automated in the current test suite."
+  - id: T036
+    type: pm
+    assignee: PM
+    status: done
+    reasoning_hint: high
+    objective: "Fix repeated-table result corruption where duplicate row labels and stale section starts could leave old rows visible before Base rows."
+    inputs:
+      - "User screenshot showing duplicate rows before Unweighted Base/Base after running many tables."
+      - "src/components/PreviewTable.tsx"
+      - "src/lib/tableLayout.ts"
+      - "src/lib/netGroupInjector.ts"
+      - "public/assets/index-DsrIxxwV.js"
+      - "index.html"
+    constraints:
+      - "Preserve existing crosstab output semantics."
+      - "Patch the static bundle used by localhost:5173 as well as source."
+      - "Do not revert unrelated dirty worktree changes."
+    receipt:
+      result: done
+      changed_files:
+        - "src/components/PreviewTable.tsx"
+        - "src/components/PreviewTable.test.ts"
+        - "src/lib/tableLayout.ts"
+        - "src/lib/excelExport.ts"
+        - "src/lib/excelExport.test.ts"
+        - "src/lib/netGroupInjector.ts"
+        - "src/lib/netGroupInjector.test.ts"
+        - "index.html"
+        - "public/assets/index-DsrIxxwV.js"
+        - "docs/goals/crossify-system-refactor/state.yaml"
+      commands:
+        - command: "npm test -- src/components/PreviewTable.test.ts src/lib/netGroupInjector.test.ts src/lib/excelExport.test.ts"
+          status: pass
+          detail: "3 files, 57 tests passed."
+        - command: "npm test"
+          status: pass
+          detail: "27 files, 417 tests passed."
+        - command: "npm run build"
+          status: pass
+        - command: "npm run lint"
+          status: pass
+        - command: "npm run check:static-bundle"
+          status: pass
+        - command: "Invoke-WebRequest http://localhost:5173/"
+          status: pass
+          detail: "HTTP 200; PID 7120 listening on port 5173."
+        - command: "Browser smoke check http://localhost:5173/"
+          status: pass
+          detail: "Rendered Crossify title and no page errors; one external resource network-denied console entry is from restricted network access."
+      summary: "PreviewTable now uses stable per-row keys instead of row labels, preventing React DOM reuse when labels repeat across many table runs. Row section metadata is normalized before render/export, and Net row insertion now shifts later section starts while keeping first-section Net rows under the correct Base."
+      fixed_bugs:
+        - "Duplicate row labels such as เจน could collide as React keys and leave stale rows visible after rerendering another table."
+        - "Stale or shifted rowSectionBases could render Base rows after unrelated/previous rows."
+        - "Injected Net rows before later sections could leave section start indexes pointing at the wrong row."
+  - id: T037
+    type: pm
+    assignee: PM
+    status: done
+    reasoning_hint: default
+    objective: "Create a shared result view model so table rendering and Excel export use the same normalized result shape."
+    inputs:
+      - "src/components/PreviewTable.tsx"
+      - "src/lib/excelExport.ts"
+      - "src/lib/tableLayout.ts"
+      - "src/lib/columnPaths.ts"
+    constraints:
+      - "Preserve current behavior."
+      - "Do not change crosstab calculation semantics."
+      - "Do not patch static bundle for source-only architecture refactor."
+    receipt:
+      result: done
+      changed_files:
+        - "src/lib/resultViewModel.ts"
+        - "src/lib/resultViewModel.test.ts"
+        - "src/components/PreviewTable.tsx"
+        - "src/lib/excelExport.ts"
+        - "docs/goals/crossify-system-refactor/state.yaml"
+      commands:
+        - command: "npm test -- src/lib/resultViewModel.test.ts src/components/PreviewTable.test.ts src/lib/excelExport.test.ts src/lib/excelExport.integration.test.ts"
+          status: pass
+          detail: "4 files, 50 tests passed."
+        - command: "npm test"
+          status: pass
+          detail: "28 files, 423 tests passed."
+        - command: "npm run build"
+          status: pass
+        - command: "npm run lint"
+          status: pass
+        - command: "npm run check:static-bundle"
+          status: pass
+        - command: "Invoke-WebRequest http://localhost:5173/"
+          status: pass
+          detail: "HTTP 200; PID 32188 listening on port 5173."
+      summary: "Added resultViewModel as the shared normalization layer for displayResult, row/column paths, row section metadata, header groups, stable row keys, metric array clamping, and non-throwing result shape validation. PreviewTable and Excel export now consume the same normalized view model."
+      maintainability_notes:
+        - "Future changes to header paths, row sections, hide-zero filtering, stable row keys, or base metric clamping can be made once instead of separately in render and export paths."
+        - "Added validator coverage for row/column shape mismatches that previously caused render/export divergence."
+  - id: T038
+    type: pm
+    assignee: PM
+    status: done
+    reasoning_hint: default
+    objective: "Attach non-throwing result invariant checks to the central result pipeline."
+    inputs:
+      - "src/lib/resultPipeline.ts"
+      - "src/lib/resultViewModel.ts"
+      - "Edit 500+Booster.sav regression coverage"
+    constraints:
+      - "Do not throw or block user workflows for shape warnings."
+      - "Do not change crosstab calculation semantics."
+      - "Keep checks testable so future shape regressions are visible."
+    receipt:
+      result: done
+      changed_files:
+        - "src/lib/resultPipeline.ts"
+        - "src/lib/resultViewModel.ts"
+        - "src/lib/resultViewModel.test.ts"
+        - "docs/goals/crossify-system-refactor/state.yaml"
+      commands:
+        - command: "npm test -- src/lib/resultViewModel.test.ts src/lib/edit500booster.regression.test.ts"
+          status: pass
+          detail: "2 files, 17 tests passed."
+        - command: "npm test"
+          status: pass
+          detail: "28 files, 424 tests passed."
+        - command: "npm run build"
+          status: pass
+        - command: "npm run lint"
+          status: pass
+        - command: "npm run check:static-bundle"
+          status: pass
+        - command: "Invoke-WebRequest http://localhost:5173/"
+          status: pass
+          detail: "HTTP 200; PID 32188 listening on port 5173."
+      summary: "Central result computation now calls a non-throwing invariant warning helper for both ordinary and grouped tables. The helper returns issues for tests and warns in development/runtime without changing user-visible behavior."
+      maintainability_notes:
+        - "Future table result shape bugs can be detected at the pipeline boundary before they become render/export-only symptoms."
+        - "Fixture-backed Edit 500+Booster regression still passes through the guarded pipeline."
+  - id: T039
+    type: pm
+    assignee: PM
+    status: done
+    reasoning_hint: default
+    objective: "Introduce a single Crossify runtime bridge for overlay notifications and export completion messages."
+    inputs:
+      - "index.html"
+      - "src/lib/runtimeBridge.ts"
+      - "tools/check-static-bundle-markers.mjs"
+    constraints:
+      - "Preserve legacy __cxSweetAlert/__cxSweetToast aliases."
+      - "Do not change user workflow behavior."
+      - "Keep localhost static bundle path intact."
+    receipt:
+      result: done
+      changed_files:
+        - "index.html"
+        - "src/lib/runtimeBridge.ts"
+        - "src/lib/runtimeBridge.test.ts"
+        - "tools/check-static-bundle-markers.mjs"
+        - "docs/goals/crossify-system-refactor/state.yaml"
+      commands:
+        - command: "npm test -- src/lib/runtimeBridge.test.ts"
+          status: pass
+          detail: "1 file, 3 tests passed."
+        - command: "npm test"
+          status: pass
+          detail: "29 files, 427 tests passed."
+        - command: "npm run build"
+          status: pass
+        - command: "npm run lint"
+          status: pass
+        - command: "npm run check:static-bundle"
+          status: pass
+        - command: "Invoke-WebRequest http://localhost:5173/"
+          status: pass
+          detail: "HTTP 200; PID 32188 listening on port 5173."
+        - command: "Browser smoke check for window.__crossifyRuntime alert/toast"
+          status: pass
+          detail: "Runtime facade exists; alert dialog and toast rendered. One external resource load was denied by restricted network access."
+      summary: "Added a typed source-side runtimeBridge module and installed window.__crossifyRuntime in index.html. Alert, toast, and export-complete notifications now flow through one facade while legacy aliases remain available for existing overlay code."
+      maintainability_notes:
+        - "Future overlay-to-source migration can target window.__crossifyRuntime instead of scattered global helpers."
+        - "Static bundle marker check now verifies the runtime bridge markers in index.html."
+  - id: T040
+    type: pm
+    assignee: PM
+    status: done
+    reasoning_hint: default
+    objective: "Move remaining static overlay alerts/confirmations behind the Crossify runtime bridge and add a regression guard."
+    inputs:
+      - "index.html"
+      - "public/assets/index-DsrIxxwV.js"
+      - "tools/check-overlay-runtime-boundary.mjs"
+    constraints:
+      - "Preserve existing validation behavior and messages."
+      - "Do not change table calculation, export, or settings semantics."
+      - "Keep localhost 5173 static runtime working."
+    receipt:
+      result: done
+      changed_files:
+        - "index.html"
+        - "public/assets/index-DsrIxxwV.js"
+        - "tools/check-overlay-runtime-boundary.mjs"
+        - "package.json"
+        - "docs/goals/crossify-system-refactor/state.yaml"
+      commands:
+        - command: "npm run build"
+          status: pass
+        - command: "npm run lint"
+          status: pass
+        - command: "npm run check:static-bundle"
+          status: pass
+        - command: "npm run check:overlay-runtime"
+          status: pass
+          detail: "Overlay runtime boundary check passed for index.html and the static bundle."
+        - command: "npm test"
+          status: pass
+          detail: "29 files, 428 tests passed."
+        - command: "Invoke-WebRequest http://localhost:5173/"
+          status: pass
+          detail: "HTTP 200; PID 32188 listening on port 5173."
+        - command: "Browser smoke check for window.__crossifyRuntime.confirm"
+          status: pass
+          detail: "Runtime facade exposes alert/confirm/toast/export-complete; confirm cancel path returned false. One external resource load was denied by restricted network access."
+      summary: "Migrated static validation alerts to cxRuntimeAlert, moved remaining confirm flows through window.__crossifyRuntime.confirm, and added a check script that fails if native alert/confirm patterns are reintroduced outside the runtime boundary."
+      maintainability_notes:
+        - "New modal/toast behavior now has a central compatibility boundary instead of scattered native browser dialogs."
+        - "Future UI notification changes can be made in the runtime bridge without auditing every menu implementation."
+  - id: T041
+    type: pm
+    assignee: PM
+    status: done
+    reasoning_hint: default
+    objective: "Extract SPSS file loading into a tested source module and fix the parser call signature hidden by ts-nocheck."
+    inputs:
+      - "src/App.tsx"
+      - "src/lib/savParser.ts"
+      - "SPSS load progress and value-label application workflow"
+    constraints:
+      - "Preserve existing file-load UI states."
+      - "Do not change parsed data semantics."
+      - "Keep settings restore-after-load behavior in App."
+    receipt:
+      result: done
+      changed_files:
+        - "src/lib/savLoadWorkflow.ts"
+        - "src/lib/savLoadWorkflow.test.ts"
+        - "src/App.tsx"
+        - "docs/goals/crossify-system-refactor/state.yaml"
+      commands:
+        - command: "npm test -- src/lib/savLoadWorkflow.test.ts src/hooks/appActions.regression.test.ts"
+          status: pass
+          detail: "2 files, 11 tests passed."
+        - command: "npm test"
+          status: pass
+          detail: "30 files, 432 tests passed."
+        - command: "npm run build"
+          status: pass
+        - command: "npm run lint"
+          status: pass
+        - command: "npm run check:static-bundle"
+          status: pass
+        - command: "npm run check:overlay-runtime"
+          status: pass
+        - command: "Invoke-WebRequest http://localhost:5173/"
+          status: pass
+          detail: "HTTP 200; PID 32188 listening on port 5173."
+      summary: "Moved SPSS file parsing, value-label application, light-load threshold decision, and parser progress forwarding into savLoadWorkflow. The source app now calls parseSav with the callback signature it actually accepts instead of passing an options object hidden by ts-nocheck."
+      maintainability_notes:
+        - "Future load-speed work can target one tested module rather than editing App.tsx directly."
+        - "The load workflow now has direct tests for parser progress forwarding and value-label application."
+  - id: T042
+    type: pm
+    assignee: PM
+    status: done
+    reasoning_hint: default
+    objective: "Centralize browser-yield scheduling used by long-running source workflows."
+    inputs:
+      - "src/App.tsx"
+      - "src/hooks/useBatchExportActions.ts"
+      - "src/lib/crosstabEngine.ts"
+      - "src/lib/variableGrouping.ts"
+    constraints:
+      - "Preserve existing async yield behavior."
+      - "Leave savParser's setTimeout-based parser yield untouched."
+      - "Do not change table calculation semantics."
+    receipt:
+      result: done
+      changed_files:
+        - "src/lib/browserScheduler.ts"
+        - "src/lib/browserScheduler.test.ts"
+        - "src/App.tsx"
+        - "src/hooks/useBatchExportActions.ts"
+        - "src/lib/crosstabEngine.ts"
+        - "src/lib/variableGrouping.ts"
+        - "docs/goals/crossify-system-refactor/state.yaml"
+      commands:
+        - command: "npm test -- src/lib/browserScheduler.test.ts src/lib/crosstabEngine.test.ts src/lib/variableGrouping.test.ts src/hooks/appActions.regression.test.ts"
+          status: pass
+          detail: "4 files, 31 tests passed."
+        - command: "npm test"
+          status: pass
+          detail: "31 files, 433 tests passed."
+        - command: "npm run build"
+          status: pass
+        - command: "npm run lint"
+          status: pass
+        - command: "npm run check:static-bundle"
+          status: pass
+        - command: "npm run check:overlay-runtime"
+          status: pass
+        - command: "Invoke-WebRequest http://localhost:5173/"
+          status: pass
+          detail: "HTTP 200; PID 32188 listening on port 5173."
+      summary: "Added browserScheduler.yieldToBrowser and reused it in App batch table runs, batch settings export, crosstab calculation, and variable grouping. The SPSS parser keeps its existing setTimeout yield behavior because it intentionally avoids requestAnimationFrame delays during parsing."
+      maintainability_notes:
+        - "Future performance tuning for long-running source workflows now has one shared scheduling boundary."
+        - "Duplicate yield implementations were removed from source modules where behavior matched."
+  - id: T043
+    type: pm
+    assignee: PM
+    status: done
+    reasoning_hint: default
+    objective: "Extract table run actions out of App so multi-table computation is isolated and regression-tested."
+    inputs:
+      - "src/App.tsx"
+      - "src/hooks/useTableRunActions.ts"
+      - "Edit 500+Booster regression coverage"
+    constraints:
+      - "Preserve existing run-one and run-all behavior."
+      - "Do not change crosstab calculation semantics."
+      - "Keep blank tables skipped during run-all."
+    receipt:
+      result: done
+      changed_files:
+        - "src/hooks/useTableRunActions.ts"
+        - "src/hooks/appActions.regression.test.ts"
+        - "src/App.tsx"
+        - "docs/goals/crossify-system-refactor/state.yaml"
+      commands:
+        - command: "npm test -- src/hooks/appActions.regression.test.ts src/lib/edit500booster.regression.test.ts"
+          status: pass
+          detail: "2 files, 18 tests passed."
+        - command: "npm test"
+          status: pass
+          detail: "31 files, 434 tests passed."
+        - command: "npm run build"
+          status: pass
+        - command: "npm run lint"
+          status: pass
+        - command: "npm run check:static-bundle"
+          status: pass
+        - command: "npm run check:overlay-runtime"
+          status: pass
+        - command: "Invoke-WebRequest http://localhost:5173/"
+          status: pass
+          detail: "HTTP 200; localhost 5173 is serving."
+      summary: "Moved runTable and runAllTables into useTableRunActions. The hook owns filtering, computeTableResult calls, result assignment, blank-table skipping, and runningAll cleanup."
+      maintainability_notes:
+        - "Future fixes for repeated-table execution can be made in one hook instead of editing App.tsx."
+        - "Regression coverage now exercises run-one, run-all, blank table skip, and runningAll cleanup."
+  - id: T044
+    type: pm
+    assignee: PM
+    status: done
+    reasoning_hint: default
+    objective: "Extract app default workspace state into typed factories."
+    inputs:
+      - "src/App.tsx"
+      - "src/lib/appDefaults.ts"
+      - "initial output settings and blank table state"
+    constraints:
+      - "Preserve default UI state and first-table behavior."
+      - "Do not change settings load/restore behavior."
+      - "Keep defaults testable outside App.tsx."
+    receipt:
+      result: done
+      changed_files:
+        - "src/lib/appDefaults.ts"
+        - "src/lib/appDefaults.test.ts"
+        - "src/App.tsx"
+        - "docs/goals/crossify-system-refactor/state.yaml"
+      commands:
+        - command: "npm test -- src/lib/appDefaults.test.ts src/hooks/appActions.regression.test.ts"
+          status: pass
+          detail: "2 files, 11 tests passed."
+        - command: "npm test"
+          status: pass
+          detail: "32 files, 437 tests passed."
+        - command: "npm run build"
+          status: pass
+        - command: "npm run lint"
+          status: pass
+        - command: "npm run check:static-bundle"
+          status: pass
+        - command: "npm run check:overlay-runtime"
+          status: pass
+        - command: "Invoke-WebRequest http://localhost:5173/"
+          status: pass
+          detail: "HTTP 200; localhost 5173 is serving."
+      summary: "Added appDefaults factories for default output settings, initial table list, and default active tab. App now uses lazy state initializers for the default settings and first table."
+      maintainability_notes:
+        - "New-workspace defaults can be changed and tested without editing App.tsx."
+        - "The first table now comes from a fresh factory call, reducing shared-state risk in future tests and reset flows."
+  - id: T045
+    type: pm
+    assignee: PM
+    status: done
+    reasoning_hint: default
+    objective: "Extract App derived state into pure, tested selectors and add a static runtime contract guard."
+    inputs:
+      - "src/App.tsx"
+      - "src/lib/appDerivedState.ts"
+      - "index.html"
+      - "public/assets/index-DsrIxxwV.js"
+      - "runtime bridge and static overlay boundaries"
+    constraints:
+      - "Preserve existing UI behavior."
+      - "Do not change table result semantics."
+      - "Keep static runtime safety checks lightweight and deterministic."
+    receipt:
+      result: done
+      changed_files:
+        - "src/lib/appDerivedState.ts"
+        - "src/lib/appDerivedState.test.ts"
+        - "src/App.tsx"
+        - "tools/check-static-runtime-contract.mjs"
+        - "package.json"
+        - "docs/goals/crossify-system-refactor/state.yaml"
+      commands:
+        - command: "npm test -- src/lib/appDerivedState.test.ts src/hooks/appActions.regression.test.ts"
+          status: pass
+          detail: "2 files, 12 tests passed."
+        - command: "npm test"
+          status: pass
+          detail: "33 files, 441 tests passed."
+        - command: "npm run build"
+          status: pass
+        - command: "npm run lint"
+          status: pass
+        - command: "npm run check:static-bundle"
+          status: pass
+        - command: "npm run check:overlay-runtime"
+          status: pass
+        - command: "npm run check:runtime-contract"
+          status: pass
+          detail: "Static runtime contract check passed for 5 contract groups."
+        - command: "Invoke-WebRequest http://localhost:5173/"
+          status: pass
+          detail: "HTTP 200; PID 32188 listening on port 5173."
+      summary: "Moved App-derived table, filter, variable editor, run eligibility, hide-total, and active output config calculations into appDerivedState. Added a static runtime contract checker for source/static bridge markers covering SweetAlert runtime, Net injection, filtered cases, and refresh-to-home patching."
+      maintainability_notes:
+        - "Derived UI behavior can now be tested without rendering App.tsx."
+        - "Static runtime drift is now caught by a dedicated contract check instead of relying only on manual browser inspection."
+  - id: T046
+    type: pm
+    assignee: PM
+    status: done
+    reasoning_hint: default
+    objective: "Expand real SPSS fixture regression and add a reusable local runtime smoke test."
+    inputs:
+      - "Edit 500+Booster.sav"
+      - "src/lib/edit500booster.regression.test.ts"
+      - "tools/smoke-local-runtime.mjs"
+      - "localhost:5173"
+    constraints:
+      - "Do not change production file-picker behavior."
+      - "Use the real SPSS fixture for source-level regression."
+      - "Keep browser smoke focused on runtime bridges until full UI file loading is safely automated."
+    receipt:
+      result: done
+      changed_files:
+        - "src/lib/edit500booster.regression.test.ts"
+        - "tools/smoke-local-runtime.mjs"
+        - "package.json"
+        - "docs/goals/crossify-system-refactor/state.yaml"
+      commands:
+        - command: "npm test -- src/lib/edit500booster.regression.test.ts"
+          status: pass
+          detail: "1 file, 11 tests passed against Edit 500+Booster.sav."
+        - command: "npm test"
+          status: pass
+          detail: "33 files, 442 tests passed."
+        - command: "npm run build"
+          status: pass
+        - command: "npm run lint"
+          status: pass
+        - command: "npm run check:static-bundle"
+          status: pass
+        - command: "npm run check:overlay-runtime"
+          status: pass
+        - command: "npm run check:runtime-contract"
+          status: pass
+        - command: "npm run smoke:local-runtime"
+          status: pass
+          detail: "Runtime alert/confirm/toast facade, static Net bridge, runtime alert helper, and confirm cancel path passed. External network denied message ignored."
+        - command: "Invoke-WebRequest http://localhost:5173/"
+          status: pass
+          detail: "HTTP 200; PID 32188 listening on port 5173."
+      summary: "Added a real-fixture Excel workbook export regression that builds a multi-table workbook from Edit 500+Booster.sav results. Added a reusable Playwright smoke script for localhost runtime bridge checks, with fallback to Codex's bundled Playwright when the repo does not install it."
+      maintainability_notes:
+        - "Real SPSS coverage now includes parse, table dimensions, swap top/side, Net, T2B/TB, MRSET, derived variable, Grid TOP/SIDE, settings roundtrip, and multi-table Excel workbook generation."
+        - "Local runtime bridge smoke can be rerun with npm run smoke:local-runtime before risky static overlay changes."
+  - id: T047
+    type: pm
+    assignee: PM
+    status: done
+    reasoning_hint: default
+    objective: "Add browser smoke coverage that loads the real SPSS fixture through the local UI runtime."
+    inputs:
+      - "tools/smoke-real-spss-load.mjs"
+      - "Edit 500+Booster.sav"
+      - "localhost:5173"
+    constraints:
+      - "Do not change production file-picker behavior."
+      - "Wait for the local runtime to settle before interacting with React controls."
+      - "Use English/stable controls or button index to avoid Thai encoding issues in automation."
+    receipt:
+      result: done
+      changed_files:
+        - "tools/smoke-real-spss-load.mjs"
+        - "package.json"
+        - "docs/goals/crossify-system-refactor/state.yaml"
+      commands:
+        - command: "npm run smoke:real-spss"
+          status: pass
+          detail: "Loaded Edit 500+Booster.sav through localhost UI runtime; dataset bridge populated; area_group and q021 visible; 1,415 cases / 4,808 variables shown."
+        - command: "npm run smoke:local-runtime"
+          status: pass
+          detail: "Runtime facade, SweetAlert confirm cancel path, static Net bridge, and alert helper passed."
+        - command: "npm test"
+          status: pass
+          detail: "33 files, 442 tests passed."
+        - command: "npm run build"
+          status: pass
+        - command: "npm run lint"
+          status: pass
+        - command: "npm run check:static-bundle"
+          status: pass
+        - command: "npm run check:overlay-runtime"
+          status: pass
+        - command: "npm run check:runtime-contract"
+          status: pass
+        - command: "Invoke-WebRequest http://localhost:5173/"
+          status: pass
+          detail: "HTTP 200; PID 32188 listening on port 5173."
+      summary: "Stabilized a reusable Playwright smoke for loading the real SPSS fixture through the local UI runtime. The script waits for runtime hydration, enters the workspace, opens the Load SPSS file chooser through React's handler, attaches Edit 500+Booster.sav, and asserts the loaded dataset is visible in the UI."
+      maintainability_notes:
+        - "The project now has both source-level real SPSS regression and browser-level real SPSS load smoke."
+        - "Future file loading regressions can be caught with npm run smoke:real-spss."
+  - id: T048
+    type: pm
+    assignee: PM
+    status: done
+    reasoning_hint: default
+    objective: "Reduce risk for future large refactors by moving runtime globals behind a hook boundary and adding a risk-budget guard."
+    inputs:
+      - "src/App.tsx"
+      - "src/hooks/useAppRuntimeBridges.ts"
+      - "src/hooks/useAppRuntimeBridges.test.ts"
+      - "tools/check-risk-budget.mjs"
+      - "tools/check-static-runtime-contract.mjs"
+      - "docs/refactor-risk-boundaries.md"
+    constraints:
+      - "Preserve existing static runtime behavior."
+      - "Do not rewrite App.tsx broadly."
+      - "Keep new guardrails focused on current known debt instead of blocking unrelated work."
+    receipt:
+      result: done
+      changed_files:
+        - "src/App.tsx"
+        - "src/hooks/useAppRuntimeBridges.ts"
+        - "src/hooks/useAppRuntimeBridges.test.ts"
+        - "tools/check-risk-budget.mjs"
+        - "tools/check-static-runtime-contract.mjs"
+        - "docs/refactor-risk-boundaries.md"
+        - "package.json"
+        - "docs/goals/crossify-system-refactor/state.yaml"
+      commands:
+        - command: "npm run check:risk-budget"
+          status: pass
+        - command: "npx vitest run src/hooks/useAppRuntimeBridges.test.ts"
+          status: pass
+          detail: "1 file, 3 tests passed."
+        - command: "npm run build"
+          status: pass
+        - command: "npm run lint"
+          status: pass
+        - command: "npm run check:static-bundle"
+          status: pass
+        - command: "npm run check:overlay-runtime"
+          status: pass
+        - command: "npm run check:runtime-contract"
+          status: pass
+        - command: "npm test"
+          status: pass
+          detail: "34 files, 445 tests passed."
+        - command: "npm run smoke:local-runtime"
+          status: pass
+        - command: "npm run smoke:real-spss"
+          status: pass
+          detail: "Loaded Edit 500+Booster.sav through localhost UI runtime; dataset bridge populated; area_group and q021 visible."
+        - command: "Invoke-WebRequest http://localhost:5173/"
+          status: pass
+          detail: "HTTP 200."
+      summary: "Moved grid hide-total and filtered-cases window bridge wiring out of App.tsx into useAppRuntimeBridges with focused jsdom tests. Added check:risk-budget to prevent App/static runtime files and broad ts-nocheck/eslint-disable/global __cx writes from growing silently."
+      maintainability_notes:
+        - "Future static runtime bridge changes now have a single React hook boundary plus contract checks."
+        - "Large legacy files are now guarded by a budget check and documented risk boundaries."
+  - id: T049
+    type: pm
+    assignee: PM
+    status: done
+    reasoning_hint: default
+    objective: "Create a single full verification command and strengthen browser SPSS smoke to run a real table."
+    inputs:
+      - "package.json"
+      - "tools/verify-full.mjs"
+      - "tools/smoke-real-spss-load.mjs"
+      - "src/runtime-compat"
+      - "Edit 500+Booster.sav"
+    constraints:
+      - "Do not change runtime table computation behavior."
+      - "Keep compatibility code isolated in a dedicated source boundary."
+      - "Make the verification command work on Windows."
+    receipt:
+      result: done
+      changed_files:
+        - "src/App.tsx"
+        - "src/runtime-compat/appRuntimeBridges.ts"
+        - "src/runtime-compat/appRuntimeBridges.test.ts"
+        - "src/runtime-compat/runtimeBridge.ts"
+        - "src/runtime-compat/runtimeBridge.test.ts"
+        - "tools/check-risk-budget.mjs"
+        - "tools/check-static-runtime-contract.mjs"
+        - "tools/smoke-real-spss-load.mjs"
+        - "tools/verify-full.mjs"
+        - "docs/refactor-risk-boundaries.md"
+        - "package.json"
+        - "docs/goals/crossify-system-refactor/state.yaml"
+      commands:
+        - command: "npx vitest run src/runtime-compat/appRuntimeBridges.test.ts src/runtime-compat/runtimeBridge.test.ts"
+          status: pass
+          detail: "2 files, 7 tests passed."
+        - command: "npm run smoke:real-spss"
+          status: pass
+          detail: "Loaded Edit 500+Booster.sav, quick-added area_group to TOP and q021 to SIDE, ran Table1, and verified generated real-fixture counts."
+        - command: "npm run verify:full"
+          status: pass
+          detail: "build, lint, risk budget, static bundle markers, overlay runtime boundary, runtime contract, 34 test files / 445 tests, local runtime smoke, and real SPSS table smoke passed."
+      summary: "Moved runtime compatibility source files into src/runtime-compat, updated contract/risk checks to enforce that boundary, added a Windows-safe verify:full runner, and expanded the real SPSS smoke from load-only to load-and-run-table."
+      maintainability_notes:
+        - "Future changes can use one command, npm run verify:full, to exercise the core source and local browser runtime."
+        - "The real SPSS smoke now catches regressions where loading succeeds but table generation or static augmentation breaks."
+  - id: T050
+    type: pm
+    assignee: PM
+    status: done
+    reasoning_hint: default
+    objective: "Safely extract non-calculation UI side effects from App.tsx with focused tests."
+    inputs:
+      - "src/App.tsx"
+      - "src/hooks/useWorkspaceUiEffects.ts"
+      - "src/hooks/useWorkspaceUiEffects.test.ts"
+    constraints:
+      - "Do not touch crosstab calculation, result shaping, export, or static runtime behavior."
+      - "Keep the refactor limited to toast timeout, sidebar resizing, and context-menu dismiss effects."
+      - "Verify with the full local regression suite and real SPSS browser smoke."
+    receipt:
+      result: done
+      changed_files:
+        - "src/App.tsx"
+        - "src/hooks/useWorkspaceUiEffects.ts"
+        - "src/hooks/useWorkspaceUiEffects.test.ts"
+        - "docs/goals/crossify-system-refactor/state.yaml"
+      commands:
+        - command: "npx vitest run src/hooks/useWorkspaceUiEffects.test.ts"
+          status: pass
+          detail: "1 file, 3 tests passed."
+        - command: "npm run check:risk-budget"
+          status: pass
+        - command: "npm run build"
+          status: pass
+        - command: "npm run verify:full"
+          status: pass
+          detail: "build, lint, risk budget, static/runtime checks, 35 test files / 448 tests, local runtime smoke, and real SPSS table smoke passed."
+      summary: "Extracted toast auto-clear, sidebar mouse resizing, and table/variable context-menu dismiss side effects from App.tsx into useWorkspaceUiEffects. Added jsdom tests for all extracted behaviors."
+      maintainability_notes:
+        - "App.tsx now has fewer raw window event effects."
+        - "Small UI behavior can be changed in a focused hook without touching table calculation or export code."
+  - id: T051
+    type: pm
+    assignee: PM
+    status: done
+    reasoning_hint: default
+    objective: "Continue the four zero-risk tracks with history extraction and stronger real SPSS E2E coverage."
+    inputs:
+      - "src/App.tsx"
+      - "src/hooks/useWorkspaceHistory.ts"
+      - "src/hooks/useWorkspaceHistory.test.ts"
+      - "tools/smoke-real-spss-load.mjs"
+      - "Edit 500+Booster.sav"
+    constraints:
+      - "Do not touch crosstab engine, export workbook generation, or static runtime calculation patches."
+      - "Keep the source refactor limited to undo/redo history orchestration."
+      - "Strengthen E2E coverage with real SPSS flows that previously carried user-visible risk."
+    receipt:
+      result: done
+      changed_files:
+        - "src/App.tsx"
+        - "src/hooks/useWorkspaceHistory.ts"
+        - "src/hooks/useWorkspaceHistory.test.ts"
+        - "tools/smoke-real-spss-load.mjs"
+        - "docs/goals/crossify-system-refactor/state.yaml"
+      commands:
+        - command: "npx vitest run src/hooks/useWorkspaceHistory.test.ts"
+          status: pass
+          detail: "1 file, 2 tests passed."
+        - command: "npm run lint"
+          status: pass
+        - command: "npm run smoke:real-spss"
+          status: pass
+          detail: "Loaded Edit 500+Booster.sav, generated a table, switched Top/Side, reran the table, and verified row/column metadata."
+        - command: "npm run verify:full"
+          status: pass
+          detail: "build, lint, risk budget, static/runtime checks, 36 test files / 450 tests, local runtime smoke, and real SPSS generated-table + switch smoke passed."
+      summary: "Extracted undo/redo history stack and keyboard shortcuts from App.tsx into useWorkspaceHistory with focused jsdom coverage. Expanded the real SPSS browser smoke to verify Switch Top/Side followed by rerunning the table."
+      maintainability_notes:
+        - "App.tsx has less state orchestration and fewer keyboard/window effects."
+        - "Top/Side swapping is now covered in the same browser smoke that loads the real SPSS fixture and generates a table."
+  - id: T052
+    type: pm
+    assignee: PM
+    status: done
+    reasoning_hint: default
+    objective: "Reduce App.tsx type debt by extracting variable display and filter metadata helpers."
+    inputs:
+      - "src/App.tsx"
+      - "src/hooks/useVariableDisplayHelpers.ts"
+      - "src/hooks/useVariableDisplayHelpers.test.ts"
+    constraints:
+      - "Do not alter variable catalog construction or table calculation."
+      - "Keep behavior identical for variable labels, badges, numeric detection, and filter field metadata."
+      - "Verify full browser/runtime regression after source extraction."
+    receipt:
+      result: done
+      changed_files:
+        - "src/App.tsx"
+        - "src/hooks/useVariableDisplayHelpers.ts"
+        - "src/hooks/useVariableDisplayHelpers.test.ts"
+        - "docs/goals/crossify-system-refactor/state.yaml"
+      commands:
+        - command: "npx vitest run src/hooks/useVariableDisplayHelpers.test.ts"
+          status: pass
+          detail: "1 file, 2 tests passed."
+        - command: "npm run build"
+          status: pass
+        - command: "npm run lint"
+          status: pass
+        - command: "npm run check:risk-budget"
+          status: pass
+        - command: "npm run verify:full"
+          status: pass
+          detail: "build, lint, risk budget, static/runtime checks, 37 test files / 452 tests, local runtime smoke, and real SPSS generated-table + switch smoke passed."
+      summary: "Moved App.tsx variable display helpers into useVariableDisplayHelpers with focused tests for labels, tones, numeric detection, and filter metadata. App.tsx is now 2,199 lines."
+      maintainability_notes:
+        - "Display/filter helper behavior is typed and testable outside App.tsx."
+        - "This is another step toward removing @ts-nocheck without touching crosstab computation."
+  - id: T053
+    type: pm
+    assignee: PM
+    status: done
+    reasoning_hint: default
+    objective: "Continue reducing App.tsx @ts-nocheck debt with active-table sync extraction while preserving verified E2E gates."
+    inputs:
+      - "src/App.tsx"
+      - "src/hooks/useActiveTableSync.ts"
+      - "src/hooks/useActiveTableSync.test.ts"
+      - "tools/smoke-real-spss-load.mjs"
+    constraints:
+      - "Do not alter table computation, export implementation, or static runtime calculation code."
+      - "Keep active-table behavior identical: auto-select first table only when no active table is set."
+      - "Do not add flaky E2E gates."
+    receipt:
+      result: done
+      changed_files:
+        - "src/App.tsx"
+        - "src/hooks/useActiveTableSync.ts"
+        - "src/hooks/useActiveTableSync.test.ts"
+        - "tools/smoke-real-spss-load.mjs"
+        - "docs/goals/crossify-system-refactor/state.yaml"
+      commands:
+        - command: "npx vitest run src/hooks/useActiveTableSync.test.ts src/hooks/useVariableDisplayHelpers.test.ts"
+          status: pass
+          detail: "2 files, 4 tests passed."
+        - command: "npm run build"
+          status: pass
+        - command: "npm run lint"
+          status: pass
+        - command: "npm run check:risk-budget"
+          status: pass
+        - command: "npm run smoke:real-spss"
+          status: pass
+          detail: "Loaded Edit 500+Booster.sav, generated a table, switched Top/Side, reran the table, and verified metadata."
+        - command: "npm run verify:full"
+          status: pass
+          detail: "build, lint, risk budget, static/runtime checks, 38 test files / 454 tests, local runtime smoke, and real SPSS generated-table + switch smoke passed."
+      summary: "Extracted active table auto-selection from App.tsx into useActiveTableSync with focused tests. Tried adding an Export Excel download smoke, but headless download events were not reliable enough to use as a gate, so the flaky download assertion was not kept."
+      maintainability_notes:
+        - "Active table behavior is now typed and isolated."
+        - "The full verification gate remains stable and avoids flaky browser-download assumptions."
+  - id: T054
+    type: pm
+    assignee: PM
+    status: done
+    reasoning_hint: default
+    objective: "Continue App.tsx reduction and add stable real-SPSS filter workflow coverage."
+    inputs:
+      - "src/App.tsx"
+      - "src/hooks/useSavFileOpen.ts"
+      - "src/hooks/useSavFileOpen.test.ts"
+      - "src/lib/appDerivedState.ts"
+      - "src/lib/appDerivedState.test.ts"
+      - "tools/smoke-real-spss-load.mjs"
+      - "Edit 500+Booster.sav"
+    constraints:
+      - "Do not alter crosstab math, export workbook generation, or static runtime calculation code."
+      - "Keep SAV file-open behavior identical while moving the file picker/dropzone shell out of App.tsx."
+      - "Only add E2E assertions that are stable in headless Playwright with the real SPSS fixture."
+    receipt:
+      result: done
+      changed_files:
+        - "src/App.tsx"
+        - "src/hooks/useSavFileOpen.ts"
+        - "src/hooks/useSavFileOpen.test.ts"
+        - "src/lib/appDerivedState.ts"
+        - "src/lib/appDerivedState.test.ts"
+        - "tools/smoke-real-spss-load.mjs"
+        - "docs/goals/crossify-system-refactor/state.yaml"
+      commands:
+        - command: "npx vitest run src/hooks/useSavFileOpen.test.ts src/hooks/useActiveTableSync.test.ts"
+          status: pass
+          detail: "2 files, 5 tests passed."
+        - command: "npx vitest run src/lib/appDerivedState.test.ts"
+          status: pass
+          detail: "1 file, 5 tests passed."
+        - command: "npm run build"
+          status: pass
+        - command: "npm run lint"
+          status: pass
+        - command: "npm run check:risk-budget"
+          status: pass
+        - command: "npm run smoke:real-spss"
+          status: pass
+          detail: "Loaded Edit 500+Booster.sav, generated a table, switched Top/Side, reran the table, and verified a filter condition workflow."
+        - command: "npm run verify:full"
+          status: pass
+          detail: "build, lint, risk budget, static/runtime checks, 39 test files / 457 tests, local runtime smoke, and real SPSS generated-table + switch + filter smoke passed."
+      summary: "Extracted SAV open/dropzone wiring from App.tsx into useSavFileOpen, moved filter-summary pure logic into appDerivedState, and expanded the real SPSS smoke to cover quick Filter plus the main Filter tab."
+      maintainability_notes:
+        - "App.tsx is now 2,159 lines, with more file-open and table-row summary behavior covered outside the large component."
+        - "The E2E gate now covers a user-visible filter workflow in addition to load, generate, and Switch Top/Side."
+  - id: T055
+    type: pm
+    assignee: PM
+    status: done
+    reasoning_hint: default
+    objective: "Remove App.tsx @ts-nocheck and prevent it from returning."
+    inputs:
+      - "src/App.tsx"
+      - "tools/check-risk-budget.mjs"
+      - "Edit 500+Booster.sav"
+    constraints:
+      - "Keep the fix scoped to TypeScript correctness, not behavioral rewrites."
+      - "Do not alter crosstab math, static runtime calculation code, or export workbook generation."
+      - "Full verification with the real SPSS fixture must pass before considering the milestone done."
+    receipt:
+      result: done
+      changed_files:
+        - "src/App.tsx"
+        - "tools/check-risk-budget.mjs"
+        - "docs/goals/crossify-system-refactor/state.yaml"
+      commands:
+        - command: "npm run build"
+          status: pass
+          detail: "App.tsx type-checked without @ts-nocheck."
+        - command: "npm run lint"
+          status: pass
+        - command: "npm run check:risk-budget"
+          status: pass
+          detail: "Risk budget now fails any source file containing @ts-nocheck."
+        - command: "npm run verify:full"
+          status: pass
+          detail: "build, lint, risk budget, static/runtime checks, 39 test files / 458 tests, local runtime smoke, and real SPSS generated-table + switch + filter smoke passed."
+        - command: "Invoke-WebRequest http://localhost:5173/"
+          status: pass
+          detail: "Local server returned HTTP 200."
+      summary: "Removed @ts-nocheck from App.tsx, fixed the remaining TypeScript issues around unused imports, settings restore typing, file-handle persistence, and PreviewTable config typing, and updated the risk budget so @ts-nocheck cannot be reintroduced."
+      maintainability_notes:
+        - "App.tsx is now covered by strict TypeScript checks instead of being excluded."
+        - "App.tsx is now 2,145 lines and the verification gate prevents @ts-nocheck from returning."
+  - id: T056
+    type: pm
+    assignee: PM
+    status: done
+    reasoning_hint: default
+    objective: "Investigate intermittent app exit/reset reports and add a stability smoke gate."
+    inputs:
+      - "tools/smoke-session-stability.mjs"
+      - "tools/verify-full.mjs"
+      - "package.json"
+      - "Edit 500+Booster.sav"
+    constraints:
+      - "Do not change crosstab calculation behavior while investigating an intermittent issue."
+      - "Use the real SPSS fixture and browser pageerror/console monitoring."
+      - "Make the check stable enough to run inside the main verification gate."
+    receipt:
+      result: done
+      changed_files:
+        - "tools/smoke-session-stability.mjs"
+        - "tools/verify-full.mjs"
+        - "package.json"
+        - "docs/goals/crossify-system-refactor/state.yaml"
+      commands:
+        - command: "npm run smoke:real-spss (5 repeated runs)"
+          status: pass
+          detail: "All 5 repeated real-SPSS smoke runs passed without pageerror or console errors."
+        - command: "npm run smoke:session-stability"
+          status: pass
+          detail: "Loaded Edit 500+Booster.sav, generated a table, then ran 12 iterations of run/switch/filter/results navigation with unexpectedReloads=0."
+        - command: "npm run verify:full"
+          status: pass
+          detail: "build, lint, risk budget, static/runtime checks, 39 test files / 458 tests, local runtime smoke, real SPSS smoke, and session stability smoke all passed."
+      summary: "Could not reproduce the intermittent app exit/reset during automated real-SPSS workflows. Added a dedicated session stability smoke that fails on pageerror, actionable console errors, dataset disappearance, empty-load screen return, or unexpected reload after the workspace is active."
+      maintainability_notes:
+        - "The main verification gate now covers longer-running session stability, not just first-run table generation."
+        - "If the reported intermittent exit returns in covered workflows, npm run verify:full will fail with a focused stability error."
+  - id: T057
+    type: pm
+    assignee: PM
+    status: done
+    reasoning_hint: default
+    objective: "Add Supabase-backed Cloud Settings without uploading SPSS data files."
+    inputs:
+      - "src/App.tsx"
+      - "src/hooks/useCloudSettingsActions.ts"
+      - "src/lib/cloudSettings.ts"
+      - "src/lib/settingsIO.ts"
+      - "supabase/migrations/202605090001_crossify_cloud_settings.sql"
+    constraints:
+      - "Do not upload .sav file contents to Supabase."
+      - "Keep existing Excel settings save/load as fallback."
+      - "Require Supabase env vars and authenticated user before cloud save/load."
+      - "Use RLS policies for user-owned workspaces and versions."
+    receipt:
+      result: done
+      changed_files:
+        - "package.json"
+        - "package-lock.json"
+        - "src/App.tsx"
+        - "src/hooks/useCloudSettingsActions.ts"
+        - "src/lib/cloudSettings.ts"
+        - "src/lib/settingsIO.ts"
+        - "src/vite-env.d.ts"
+        - "supabase/migrations/202605090001_crossify_cloud_settings.sql"
+        - "docs/supabase-cloud-settings.md"
+        - ".env.example"
+        - "docs/goals/crossify-system-refactor/state.yaml"
+      commands:
+        - command: "npm install @supabase/supabase-js --cache .npm-cache"
+          status: pass
+          detail: "Installed Supabase client package. npm audit reported 4 existing/new dependency vulnerabilities for later review."
+        - command: "npm run build"
+          status: pass
+        - command: "npm run lint"
+          status: pass
+        - command: "npm run check:risk-budget"
+          status: pass
+        - command: "npm run verify:full"
+          status: pass
+          detail: "build, lint, risk budget, static/runtime checks, 39 test files / 458 tests, local runtime smoke, real SPSS smoke, and session stability smoke all passed."
+        - command: "Invoke-WebRequest http://localhost:5173/"
+          status: pass
+          detail: "Local server returned HTTP 200."
+      summary: "Added Cloud Settings integration using @supabase/supabase-js, including magic-link sign-in, manual Save to Cloud, Load Latest Cloud, and debounced AutoSave after the first manual cloud save. Added a Supabase SQL migration with RLS and docs/env template. Existing Excel settings flow remains intact."
+      maintainability_notes:
+        - "Cloud persistence lives in src/lib/cloudSettings.ts and src/hooks/useCloudSettingsActions.ts rather than expanding App.tsx with database details."
+        - "Supabase stores settings JSON and dataset metadata only; SPSS .sav contents remain local."
+  - id: T058
+    type: pm
+    assignee: PM
+    status: done
+    reasoning_hint: default
+    objective: "Connect Crossify Cloud Settings to the premium-taskflow Supabase project and make Save Settings cloud-first."
+    inputs:
+      - "premium-taskflow Supabase project xwkwrimpyfkgshfbzfqn"
+      - ".env"
+      - "index.html"
+      - "tools/smoke-cloud-save-guard.mjs"
+    constraints:
+      - "Do not expose service_role keys."
+      - "Keep SPSS .sav data local; store only settings/config snapshots."
+      - "Prevent legacy Save Settings flows from opening a local file picker."
+    receipt:
+      result: done
+      changed_files:
+        - ".env"
+        - "index.html"
+        - "src/App.tsx"
+        - "src/hooks/useCloudSettingsActions.ts"
+        - "tools/smoke-cloud-save-guard.mjs"
+        - "tools/verify-full.mjs"
+        - "tools/check-risk-budget.mjs"
+        - "docs/goals/crossify-system-refactor/state.yaml"
+      commands:
+        - command: "Supabase apply_migration crossify_cloud_settings on premium-taskflow"
+          status: pass
+          detail: "Created public.crossify_workspaces and public.crossify_workspace_versions with RLS enabled."
+        - command: "Supabase list_tables"
+          status: pass
+          detail: "crossify_workspaces and crossify_workspace_versions exist with RLS enabled."
+        - command: "Supabase advisors"
+          status: pass
+          detail: "Security advisor shows only project-level leaked password protection warning; Crossify table indexes are newly unused because no rows have been saved yet."
+        - command: "REST probe with publishable key"
+          status: pass
+          detail: "crossify_workspaces endpoint returned HTTP 200 and [] for anonymous access under RLS."
+        - command: "npm run verify:full"
+          status: pass
+          detail: "build, lint, risk budget, static/runtime checks, 39 test files / 458 tests, local runtime smoke, cloud save guard, real SPSS smoke, and session stability smoke all passed."
+        - command: "Invoke-WebRequest http://localhost:5173/"
+          status: pass
+          detail: "Local server returned HTTP 200."
+      summary: "Connected local Crossify to the premium-taskflow Supabase project using a publishable key in .env, applied the Cloud Settings schema, made Save Settings cloud-first, kept Export Settings File as the explicit local-backup path, and added a smoke guard proving Save Settings no longer opens a native file chooser."
+      maintainability_notes:
+        - "Cloud Settings is now wired to a real Supabase project; users must sign in by magic link before RLS permits saves."
+        - "Legacy static save prompts are overridden so variable-edit guards no longer force local Excel settings files."
+
+checks:
+  dirty_fingerprint: "unknown"
+  last_verification:
+    result: passed
+    task: "T058"
+    commands:
+      - "npm run verify:full"
+      - "Supabase apply_migration crossify_cloud_settings on premium-taskflow"
+      - "Supabase list_tables"
+      - "Supabase advisors"
+      - "REST probe with publishable key"
+      - "Invoke-WebRequest http://localhost:5173/"
+      - "npm run build"
+      - "npm run lint"
+      - "npm run check:risk-budget"
+      - "Invoke-WebRequest http://localhost:5173/"
+      - "npm run smoke:session-stability"
+      - "npm run smoke:real-spss (5 repeated runs)"
+      - "npm run build"
+      - "npm run lint"
+      - "npm run check:risk-budget"
+      - "Invoke-WebRequest http://localhost:5173/"
+      - "npm run smoke:real-spss"
+      - "npx vitest run src/lib/appDerivedState.test.ts"
+      - "npx vitest run src/hooks/useSavFileOpen.test.ts src/hooks/useActiveTableSync.test.ts"
+      - "npx vitest run src/hooks/useActiveTableSync.test.ts src/hooks/useVariableDisplayHelpers.test.ts"
+      - "npx vitest run src/hooks/useVariableDisplayHelpers.test.ts"
+      - "npx vitest run src/hooks/useWorkspaceHistory.test.ts"
+      - "npx vitest run src/hooks/useWorkspaceUiEffects.test.ts"
+      - "npm run check:risk-budget"
+      - "npx vitest run src/runtime-compat/appRuntimeBridges.test.ts src/runtime-compat/runtimeBridge.test.ts"
+      - "npm test"
+      - "npm run build"
+      - "npm run lint"
+      - "npm run check:static-bundle"
+      - "npm run check:overlay-runtime"
+      - "npm run check:runtime-contract"
+      - "npm run smoke:local-runtime"
+      - "npm run smoke:real-spss"
+      - "Invoke-WebRequest http://localhost:5173/"
+      - "Browser smoke check http://localhost:5173/"

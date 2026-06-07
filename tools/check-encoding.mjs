@@ -68,6 +68,8 @@ async function collectFiles(dir) {
 
     if (entry.isDirectory()) {
       if (excludedDirs.has(entry.name)) continue
+      // electron-builder release output (release/, release-*/) is generated, not source
+      if (entry.name === 'release' || entry.name.startsWith('release-')) continue
       files.push(...await collectFiles(fullPath))
       continue
     }

@@ -11,6 +11,7 @@ function makeResult(
     rowPaths?: string[][]
     rowTypes?: ('data' | 'net' | 'stat' | 'summary')[]
     colValues?: string[]
+    rowSectionBases?: CrosstabResult['rowSectionBases']
   } = {},
 ): CrosstabResult {
   const colValues = opts.colValues ?? ['Total']
@@ -27,6 +28,7 @@ function makeResult(
       counts.reduce((s, row) => s + (row[ci] ?? 0), 0),
     ),
     grandTotal: counts.flat().reduce((s, n) => s + n, 0),
+    rowSectionBases: opts.rowSectionBases,
   }
 }
 
@@ -77,27 +79,27 @@ describe('injectNetGroups › basic injection', () => {
   const out = injectNetGroups(result, 's1', overrides)
 
   it('inserts a Net row', () => {
-    expect(out.rowValues).toContain('   Net')
+    expect(out.rowValues).toContain('Net : Net')
   })
 
   it('Net row comes before first member', () => {
-    const netIdx = out.rowValues.indexOf('   Net')
+    const netIdx = out.rowValues.indexOf('Net : Net')
     const bangkokIdx = out.rowValues.indexOf('Bangkok')
     expect(netIdx).toBeLessThan(bangkokIdx)
   })
 
   it('Net row has type "net"', () => {
-    const netIdx = out.rowValues.indexOf('   Net')
+    const netIdx = out.rowValues.indexOf('Net : Net')
     expect(out.rowTypes?.[netIdx]).toBe('net')
   })
 
   it('Net counts = sum of members', () => {
-    const netIdx = out.rowValues.indexOf('   Net')
+    const netIdx = out.rowValues.indexOf('Net : Net')
     expect(out.counts[netIdx][0]).toBe(150)  // 100 + 50
   })
 
   it('Net rowTotalsN = sum of members', () => {
-    const netIdx = out.rowValues.indexOf('   Net')
+    const netIdx = out.rowValues.indexOf('Net : Net')
     expect(out.rowTotalsN[netIdx]).toBe(150)
   })
 
@@ -121,7 +123,7 @@ describe('injectNetGroups › direct label match', () => {
   const out = injectNetGroups(result, 's1', overrides)
 
   it('finds member by exact label string', () => {
-    const netIdx = out.rowValues.findIndex(v => v.trim() === 'Agree')
+    const netIdx = out.rowValues.findIndex(v => v.trim() === 'Net : Agree')
     expect(netIdx).toBeGreaterThanOrEqual(0)
     expect(out.counts[netIdx][0]).toBe(60)
   })
@@ -142,12 +144,12 @@ describe('injectNetGroups › rowPath depth (single-var)', () => {
   const out = injectNetGroups(result, 's1', overrides)
 
   it('Net rowPath depth = 1 when data rows are depth 1', () => {
-    const netIdx = out.rowValues.findIndex(v => v.trim() === 'Net')
+    const netIdx = out.rowValues.findIndex(v => v.trim() === 'Net : Net')
     expect(out.rowPaths?.[netIdx]).toHaveLength(1)
   })
 
   it('Net rowPath[0] = Net label', () => {
-    const netIdx = out.rowValues.findIndex(v => v.trim() === 'Net')
+    const netIdx = out.rowValues.findIndex(v => v.trim() === 'Net : Net')
     expect(out.rowPaths?.[netIdx][0]).toBe(out.rowValues[netIdx])
   })
 })
@@ -180,28 +182,28 @@ describe('injectNetGroups › rowPath depth (stacked multi-var)', () => {
   const out = injectNetGroups(result, 's1', overrides)
 
   it('Net row is injected', () => {
-    const netIdx = out.rowValues.findIndex(v => v.trim() === 'Net')
+    const netIdx = out.rowValues.findIndex(v => v.trim() === 'Net : Net')
     expect(netIdx).toBeGreaterThanOrEqual(0)
   })
 
   it('Net rowPath has same depth as data rows (depth 2)', () => {
-    const netIdx = out.rowValues.findIndex(v => v.trim() === 'Net')
+    const netIdx = out.rowValues.findIndex(v => v.trim() === 'Net : Net')
     expect(out.rowPaths?.[netIdx]).toHaveLength(2)
   })
 
   it('Net rowPath prefix matches section variable name', () => {
-    const netIdx = out.rowValues.findIndex(v => v.trim() === 'Net')
+    const netIdx = out.rowValues.findIndex(v => v.trim() === 'Net : Net')
     expect(out.rowPaths?.[netIdx][0]).toBe('S1.Province')
   })
 
   it('Net rowPath last element = Net label', () => {
-    const netIdx = out.rowValues.findIndex(v => v.trim() === 'Net')
+    const netIdx = out.rowValues.findIndex(v => v.trim() === 'Net : Net')
     const netPath = out.rowPaths?.[netIdx]
     expect(netPath?.[netPath.length - 1]).toBe(out.rowValues[netIdx])
   })
 
   it('Net counts correct (suffix-matched members)', () => {
-    const netIdx = out.rowValues.findIndex(v => v.trim() === 'Net')
+    const netIdx = out.rowValues.findIndex(v => v.trim() === 'Net : Net')
     expect(out.counts[netIdx][0]).toBe(150)  // 100 + 50
   })
 })
@@ -231,7 +233,7 @@ describe('injectNetGroups › suffix match for stacked rowValues', () => {
   const out = injectNetGroups(result, 's1', overrides)
 
   it('resolves code via label → suffix match', () => {
-    const netIdx = out.rowValues.findIndex(v => v.trim() === 'Net')
+    const netIdx = out.rowValues.findIndex(v => v.trim() === 'Net : Net')
     expect(netIdx).toBeGreaterThanOrEqual(0)
     expect(out.counts[netIdx][0]).toBe(90)   // Yes(60) + No(30)
   })
@@ -256,7 +258,7 @@ describe('injectNetGroups › multi-column result', () => {
   const out = injectNetGroups(result, 's1', overrides)
 
   it('Net counts span all columns', () => {
-    const netIdx = out.rowValues.findIndex(v => v.trim() === 'Net')
+    const netIdx = out.rowValues.findIndex(v => v.trim() === 'Net : Net')
     expect(out.counts[netIdx]).toEqual([50, 70, 90])  // A+B per col
   })
 })
@@ -271,7 +273,7 @@ describe('injectNetGroups › case-insensitive vn', () => {
 
   it('finds override when vn casing differs from key', () => {
     const out = injectNetGroups(result, 's1', overrides)
-    const netIdx = out.rowValues.findIndex(v => v.trim() === 'Net')
+    const netIdx = out.rowValues.findIndex(v => v.trim() === 'Net : Net')
     expect(netIdx).toBeGreaterThanOrEqual(0)
     expect(out.counts[netIdx][0]).toBe(60)
   })
@@ -291,8 +293,37 @@ describe('injectNetGroups › append Net at end', () => {
   const out = injectNetGroups(result, 's1', overrides)
 
   it('inserts before the only member', () => {
-    const netIdx = out.rowValues.findIndex(v => v.trim() === 'Net')
+    const netIdx = out.rowValues.findIndex(v => v.trim() === 'Net : Net')
     const cIdx = out.rowValues.indexOf('C')
     expect(netIdx).toBe(cIdx - 1)
+  })
+})
+
+describe('injectNetGroups › rowSectionBases', () => {
+  it('keeps the first section anchored before a Net inserted at its first row', () => {
+    const result = makeResult(
+      ['A', 'B', 'C'],
+      [[10], [20], [30]],
+      { rowSectionBases: [{ startIndex: 0, label: 'Section A', totalN: 60, colTotalsN: [60] }] },
+    )
+    const out = injectNetGroups(result, 's1', ov([{ name: 'Net A', members: ['A'] }]))
+    expect(out.rowValues[0]).toBe('Net : Net A')
+    expect(out.rowSectionBases?.[0].startIndex).toBe(0)
+  })
+
+  it('moves later section starts when Net rows are inserted before them', () => {
+    const result = makeResult(
+      ['A', 'B', 'C', 'D'],
+      [[10], [20], [30], [40]],
+      {
+        rowSectionBases: [
+          { startIndex: 0, label: 'Section A', totalN: 30, colTotalsN: [30] },
+          { startIndex: 2, label: 'Section B', totalN: 70, colTotalsN: [70] },
+        ],
+      },
+    )
+    const out = injectNetGroups(result, 's1', ov([{ name: 'Net A', members: ['A'] }]))
+    expect(out.rowValues).toEqual(['Net : Net A', 'A', 'B', 'C', 'D'])
+    expect(out.rowSectionBases?.map(section => section.startIndex)).toEqual([0, 3])
   })
 })

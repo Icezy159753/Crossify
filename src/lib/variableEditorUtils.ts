@@ -1,3 +1,6 @@
+import { buildNetLabel } from './netLabels'
+export { getNetPrefix } from './netLabels'
+
 export interface VariableEditorRow {
   key: string
   code: string
@@ -35,11 +38,6 @@ export type ScaleSummaryPresetType =
   | 'justright_code'
   | 'justright_centered'
 
-export function getNetPrefix(depth: number) {
-  if (depth <= 0) return 'Net : '
-  return `${'Sub'.repeat(depth)}net : `
-}
-
 export function getGroupDepth(group: VariableNetGroup, groups: VariableNetGroup[]): number {
   let depth = 0
   let currentParentId = group.parentId
@@ -73,7 +71,7 @@ export function buildVariableEditorDisplayRows(rows: VariableEditorRow[], groups
         row: {
           key: `__net__${group.id}`,
           code: '',
-          label: `${getNetPrefix(depth)}${group.name}`,
+          label: buildNetLabel(depth, group.name),
           count: members.reduce((sum, row) => sum + row.count, 0),
           percent: members.reduce((sum, row) => sum + row.percent, 0),
           factor: '',

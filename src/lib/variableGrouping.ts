@@ -1,18 +1,9 @@
 import type { CrosstabConfig, CrosstabResult } from './crosstabEngine'
 import { normalizeCode } from './appStateUtils'
+import { yieldToBrowser } from './browserScheduler'
+import type { SpssVariable } from './savParser'
 
 const ASYNC_YIELD_EVERY = 250
-
-function yieldToBrowser() {
-  return new Promise<void>(resolve => {
-    if (typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function') {
-      window.requestAnimationFrame(() => resolve())
-      return
-    }
-    setTimeout(() => resolve(), 0)
-  })
-}
-import type { SpssVariable } from './savParser'
 
 export interface VariableListItem {
   name: string
@@ -22,6 +13,9 @@ export interface VariableListItem {
   valueLabels: Record<string, string>
   isGroupedMA?: boolean
   memberNames?: string[]
+  isGridUserCreated?: boolean
+  gridRole?: 'top' | 'side'
+  gridPairName?: string
 }
 
 interface GroupedOption {
@@ -306,6 +300,9 @@ export function buildVariableCatalog(
         longName: variable.longName,
         isString: variable.isString,
         valueLabels: variable.valueLabels,
+        isGridUserCreated: (variable as SpssVariable & { isGridUserCreated?: boolean }).isGridUserCreated,
+        gridRole: (variable as SpssVariable & { gridRole?: 'top' | 'side' }).gridRole,
+        gridPairName: (variable as SpssVariable & { gridPairName?: string }).gridPairName,
       }
       list.push(item)
       byName.set(item.name, item)
@@ -472,6 +469,9 @@ export function buildVariableCatalog(
       valueLabels: Object.fromEntries(optionEntries.map((opt, idx) => [String(idx + 1), opt.label])),
       isGroupedMA: true,
       memberNames: resolvedMemberNames,
+      isGridUserCreated: true,
+      gridRole: (v as typeof v & { gridRole?: 'top' | 'side' }).gridRole ?? 'top',
+      gridPairName: (v as typeof v & { gridPairName?: string }).gridPairName,
     }
     const gridDef: GroupedVariableDef = {
       name: gridName,

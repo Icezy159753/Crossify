@@ -83,6 +83,28 @@ describe('buildCrosstabWorkbook', () => {
     const buf = await wb.xlsx.writeBuffer()
     expect(buf.byteLength).toBeGreaterThan(0)
   })
+
+  it('writes the same Mean value in paired N and percent columns', async () => {
+    const wb = await buildCrosstabWorkbook([{
+      result: makeResult({
+        rowValues: ['Mean'],
+        rowTypes: ['stat'],
+        counts: [[5.7, 5.24]],
+        rowTotalsN: [5.46],
+      }),
+      config: makeConfig({ showCount: true, showPercent: true }),
+    }])
+    const ws = wb.worksheets[0]
+    const meanRow = ws.getRows(1, ws.rowCount)?.find(row =>
+      Array.isArray(row.values) && row.values.some((value: unknown) => String(value ?? '').trim() === 'Mean')
+    )
+    expect(meanRow).toBeTruthy()
+    const values = meanRow!.values as unknown[]
+    const numericCells = values
+      .map((value, index) => ({ value, index }))
+      .filter(item => typeof item.value === 'number')
+    expect(numericCells.map(item => item.value)).toEqual([5.46, 5.46, 5.7, 5.7, 5.24, 5.24])
+  })
 })
 
 // ─── exportCrosstabToExcel ────────────────────────────────────────────────────

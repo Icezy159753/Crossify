@@ -1,157 +1,95 @@
 /* eslint-disable */
-// @ts-nocheck
 import { useState, useCallback, useRef, useMemo, useEffect } from 'react'
-import { useDropzone } from 'react-dropzone'
-import { parseSav, applyValueLabels } from './lib/savParser'
 import type { SavDataset } from './lib/savParser'
-import { computeCrosstab, computeCrosstabAsync, filterZeroRows } from './lib/crosstabEngine'
-import type { CrosstabResult, CrosstabConfig, CrosstabRowType } from './lib/crosstabEngine'
+import { loadSavDatasetFromFile } from './lib/savLoadWorkflow'
 import type {
   AllSettings,
-  OutputSettings,
   SettingsLockInfo,
   SourceDatasetSetting,
   SourceMappingEntry,
 } from './lib/settingsIO'
 import { formatBatchDuration, formatLiveBatchDuration } from './lib/timeFormatUtils'
-import { evaluateFilterSpec } from './lib/filterEngine'
+import { getSettingsSessionId } from './lib/settingsSession'
+import { hasActiveFilter, newTable } from './lib/tableModel'
+import {
+  DEFAULT_ACTIVE_TAB,
+  createDefaultGlobalSettings,
+  createInitialTables,
+} from './lib/appDefaults'
 import {
   pickSettingsFileViaSystem,
-  pickSavFileViaSystem,
   rememberSavFileHandle,
-  restoreSavFileFromSource,
-  saveSettingsToFileHandle,
   supportsFileSystemAccess,
 } from './lib/fileAccess'
 import {
   buildVariableCatalog,
-  computeGroupedCrosstab,
-  computeGroupedCrosstabAsync,
-  getGroupedBaseCount,
-  getGroupedSelections,
 } from './lib/variableGrouping'
-import type { GroupedVariableDef, MrsetDefinition } from './lib/variableGrouping'
+import type { MrsetDefinition } from './lib/variableGrouping'
+import { moveSelectedRows } from './lib/appStateUtils'
 import {
-  ADD_JOIN,
-  type AxisSpec,
-  flattenAxisSpec,
-  getAxisDisplayLevels,
-  insertTopLevelBranchAt,
-  insertVarByMode,
-  joinAxisSpec,
-  moveAxisOccurrenceToTarget,
-  moveSelectedRows,
-  moveVarInAxis,
-  normalizeCode,
-  parseAxisSpec,
-  removeVarFromAxis,
-} from './lib/appStateUtils'
+  buildActiveConfig,
+  canRunTable,
+  getActiveHideTotal,
+  getActiveTable,
+  getCodeEditorRows,
+  getEditingTableIds,
+  getEditingTables,
+  getEditingVariableBase,
+  getFilterMismatchTableNames,
+  getFilterSummary,
+  getFirstSelectedVariableIndex,
+  getLastSelectedVariableRowIndex,
+  hasSelectedRowsInGroups,
+} from './lib/appDerivedState'
 import {
-  buildScaleSummaryPreset,
-  buildVariableEditorRowsWithSummaries,
   getGroupDepth,
   getNetPrefix,
   type ScaleSummaryPresetType,
-  } from './lib/variableEditorUtils'
+} from './lib/variableEditorUtils'
 import type {
   VariableEditorRow,
   VariableNetGroup,
-  VariableSummaryRow,
 } from './lib/variableEditorUtils'
+import { useBatchExportActions } from './hooks/useBatchExportActions'
 import { useBatchExportFlow } from './hooks/useBatchExportFlow'
+import { useExportActions } from './hooks/useExportActions'
+import { useFilterActions } from './hooks/useFilterActions'
+import { useFolderActions } from './hooks/useFolderActions'
+import { useSettingsActions } from './hooks/useSettingsActions'
+import { useCloudSettingsActions } from './hooks/useCloudSettingsActions'
+import { useSavFileOpen } from './hooks/useSavFileOpen'
+import { useTableDesignerActions } from './hooks/useTableDesignerActions'
+import { useTableActions } from './hooks/useTableActions'
+import { useVariableEditorActions } from './hooks/useVariableEditorActions'
+import { useVariableListActions } from './hooks/useVariableListActions'
+import { useTableRunActions } from './hooks/useTableRunActions'
+import { useActiveTableSync } from './hooks/useActiveTableSync'
+import { useVariableDisplayHelpers } from './hooks/useVariableDisplayHelpers'
+import {
+  useFilteredCasesBridge,
+  useGridHideTotalBridge,
+} from './runtime-compat/appRuntimeBridges'
+import { useWorkspaceHistory } from './hooks/useWorkspaceHistory'
+import { useWorkspaceUiEffects } from './hooks/useWorkspaceUiEffects'
 import { CrossifyLogo } from './components/CrossifyLogo'
 import { DesignCanvas } from './components/DesignCanvas'
 import { FilterCanvas } from './components/FilterCanvas'
 import { PreviewTable } from './components/PreviewTable'
+import { SweetAlert } from './components/SweetAlert'
 import { TableRow } from './components/TableRow'
 import { VirtualVarList } from './components/VirtualVarList'
-import type {
-  FilterJoin,
-  FolderDef,
-  GlobalSettings,
-  PercentType,
-  TableDef,
-  TableFilterCondition,
-  TableFilterGroup,
-  TableFilterSpec,
-} from './types/workspace'
+import type { FolderDef, GlobalSettings, PercentType, TableDef } from './types/workspace'
+import type { NumericStat, VariableOverride } from './types/variableOverride'
 import {
   Plus, Trash2, Download, RefreshCw,
   ChevronRight, Database, X, Upload, Settings2, Copy,
   FolderOpen, Folder, ChevronDown, Play, Save, FolderInput,
-  ArrowUp, ArrowDown, ArrowRight, ClipboardPaste, Sparkles,
+  ArrowUp, ArrowDown, ArrowRight, ClipboardPaste, Sparkles, Cloud, LogIn, LogOut,
 } from 'lucide-react'
 
 // เนโ€โฌเนโ€โฌ Types เนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌ
 
-interface VariableOverride {
-  order: string[]
-  weights: Record<string, string>
-  labels?: Record<string, string>
-  numericStats?: Array<'mean' | 'min' | 'max' | 'stddev'>
-  groups?: VariableNetGroup[]
-  summaries?: VariableSummaryRow[]
-  summaryPreset?: ScaleSummaryPresetType
-}
-
-type NumericStat = 'mean' | 'min' | 'max' | 'stddev'
 type QuickAddTarget = 'top' | 'side' | 'filter'
-
-const SETTINGS_LOCK_DURATION_MS = 1000 * 60 * 3
-const SETTINGS_LOCK_HEARTBEAT_MS = 1000 * 30
-const LIGHT_LOAD_THRESHOLD_BYTES = 150 * 1024 * 1024
-
-interface EditorIdentity {
-  ownerLabel: string
-  machineLabel: string
-}
-
-function getSettingsSessionId(): string {
-  if (typeof window === 'undefined') return crypto.randomUUID()
-  const storageKey = 'crossify-settings-session-id'
-  try {
-    const existing = window.sessionStorage.getItem(storageKey)?.trim()
-    if (existing) return existing
-  } catch {
-    // ignore unavailable session storage
-  }
-
-  const sessionId = crypto.randomUUID()
-  try {
-    window.sessionStorage.setItem(storageKey, sessionId)
-  } catch {
-    // ignore unavailable session storage
-  }
-  return sessionId
-}
-
-function getEditorIdentity(): EditorIdentity {
-  if (typeof window === 'undefined') return { ownerLabel: 'Crossify User', machineLabel: 'Browser Session' }
-  const storageKey = 'crossify-editor-identity'
-  try {
-    const raw = window.localStorage.getItem(storageKey)
-    if (raw) {
-      const parsed = JSON.parse(raw) as Partial<EditorIdentity>
-      if (parsed.ownerLabel && parsed.machineLabel) {
-        return { ownerLabel: parsed.ownerLabel, machineLabel: parsed.machineLabel }
-      }
-    }
-  } catch {
-    // ignore invalid local storage payload
-  }
-
-  const language = typeof navigator !== 'undefined' ? navigator.language.toUpperCase() : 'LOCAL'
-  const identity = {
-    ownerLabel: `Crossify User ${Math.random().toString(36).slice(2, 6).toUpperCase()}`,
-    machineLabel: `${language} Browser`,
-  }
-  try {
-    window.localStorage.setItem(storageKey, JSON.stringify(identity))
-  } catch {
-    // ignore storage failures
-  }
-  return identity
-}
 
 function getScalePresetLabel(preset: ScaleSummaryPresetType) {
   switch (preset) {
@@ -231,99 +169,12 @@ const SCALE_PRESET_OPTIONS: Array<{
   },
 ]
 
-interface FilterOptionItem {
-  key: string
-  label: string
-}
-
-interface FilterFieldMeta {
-  kind: 'options' | 'numeric' | 'text'
-  options: FilterOptionItem[]
-  operators: TableFilterCondition['operator'][]
-}
-
-const BATCH_YIELD_EVERY = 250
-
 async function loadExcelExportModule() {
   return import('./lib/excelExport')
 }
 
 async function loadSettingsIOModule() {
   return import('./lib/settingsIO')
-}
-
-function yieldToBrowser() {
-  return new Promise<void>(resolve => {
-    if (typeof window.requestAnimationFrame === 'function') {
-      window.requestAnimationFrame(() => resolve())
-      return
-    }
-    window.setTimeout(() => resolve(), 0)
-  })
-}
-
-function newTable(idx: number, folderId: string | null = null): TableDef {
-  return {
-    id: crypto.randomUUID(),
-    name: `Table${idx}`,
-    rowVar: null,
-    colVar: null,
-    result: null,
-    folderId,
-    filter: emptyTableFilter(),
-  }
-}
-
-function emptyTableFilter(): TableFilterSpec {
-  return {
-    description: '',
-    rootJoin: 'all',
-    groups: [],
-  }
-}
-
-function hasActiveFilter(filter: TableFilterSpec | null | undefined): boolean {
-  if (!filter) return false
-  return filter.groups.some(group => group.conditions.length > 0)
-}
-
-function cloneTableFilter(filter: TableFilterSpec): TableFilterSpec {
-  return {
-    description: filter.description,
-    rootJoin: filter.rootJoin,
-    groups: filter.groups.map(group => ({
-      id: group.id,
-      join: group.join,
-      conditions: group.conditions.map(condition => ({
-        ...condition,
-        values: [...condition.values],
-      })),
-    })),
-  }
-}
-
-function toComparableFilter(filter: TableFilterSpec) {
-  return {
-    description: filter.description.trim(),
-    rootJoin: filter.rootJoin,
-    groups: filter.groups
-      .filter(group => group.conditions.length > 0)
-      .map(group => ({
-        join: group.join,
-        conditions: group.conditions.map(condition => ({
-          variableName: condition.variableName,
-          operator: condition.operator,
-          values: [...condition.values],
-          value: condition.value,
-          secondaryValue: condition.secondaryValue,
-        })),
-      })),
-  }
-}
-
-const FILTER_JOIN_LABEL: Record<FilterJoin, string> = {
-  all: 'AND',
-  any: 'OR',
 }
 
 // เนโ€โฌเนโ€โฌ Drop Zone Target เนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌ
@@ -409,7 +260,11 @@ function SettingsBar({
 // เนโ€โฌเนโ€โฌ Main App เนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌ
 
 export default function App() {
-  const [showLanding, setShowLanding] = useState(true)
+  const [showLanding, setShowLandingState] = useState(true)
+  const setShowLanding = useCallback((next: boolean) => {
+    setShowLandingState(next)
+  }, [])
+
   const [landingLang, setLandingLang] = useState<'th' | 'en'>('th')
   const [dataset, setDataset] = useState<SavDataset | null>(null)
   const [lightLoadMode, setLightLoadMode] = useState(false)
@@ -421,13 +276,11 @@ export default function App() {
   const [toast, setToast] = useState<string | null>(null)
 
   // Global settings
-  const [settings, setSettings] = useState<GlobalSettings>({
-    showCount: true, showPercent: true, percentType: 'column', hideZeroRows: false,
-  })
+  const [settings, setSettings] = useState<GlobalSettings>(() => createDefaultGlobalSettings())
 
-  const [tables, setTables] = useState<TableDef[]>([newTable(1)])
+  const [tables, setTables] = useState<TableDef[]>(() => createInitialTables())
   const [activeTableId, setActiveTableId] = useState<string>('')
-  const [activeTab, setActiveTab] = useState<'design' | 'filter' | 'results'>('design')
+  const [activeTab, setActiveTab] = useState<'design' | 'filter' | 'results'>(DEFAULT_ACTIVE_TAB)
   const [exporting, setExporting] = useState(false)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [lastSelectedTableId, setLastSelectedTableId] = useState<string | null>(null)
@@ -443,7 +296,6 @@ export default function App() {
   const [selectedVariableNames, setSelectedVariableNames] = useState<Set<string>>(new Set())
   const [lastSelectedVariableName, setLastSelectedVariableName] = useState<string | null>(null)
   const [tableContextMenu, setTableContextMenu] = useState<{ x: number; y: number; targetId: string } | null>(null)
-  const [copiedTablesBuffer, setCopiedTablesBuffer] = useState<TableDef[]>([])
   const [codeSortDirection, setCodeSortDirection] = useState<'asc' | 'desc'>('asc')
   const [editingVariableLabelKey, setEditingVariableLabelKey] = useState<string | null>(null)
   const [selectedNumericStats, setSelectedNumericStats] = useState<NumericStat[]>(['mean'])
@@ -461,7 +313,7 @@ export default function App() {
   const [settingsReadonly, setSettingsReadonly] = useState(false)
   const [settingsReadonlyLock, setSettingsReadonlyLock] = useState<SettingsLockInfo | null>(null)
   const [loadedSettingsName, setLoadedSettingsName] = useState<string | null>(null)
-  const [settingsLockReleased, setSettingsLockReleased] = useState(false)
+  const [settingsLockReleased] = useState(false)
   const [gridHideTotalVars, setGridHideTotalVars] = useState<Set<string>>(new Set())
   const [applyToVarNames, setApplyToVarNames] = useState<string[]>([])
   const [variableEditorTab, setVariableEditorTab] = useState<'edit' | 'apply'>('edit')
@@ -472,19 +324,19 @@ export default function App() {
 
   /** Variables being dragged from the catalog (multi-select => all selected, in list order) */
   const dragVarsRef = useRef<string[]>([])
-  const dragTableRef = useRef<string | null>(null)
   const loadSettingsInputRef = useRef<HTMLInputElement>(null)
   const batchSettingsInputRef = useRef<HTMLInputElement>(null)
   const pendingSettingsRestoreRef = useRef<AllSettings | null>(null)
 
   // โ”€โ”€ Undo / Redo history โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€
-  const _historyStack = useRef([]) // { tables, folders }[]
-  const _historyIdx = useRef(-1)
+  const { pushHistory } = useWorkspaceHistory({
+    tables,
+    folders,
+    setTables,
+    setFolders,
+    setActiveTableId,
+  })
   // Always-current refs (updated every render — safe to read in callbacks)
-  const _latestTables = useRef(tables)
-  _latestTables.current = tables
-  const _latestFolders = useRef(folders)
-  _latestFolders.current = folders
 
   // โ”€โ”€ Batch export flow โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€
   const {
@@ -498,33 +350,109 @@ export default function App() {
 
   // โ”€โ”€ Derived / memoized โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€
 
+  useEffect(() => {
+    const warmLazyModules = () => {
+      void loadSettingsIOModule()
+      void loadExcelExportModule()
+    }
+    if (typeof window.requestIdleCallback === 'function') {
+      const idleId = window.requestIdleCallback(warmLazyModules, { timeout: 1500 })
+      return () => window.cancelIdleCallback(idleId)
+    }
+    const timeoutId = window.setTimeout(warmLazyModules, 300)
+    return () => window.clearTimeout(timeoutId)
+  }, [])
+
   const variableCatalog = useMemo(() => {
     if (!dataset) return null
     return buildVariableCatalog(dataset.variables, customMrsets, lightLoadMode ? [] : dataset.cases)
   }, [dataset, customMrsets, lightLoadMode])
 
+  const buildDesktopSettingsSnapshot = useCallback(() => {
+    if (!dataset) return null
+    return {
+      version: 'desktop-settings-only-v2',
+      savedAt: new Date().toISOString(),
+      dataset: {
+        fileName: dataset.fileName,
+        fileSize: dataset.fileSize,
+        sourcePath: dataset.sourcePath ?? null,
+        encoding: dataset.encoding ?? '',
+        casesCount: dataset.cases.length,
+        variablesCount: dataset.variables.length,
+      },
+      lightLoadMode,
+      customMrsets,
+      settings,
+      tables: tables.map(table => ({ ...table, result: null })),
+      activeTableId,
+      activeTab,
+      variableOverrides,
+      currentSourceMappings,
+      loadedSettingsName,
+      folders,
+    }
+  }, [
+    activeTab,
+    activeTableId,
+    currentSourceMappings,
+    customMrsets,
+    dataset,
+    folders,
+    lightLoadMode,
+    loadedSettingsName,
+    settings,
+    tables,
+    variableOverrides,
+  ])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const host = window as typeof window & {
+      __cxBuildWorkspaceSettingsSnapshot?: () => unknown
+      __cxApplyWorkspaceSettings?: (snapshot: any) => { ok: boolean; reason?: string }
+    }
+    host.__cxBuildWorkspaceSettingsSnapshot = buildDesktopSettingsSnapshot
+    host.__cxApplyWorkspaceSettings = (snapshot: any) => {
+      if (!snapshot || !dataset) {
+        return { ok: false, reason: 'Load the matching SPSS file before opening this Crossify Table.' }
+      }
+      if (Array.isArray(snapshot.customMrsets)) setCustomMrsets(snapshot.customMrsets)
+      if (snapshot.settings) setSettings(prev => ({ ...prev, ...snapshot.settings }))
+      if (Array.isArray(snapshot.tables) && snapshot.tables.length > 0) {
+        setTables(snapshot.tables)
+        setActiveTableId(snapshot.activeTableId ?? snapshot.tables[0]?.id ?? '')
+      }
+      setActiveTab(snapshot.activeTab ?? 'design')
+      setVariableOverrides((snapshot.variableOverrides ?? {}) as Record<string, VariableOverride>)
+      setCurrentSourceMappings(snapshot.currentSourceMappings ?? [])
+      setLoadedSettingsName(snapshot.loadedSettingsName ?? 'Crossify Table')
+      setFolders(snapshot.folders ?? [])
+      setShowLanding(false)
+      return { ok: true }
+    }
+    return () => {
+      if (host.__cxBuildWorkspaceSettingsSnapshot === buildDesktopSettingsSnapshot) {
+        delete host.__cxBuildWorkspaceSettingsSnapshot
+      }
+    }
+  }, [buildDesktopSettingsSnapshot, dataset, setShowLanding])
+
   const activeTable = useMemo(
-    () => tables.find(t => t.id === activeTableId) ?? null,
+    () => getActiveTable(tables, activeTableId),
     [tables, activeTableId],
   )
 
   const editingTableIds = useMemo(() => {
-    if (!activeTableId) return []
-    return [...new Set([activeTableId, ...selectedIds])]
+    return getEditingTableIds(activeTableId, selectedIds)
   }, [activeTableId, selectedIds])
 
   const editingTables = useMemo(() => {
-    const idSet = new Set(editingTableIds)
-    return tables.filter(table => idSet.has(table.id))
+    return getEditingTables(tables, editingTableIds)
   }, [editingTableIds, tables])
 
   const filterMismatchTableNames = useMemo(() => {
-    if (!activeTable || editingTables.length <= 1) return []
-    const activeSignature = JSON.stringify(toComparableFilter(activeTable.filter))
-    return editingTables
-      .filter(table => table.id !== activeTable.id)
-      .filter(table => JSON.stringify(toComparableFilter(table.filter)) !== activeSignature)
-      .map(table => table.name)
+    return getFilterMismatchTableNames(activeTable, editingTables)
   }, [activeTable, editingTables])
 
   const editingVariableItem = useMemo(() => {
@@ -533,231 +461,60 @@ export default function App() {
   }, [editingVariableName, variableCatalog])
 
   const editingVariableBase = useMemo(() => {
-    if (!editingVariableName || !variableCatalog || !dataset) return 0
-    const grouped = variableCatalog.groupedByName.get(editingVariableName)
-    if (grouped) {
-      return getGroupedBaseCount(grouped, dataset.cases)
-    }
-    const varItem = variableCatalog.byName.get(editingVariableName)
-    if (!varItem) return 0
-    const override = variableOverrides[editingVariableName]
-    const order = override?.order ?? []
-    return dataset.cases.filter(c => {
-      const raw = c[editingVariableName]
-      const code = normalizeCode(raw)
-      if (!code) return false
-      if (order.length > 0) return order.includes(code)
-      return true
-    }).length
+    return getEditingVariableBase(editingVariableName, variableCatalog, dataset, variableOverrides)
   }, [editingVariableName, variableCatalog, dataset, variableOverrides])
 
   const codeEditorRows = useMemo(
-    () => variableEditorRows.filter(r => r.rowKind === 'code' || r.rowKind == null),
+    () => getCodeEditorRows(variableEditorRows),
     [variableEditorRows],
   )
 
   const firstSelectedVariableIndex = useMemo(() => {
-    if (selectedVariableRowKeys.length === 0) return -1
-    return codeEditorRows.findIndex(r => r.key === selectedVariableRowKeys[0])
+    return getFirstSelectedVariableIndex(selectedVariableRowKeys, codeEditorRows)
   }, [selectedVariableRowKeys, codeEditorRows])
 
   const lastSelectedVariableRowIndex = useMemo(() => {
-    if (selectedVariableRowKeys.length === 0) return -1
-    const last = selectedVariableRowKeys[selectedVariableRowKeys.length - 1]
-    return codeEditorRows.findIndex(r => r.key === last)
+    return getLastSelectedVariableRowIndex(selectedVariableRowKeys, codeEditorRows)
   }, [selectedVariableRowKeys, codeEditorRows])
 
   const selectedRowsInGroups = useMemo(() => {
-    return selectedVariableRowKeys.some(key =>
-      variableGroups.some(g => g.members.includes(key)),
-    )
+    return hasSelectedRowsInGroups(selectedVariableRowKeys, variableGroups)
   }, [selectedVariableRowKeys, variableGroups])
 
   const canRun = useMemo(() => {
-    if (!activeTable) return false
-    return !!(activeTable.rowVar || activeTable.colVar)
+    return canRunTable(activeTable)
   }, [activeTable])
 
   // โ”€โ”€ Helper functions โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€
 
-  function rebuildVariableEditorRows(
-    codeRows: VariableEditorRow[],
-    groups: VariableNetGroup[],
-  ): VariableEditorRow[] {
-    const override = editingVariableName ? variableOverrides[editingVariableName] : null
-    const summaries = override?.summaries ?? []
-    return buildVariableEditorRowsWithSummaries(codeRows, groups, summaries)
-  }
-
-  function isNumericVariable(name: string | null): boolean {
-    if (!name || !variableCatalog) return false
-    const item = variableCatalog.byName.get(name)
-    if (!item) return false
-    return !item.isString && Object.keys(item.valueLabels).length === 0
-  }
-
   // โ”€โ”€ Label / tone helpers โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€
 
-  const getVarLabel = useCallback(
-    (name: string) => {
-      if (!variableCatalog) return name
-      const item = variableCatalog.byName.get(name)
-      if (!item) return name
-      return item.label || item.longName || item.name
-    },
-    [variableCatalog],
-  )
-
-  const getVarTone = useCallback(
-    (name: string): { badge: string; cls: string } => {
-      if (!variableCatalog) return { badge: 'SA', cls: 'bg-blue-100 text-blue-700 border border-blue-300' }
-      const item = variableCatalog.byName.get(name)
-      if (!item) return { badge: 'SA', cls: 'bg-blue-100 text-blue-700 border border-blue-300' }
-      if (item.isGroupedMA) return { badge: 'MA', cls: 'bg-emerald-100 text-emerald-700 border border-emerald-300' }
-      if (item.isString) return { badge: 'A', cls: 'bg-amber-100 text-amber-700 border border-amber-300' }
-      if (Object.keys(item.valueLabels).length === 0) return { badge: '#', cls: 'bg-gray-100 text-gray-500 border border-gray-300' }
-      return { badge: 'SA', cls: 'bg-blue-100 text-blue-700 border border-blue-300' }
-    },
-    [variableCatalog],
-  )
-
-  const getFilterFieldMeta = useCallback(
-    (name: string): FilterFieldMeta => {
-      if (!variableCatalog) return { kind: 'options', options: [], operators: ['in', 'not_in'] }
-      const item = variableCatalog.byName.get(name)
-      if (!item) return { kind: 'options', options: [], operators: ['in', 'not_in'] }
-      if (item.isString) {
-        return {
-          kind: 'text',
-          options: [],
-          operators: ['contains', 'not_contains', 'is_blank', 'not_blank'],
-        }
-      }
-      const keys = Object.keys(item.valueLabels)
-      if (keys.length === 0) {
-        return {
-          kind: 'numeric',
-          options: [],
-          operators: ['gt', 'gte', 'lt', 'lte', 'between', 'is_blank', 'not_blank'],
-        }
-      }
-      const options: FilterOptionItem[] = keys.map(key => ({
-        key,
-        label: item.valueLabels[key] ? `${key}. ${item.valueLabels[key]}` : key,
-      }))
-      return { kind: 'options', options, operators: ['in', 'not_in'] }
-    },
-    [variableCatalog],
-  )
+  const {
+    getFilterFieldMeta,
+    getVarLabel,
+    getVarTone,
+    isNumericVariable,
+  } = useVariableDisplayHelpers(variableCatalog)
 
   // โ”€โ”€ Effects โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€
 
-  useEffect(() => {
-    if (!activeTableId && tables.length > 0) {
-      setActiveTableId(tables[0].id)
-    }
-  }, [tables, activeTableId])
+  useActiveTableSync({ activeTableId, setActiveTableId, tables })
 
-  // Expose setter so inline scripts can trigger React state update for hideTotal
-  useEffect(() => {
-    ;(window as Record<string, unknown>)['__cxSetGridHideTotal'] = (names: string[], hide: boolean) => {
-      setGridHideTotalVars(prev => {
-        const next = new Set(prev)
-        names.forEach(n => hide ? next.add(n) : next.delete(n))
-        return next
-      })
-    }
-    return () => {
-      delete (window as Record<string, unknown>)['__cxSetGridHideTotal']
-    }
-  }, [])
+  useGridHideTotalBridge(setGridHideTotalVars)
 
-  useEffect(() => {
-    if (!toast) return
-    const timer = setTimeout(() => setToast(null), 3000)
-    return () => clearTimeout(timer)
-  }, [toast])
-
-  useEffect(() => {
-    if (!sidebarResizing) return
-    const onMove = (e: MouseEvent) => {
-      setSidebarWidth(w => Math.max(160, Math.min(480, w + e.movementX)))
-    }
-    const onUp = () => setSidebarResizing(false)
-    window.addEventListener('mousemove', onMove)
-    window.addEventListener('mouseup', onUp)
-    return () => {
-      window.removeEventListener('mousemove', onMove)
-      window.removeEventListener('mouseup', onUp)
-    }
-  }, [sidebarResizing])
-
-  useEffect(() => {
-    if (!tableContextMenu) return
-    const dismiss = () => setTableContextMenu(null)
-    window.addEventListener('click', dismiss, { once: true })
-    return () => window.removeEventListener('click', dismiss)
-  }, [tableContextMenu])
-
-  useEffect(() => {
-    if (!variableContextMenu) return
-    const dismiss = () => setVariableContextMenu(null)
-    window.addEventListener('click', dismiss, { once: true })
-    return () => window.removeEventListener('click', dismiss)
-  }, [variableContextMenu])
+  useWorkspaceUiEffects({
+    toast,
+    setToast,
+    sidebarResizing,
+    setSidebarWidth,
+    setSidebarResizing,
+    tableContextMenuOpen: Boolean(tableContextMenu),
+    setTableContextMenu,
+    variableContextMenuOpen: Boolean(variableContextMenu),
+    setVariableContextMenu,
+  })
 
   // โ”€โ”€ Undo / Redo functions โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€
-
-  function pushHistory() {
-    const snapshot = {
-      tables: JSON.parse(JSON.stringify(_latestTables.current)),
-      folders: JSON.parse(JSON.stringify(_latestFolders.current)),
-    }
-    _historyStack.current = _historyStack.current.slice(0, _historyIdx.current + 1)
-    _historyStack.current.push(snapshot)
-    if (_historyStack.current.length > 50) {
-      _historyStack.current.shift()
-    } else {
-      _historyIdx.current++
-    }
-  }
-
-  // Refs so the keyboard handler (mounted once) always calls the latest version
-  const _handleUndoRef = useRef(null)
-  const _handleRedoRef = useRef(null)
-
-  _handleUndoRef.current = function handleUndo() {
-    if (_historyIdx.current <= 0) return
-    _historyIdx.current--
-    const snap = _historyStack.current[_historyIdx.current]
-    setTables(snap.tables)
-    setFolders(snap.folders)
-    setActiveTableId(prev => snap.tables.find(t => t.id === prev) ? prev : (snap.tables[0]?.id ?? ''))
-  }
-
-  _handleRedoRef.current = function handleRedo() {
-    if (_historyIdx.current >= _historyStack.current.length - 1) return
-    _historyIdx.current++
-    const snap = _historyStack.current[_historyIdx.current]
-    setTables(snap.tables)
-    setFolders(snap.folders)
-    setActiveTableId(prev => snap.tables.find(t => t.id === prev) ? prev : (snap.tables[0]?.id ?? ''))
-  }
-
-  useEffect(() => {
-    function onKeyDown(e) {
-      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return
-      if (e.ctrlKey && !e.shiftKey && e.key === 'z') {
-        e.preventDefault()
-        _handleUndoRef.current?.()
-      } else if ((e.ctrlKey && e.shiftKey && e.key === 'Z') || (e.ctrlKey && e.key === 'y')) {
-        e.preventDefault()
-        _handleRedoRef.current?.()
-      }
-    }
-    window.addEventListener('keydown', onKeyDown)
-    return () => window.removeEventListener('keydown', onKeyDown)
-  }, [])
 
   // โ”€โ”€ File loading โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€
 
@@ -767,18 +524,15 @@ export default function App() {
     setLoadPct(0)
     setError(null)
     try {
-      const isLight = file.size > LIGHT_LOAD_THRESHOLD_BYTES
-      setLightLoadMode(isLight)
-      const parsed = await parseSav(file, {
+      const { dataset: labeled, lightLoadMode } = await loadSavDatasetFromFile(file, {
         onProgress: (phase, pct) => {
           setLoadPhase(phase as 'variables' | 'cases')
           setLoadPct(pct)
         },
-        lightMode: isLight,
       })
-      const labeled = applyValueLabels(parsed)
+      setLightLoadMode(lightLoadMode)
       if (handle) {
-        rememberSavFileHandle(handle)
+        void rememberSavFileHandle({ fileName: file.name }, handle)
       }
       setDataset(labeled)
       setShowLanding(false)
@@ -790,13 +544,14 @@ export default function App() {
 
         const { restoreAllSettings } = await loadSettingsIOModule()
         const restored = restoreAllSettings(allSettings, labeled, pendingSourceIntent, currentSourceMappings)
-        setTables(restored.tables.map((t, idx) => ({ ...newTable(idx + 1, t.folderId), ...t })))
+        const nextTables = restored.tables.map((t, idx) => ({ ...newTable(idx + 1, t.folderId), ...t }))
+        setTables(nextTables)
         setFolders(restored.folders ?? [])
         setSettings(s => ({ ...s, ...restored.output }))
-        setVariableOverrides(restored.variableOverrides ?? {})
+        setVariableOverrides((restored.variableOverrides ?? {}) as Record<string, VariableOverride>)
         setCustomMrsets(restored.customMrsets ?? [])
         setCurrentSourceMappings(restored.sourceMappings ?? [])
-        setActiveTableId(restored.tables[0]?.id ?? '')
+        setActiveTableId(nextTables[0]?.id ?? '')
         setActiveTab('design')
       }
     } catch (err) {
@@ -808,365 +563,83 @@ export default function App() {
     }
   }, [pendingSourceIntent, currentSourceMappings])
 
-  const openSavFile = useCallback(async () => {
-    try {
-      if (supportsFileSystemAccess()) {
-        const result = await pickSavFileViaSystem()
-        if (!result) return
-        await loadFile(result.file, result.handle)
-      } else {
-        const input = document.createElement('input')
-        input.type = 'file'
-        input.accept = '.sav'
-        input.onchange = async () => {
-          const file = input.files?.[0]
-          if (file) await loadFile(file)
-        }
-        input.click()
-      }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
-    }
-  }, [loadFile])
-
-  const { getRootProps: getLandingDropProps, getInputProps: getLandingInputProps, isDragActive: isLandingDragActive } = useDropzone({
-    onDrop: (files: File[]) => {
-      const file = files[0]
-      if (file) loadFile(file)
-    },
-    accept: { 'application/octet-stream': ['.sav'] },
-    noClick: false,
-    multiple: false,
+  const {
+    getLandingDropProps,
+    getLandingInputProps,
+    isLandingDragActive,
+    openSavFile,
+  } = useSavFileOpen({
+    loadFile,
+    setError,
   })
-
-  const handleFileDrop = useCallback((files: File[]) => {
-    const file = files[0]
-    if (file) loadFile(file)
-  }, [loadFile])
 
   // โ”€โ”€ Table operations โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€
 
-  const addTable = useCallback((folderId: string | null = null) => {
-    pushHistory()
-    const idx = tables.length + 1
-    const t = newTable(idx, folderId)
-    setTables(prev => [...prev, t])
-    setActiveTableId(t.id)
-    setLastSelectedTableId(t.id)
-  }, [tables.length])
-
-  const createTablesFromVariables = useCallback((names: Iterable<string>, folderId: string | null = null) => {
-    const uniqueNames = [...new Set(names)].filter(Boolean)
-    if (uniqueNames.length === 0) return
-    pushHistory()
-
-    const orderedNames = variableCatalog
-      ? variableCatalog.list.filter(variable => uniqueNames.includes(variable.name)).map(variable => variable.name)
-      : uniqueNames
-
-    if (orderedNames.length === 0) return
-
-    setTables(prev => {
-      const next = [...prev]
-      const created = orderedNames.map((name, index) => ({
-        ...newTable(next.length + index + 1, folderId),
-        name,
-        rowVar: joinAxisSpec([[name]]),
-      }))
-      next.push(...created)
-
-      const lastCreated = created[created.length - 1]
-      if (lastCreated) {
-        setActiveTableId(lastCreated.id)
-        setLastSelectedTableId(lastCreated.id)
-      }
-
-      return next
-    })
-  }, [variableCatalog])
-
-  const handleTableClick = useCallback((id: string, options?: { shiftKey?: boolean; metaKey?: boolean; ctrlKey?: boolean }) => {
-    setActiveTableId(id)
-    setLastSelectedTableId(id)
-    if (options?.shiftKey && lastSelectedTableId) {
-      const ids = tables.map(t => t.id)
-      const from = ids.indexOf(lastSelectedTableId)
-      const to = ids.indexOf(id)
-      const range = ids.slice(Math.min(from, to), Math.max(from, to) + 1)
-      setSelectedIds(prev => {
-        const next = new Set(prev)
-        range.forEach(rid => next.add(rid))
-        return next
-      })
-    } else if (options?.metaKey || options?.ctrlKey) {
-      setSelectedIds(prev => {
-        const next = new Set(prev)
-        if (next.has(id)) next.delete(id)
-        else next.add(id)
-        return next
-      })
-    } else {
-      setSelectedIds(new Set())
-    }
-  }, [tables, lastSelectedTableId])
-
-  const handleTableDelete = useCallback((id: string) => {
-    pushHistory()
-    setTables(prev => {
-      const next = prev.filter(t => t.id !== id)
-      if (next.length === 0) {
-        const t = newTable(1)
-        setActiveTableId(t.id)
-        return [t]
-      }
-      if (activeTableId === id) {
-        setActiveTableId(next[0].id)
-      }
-      return next
-    })
-    setSelectedIds(prev => { const next = new Set(prev); next.delete(id); return next })
-  }, [activeTableId])
-
-  const handleTableRename = useCallback((id: string, name: string) => {
-    setTables(prev => prev.map(t => t.id === id ? { ...t, name } : t))
-  }, [])
-
-  const handleTableDuplicate = useCallback((id: string) => {
-    pushHistory()
-    setTables(prev => {
-      const idx = prev.findIndex(t => t.id === id)
-      if (idx < 0) return prev
-      const src = prev[idx]
-      const dup: TableDef = { ...src, id: crypto.randomUUID(), name: `${src.name} Copy`, result: null }
-      const next = [...prev]
-      next.splice(idx + 1, 0, dup)
-      setActiveTableId(dup.id)
-      return next
-    })
-  }, [])
-
-  const handleTableCopy = useCallback((id: string) => {
-    const inSelection = selectedIds.has(id) && selectedIds.size > 1
-    if (inSelection) {
-      const ordered = tables.filter(t => selectedIds.has(t.id))
-      setCopiedTablesBuffer(ordered)
-    } else {
-      const src = tables.find(t => t.id === id)
-      if (src) setCopiedTablesBuffer([src])
-    }
-  }, [tables, selectedIds])
-
-  const handleTablePasteAfter = useCallback((id: string) => {
-    if (copiedTablesBuffer.length === 0) return
-    pushHistory()
-    setTables(prev => {
-      const idx = prev.findIndex(t => t.id === id)
-      const inserts = copiedTablesBuffer.map(t => ({ ...t, id: crypto.randomUUID(), result: null }))
-      if (idx < 0) return [...prev, ...inserts]
-      return [...prev.slice(0, idx + 1), ...inserts, ...prev.slice(idx + 1)]
-    })
-  }, [copiedTablesBuffer])
-
-  const handleTableToggleSelect = useCallback((id: string, options?: { shiftKey?: boolean; metaKey?: boolean; ctrlKey?: boolean }) => {
-    if (options?.shiftKey && lastSelectedTableId) {
-      const ids = tables.map(t => t.id)
-      const from = ids.indexOf(lastSelectedTableId)
-      const to = ids.indexOf(id)
-      const range = ids.slice(Math.min(from, to), Math.max(from, to) + 1)
-      setSelectedIds(prev => {
-        const next = new Set(prev)
-        range.forEach(rid => next.add(rid))
-        return next
-      })
-    } else {
-      setSelectedIds(prev => {
-        const next = new Set(prev)
-        if (next.has(id)) next.delete(id)
-        else next.add(id)
-        return next
-      })
-    }
-    setLastSelectedTableId(id)
-  }, [tables, lastSelectedTableId])
-
-  const handleTableContextMenu = useCallback((e: React.MouseEvent, id: string) => {
-    e.preventDefault()
-    setTableContextMenu({ x: e.clientX, y: e.clientY, targetId: id })
-  }, [])
-
-  const handleTableDragStart = useCallback((id: string) => {
-    dragTableRef.current = id
-  }, [])
-
-  const handleTableDropToRow = useCallback((targetId: string) => {
-    const srcId = dragTableRef.current
-    if (!srcId || srcId === targetId) return
-    setTables(prev => {
-      const srcIdx = prev.findIndex(t => t.id === srcId)
-      const tgtIdx = prev.findIndex(t => t.id === targetId)
-      if (srcIdx < 0 || tgtIdx < 0) return prev
-      const next = [...prev]
-      const [moved] = next.splice(srcIdx, 1)
-      next.splice(tgtIdx, 0, moved)
-      return next
-    })
-    dragTableRef.current = null
-  }, [])
-
-  const handleMoveTableToFolder = useCallback((id: string, folderId: string | null) => {
-    setTables(prev => prev.map(t => t.id === id ? { ...t, folderId } : t))
-  }, [])
+  const {
+    copiedTablesBuffer,
+    addTable,
+    createTablesFromVariables,
+    handleTableClick,
+    handleTableDelete,
+    handleTableRename,
+    handleTableDuplicate,
+    duplicateSelectedTables,
+    handleTableCopy,
+    handleTablePasteAfter,
+    handleTableToggleSelect,
+    handleTableContextMenu,
+    handleTableDragStart,
+    handleTableDropToRow,
+    handleMoveTableToFolder,
+    pasteTables,
+  } = useTableActions({
+    tables,
+    setTables,
+    activeTableId,
+    setActiveTableId,
+    selectedIds,
+    setSelectedIds,
+    lastSelectedTableId,
+    setLastSelectedTableId,
+    setTableContextMenu,
+    variableCatalog,
+    pushHistory,
+  })
 
   // โ”€โ”€ Folder operations โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€
 
-  const addFolder = useCallback(() => {
-    const folder: FolderDef = { id: crypto.randomUUID(), name: 'New Folder', expanded: true }
-    setFolders(prev => [...prev, folder])
-  }, [])
-
-  const renameFolder = useCallback((id: string, name: string) => {
-    setFolders(prev => prev.map(f => f.id === id ? { ...f, name } : f))
-  }, [])
-
-  const deleteFolder = useCallback((id: string) => {
-    pushHistory()
-    setFolders(prev => prev.filter(f => f.id !== id))
-    setTables(prev => prev.map(t => t.folderId === id ? { ...t, folderId: null } : t))
-  }, [])
-
-  const toggleFolderExpanded = useCallback((id: string) => {
-    setFolders(prev => prev.map(f => f.id === id ? { ...f, expanded: !f.expanded } : f))
-  }, [])
+  const {
+    addFolder,
+    deleteFolder,
+    toggleFolderExpanded,
+  } = useFolderActions({
+    setFolders,
+    setTables,
+    pushHistory,
+  })
 
   // โ”€โ”€ Axis operations โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€
 
-  const handleDropTop = useCallback((
-    mode: 'add' | 'nest',
-    target: { branchIndex?: number; placement?: 'before' | 'after'; targetVar?: string | null; folderNames?: string[] },
-  ) => {
-    const names =
-      target.folderNames && target.folderNames.length > 0 ? target.folderNames : dragVarsRef.current
-    if (names.length === 0 || !activeTable) return
-    pushHistory()
-    const nestSelected = mode === 'nest' ? (target.targetVar ?? null) : null
-    setTables(prev => prev.map(t => {
-      if (t.id !== activeTableId) return t
-      let spec = parseAxisSpec(t.colVar)
-      for (const name of names) {
-        spec = insertVarByMode(spec, name, mode, nestSelected)
-      }
-      return { ...t, colVar: joinAxisSpec(spec) }
-    }))
-  }, [activeTable, activeTableId])
-
-  const handleDropSide = useCallback((
-    mode: 'add' | 'nest',
-    target: { branchIndex?: number; placement?: 'before' | 'after'; targetVar?: string | null; folderNames?: string[] },
-  ) => {
-    const names =
-      target.folderNames && target.folderNames.length > 0 ? target.folderNames : dragVarsRef.current
-    if (names.length === 0 || !activeTable) return
-    pushHistory()
-    const nestSelected = mode === 'nest' ? (target.targetVar ?? null) : null
-    setTables(prev => prev.map(t => {
-      if (t.id !== activeTableId) return t
-      let spec = parseAxisSpec(t.rowVar)
-      for (const name of names) {
-        spec = insertVarByMode(spec, name, mode, nestSelected)
-      }
-      return { ...t, rowVar: joinAxisSpec(spec) }
-    }))
-  }, [activeTable, activeTableId])
-
-  const handleRemoveTop = useCallback((name: string, occurrence?: { branchIndex: number; itemIndex: number }) => {
-    pushHistory()
-    setTables(prev => prev.map(t => {
-      if (t.id !== activeTableId) return t
-      const spec = parseAxisSpec(t.colVar)
-      const next = removeVarFromAxis(spec, name, occurrence)
-      return { ...t, colVar: joinAxisSpec(next) }
-    }))
-  }, [activeTableId])
-
-  const handleRemoveSide = useCallback((name: string, occurrence?: { branchIndex: number; itemIndex: number }) => {
-    pushHistory()
-    setTables(prev => prev.map(t => {
-      if (t.id !== activeTableId) return t
-      const spec = parseAxisSpec(t.rowVar)
-      const next = removeVarFromAxis(spec, name, occurrence)
-      return { ...t, rowVar: joinAxisSpec(next) }
-    }))
-  }, [activeTableId])
-
-  const handleReorderTop = useCallback((
-    source: { branchIndex: number; itemIndex: number },
-    target: { branchIndex: number; itemIndex: number; placement?: 'before' | 'after' },
-  ) => {
-    setTables(prev => prev.map(t => {
-      if (t.id !== activeTableId) return t
-      const spec = parseAxisSpec(t.colVar)
-      const next = moveAxisOccurrenceToTarget(spec, source, target)
-      return { ...t, colVar: joinAxisSpec(next) }
-    }))
-  }, [activeTableId])
-
-  const handleReorderSide = useCallback((
-    source: { branchIndex: number; itemIndex: number },
-    target: { branchIndex: number; itemIndex: number; placement?: 'before' | 'after' },
-  ) => {
-    setTables(prev => prev.map(t => {
-      if (t.id !== activeTableId) return t
-      const spec = parseAxisSpec(t.rowVar)
-      const next = moveAxisOccurrenceToTarget(spec, source, target)
-      return { ...t, rowVar: joinAxisSpec(next) }
-    }))
-  }, [activeTableId])
-
-  const handleMoveTopUp = useCallback((name: string) => {
-    setTables(prev => prev.map(t => {
-      if (t.id !== activeTableId) return t
-      const spec = parseAxisSpec(t.colVar)
-      const next = moveVarInAxis(spec, name, -1)
-      return { ...t, colVar: joinAxisSpec(next) }
-    }))
-  }, [activeTableId])
-
-  const handleMoveTopDown = useCallback((name: string) => {
-    setTables(prev => prev.map(t => {
-      if (t.id !== activeTableId) return t
-      const spec = parseAxisSpec(t.colVar)
-      const next = moveVarInAxis(spec, name, 1)
-      return { ...t, colVar: joinAxisSpec(next) }
-    }))
-  }, [activeTableId])
-
-  const handleMoveSideUp = useCallback((name: string) => {
-    setTables(prev => prev.map(t => {
-      if (t.id !== activeTableId) return t
-      const spec = parseAxisSpec(t.rowVar)
-      const next = moveVarInAxis(spec, name, -1)
-      return { ...t, rowVar: joinAxisSpec(next) }
-    }))
-  }, [activeTableId])
-
-  const handleMoveSideDown = useCallback((name: string) => {
-    setTables(prev => prev.map(t => {
-      if (t.id !== activeTableId) return t
-      const spec = parseAxisSpec(t.rowVar)
-      const next = moveVarInAxis(spec, name, 1)
-      return { ...t, rowVar: joinAxisSpec(next) }
-    }))
-  }, [activeTableId])
-
-  const handleClearTop = useCallback(() => {
-    pushHistory()
-    setTables(prev => prev.map(t => t.id === activeTableId ? { ...t, colVar: null } : t))
-  }, [activeTableId])
-
-  const handleClearSide = useCallback(() => {
-    pushHistory()
-    setTables(prev => prev.map(t => t.id === activeTableId ? { ...t, rowVar: null } : t))
-  }, [activeTableId])
+  const {
+    handleDropTop,
+    handleDropSide,
+    handleRemoveTop,
+    handleRemoveSide,
+    handleReorderTop,
+    handleReorderSide,
+    handleMoveTopUp,
+    handleMoveTopDown,
+    handleMoveSideUp,
+    handleMoveSideDown,
+    handleClearTop,
+    handleClearSide,
+  } = useTableDesignerActions({
+    activeTableId,
+    activeTableExists: Boolean(activeTable),
+    setTables,
+    dragVarsRef,
+    pushHistory,
+  })
 
   // โ”€โ”€ Table name โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€
 
@@ -1176,731 +649,214 @@ export default function App() {
 
   // โ”€โ”€ Filter operations โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€
 
-  const applyFilterToEditingTables = useCallback((mutate: (filter: TableFilterSpec) => TableFilterSpec) => {
-    if (!activeTableId) return
-
-    setTables(prev => {
-      const active = prev.find(table => table.id === activeTableId)
-      if (!active) return prev
-
-      const targetIds = new Set(selectedIds.size > 0 ? [activeTableId, ...selectedIds] : [activeTableId])
-      const nextFilter = mutate(cloneTableFilter(active.filter))
-
-      return prev.map(table =>
-        targetIds.has(table.id)
-          ? { ...table, filter: cloneTableFilter(nextFilter) }
-          : table,
-      )
-    })
-  }, [activeTableId, selectedIds])
-
-  const handleUpdateFilterDescription = useCallback((description: string) => {
-    applyFilterToEditingTables(filter => ({ ...filter, description }))
-  }, [applyFilterToEditingTables])
-
-  const handleUpdateRootJoin = useCallback((join: FilterJoin) => {
-    applyFilterToEditingTables(filter => ({ ...filter, rootJoin: join }))
-  }, [applyFilterToEditingTables])
-
-  const handleAddGroup = useCallback(() => {
-    const group: TableFilterGroup = {
-      id: crypto.randomUUID(),
-      join: 'all',
-      conditions: [],
-    }
-    applyFilterToEditingTables(filter => ({ ...filter, groups: [...filter.groups, group] }))
-  }, [applyFilterToEditingTables])
-
-  const handleClearFilter = useCallback(() => {
-    pushHistory()
-    applyFilterToEditingTables(() => emptyTableFilter())
-  }, [applyFilterToEditingTables])
-
-  const handleDropFilterVariable = useCallback((groupId?: string | null, folderNames?: string[] | null) => {
-    const names =
-      folderNames && folderNames.length > 0 ? folderNames : dragVarsRef.current
-    if (names.length === 0) return
-    applyFilterToEditingTables(filter => {
-      const nextFilter = cloneTableFilter(filter)
-      const newConditions = names.map(
-        (variableName): TableFilterCondition => ({
-          id: crypto.randomUUID(),
-          variableName,
-          operator: 'in',
-          values: [],
-          value: '',
-          secondaryValue: '',
-        }),
-      )
-      if (groupId) {
-        nextFilter.groups = nextFilter.groups.map(g =>
-          g.id === groupId ? { ...g, conditions: [...g.conditions, ...newConditions] } : g,
-        )
-      } else {
-        const newGroup: TableFilterGroup = {
-          id: crypto.randomUUID(),
-          join: 'all',
-          conditions: newConditions,
-        }
-        nextFilter.groups = [...nextFilter.groups, newGroup]
-      }
-      return nextFilter
-    })
-  }, [applyFilterToEditingTables])
-
-  const handleUpdateGroupJoin = useCallback((groupId: string, join: FilterJoin) => {
-    applyFilterToEditingTables(filter => ({
-      ...filter,
-      groups: filter.groups.map(g => g.id === groupId ? { ...g, join } : g),
-    }))
-  }, [applyFilterToEditingTables])
-
-  const handleRemoveGroup = useCallback((groupId: string) => {
-    applyFilterToEditingTables(filter => ({
-      ...filter,
-      groups: filter.groups.filter(g => g.id !== groupId),
-    }))
-  }, [applyFilterToEditingTables])
-
-  const handleUpdateCondition = useCallback((groupId: string, conditionId: string, patch: Partial<TableFilterCondition>) => {
-    applyFilterToEditingTables(filter => ({
-      ...filter,
-      groups: filter.groups.map(g =>
-        g.id === groupId
-          ? { ...g, conditions: g.conditions.map(c => c.id === conditionId ? { ...c, ...patch } : c) }
-          : g,
-      ),
-    }))
-  }, [applyFilterToEditingTables])
-
-  const handleRemoveCondition = useCallback((groupId: string, conditionId: string) => {
-    applyFilterToEditingTables(filter => ({
-      ...filter,
-      groups: filter.groups.map(g =>
-        g.id === groupId
-          ? { ...g, conditions: g.conditions.filter(c => c.id !== conditionId) }
-          : g,
-      ),
-    }))
-  }, [applyFilterToEditingTables])
+  const {
+    applyFilterToEditingTables,
+    handleUpdateFilterDescription,
+    handleUpdateRootJoin,
+    handleAddGroup,
+    handleClearFilter,
+    handleDropFilterVariable,
+    handleUpdateGroupJoin,
+    handleRemoveGroup,
+    handleUpdateCondition,
+    handleRemoveCondition,
+  } = useFilterActions({
+    activeTableId,
+    selectedIds,
+    setTables,
+    dragVarsRef,
+    pushHistory,
+  })
 
   // โ”€โ”€ Run / export โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€
 
-  const runTable = useCallback(async (tableId: string) => {
-    if (!dataset || !variableCatalog) return
-    const table = tables.find(t => t.id === tableId)
-    if (!table) return
-
-    let filteredCases = dataset.cases
-    if (hasActiveFilter(table.filter)) {
-      const runtime = {
-        getValueKeys: (varName: string, rawCase: Record<string, string | number>) => {
-          const grouped = variableCatalog.groupedByName.get(varName)
-          if (grouped) {
-            return grouped.options.map(opt => {
-              const raw = rawCase[opt.memberName]
-              return normalizeCode(raw)
-            }).filter(Boolean)
-          }
-          // dataset.cases stores label text (from applyValueLabels), not raw codes.
-          // Reverse-map the label back to its code so it matches condition.values.
-          const item = variableCatalog.byName.get(varName)
-          if (item && Object.keys(item.valueLabels).length > 0) {
-            const labelStr = rawCase[varName] == null ? '' : String(rawCase[varName])
-            const code = Object.entries(item.valueLabels).find(([, v]) => v === labelStr)?.[0]
-            return code ? [code] : [normalizeCode(rawCase[varName])].filter(Boolean)
-          }
-          return [normalizeCode(rawCase[varName])].filter(Boolean)
-        },
-        getTextValue: (varName: string, rawCase: Record<string, string | number>) => {
-          const val = rawCase[varName]
-          return val == null ? '' : String(val)
-        },
-        getNumericValue: (varName: string, rawCase: Record<string, string | number>) => {
-          const val = rawCase[varName]
-          const num = Number(val)
-          return Number.isFinite(num) ? num : null
-        },
-      }
-      filteredCases = dataset.cases.filter(rawCase => {
-        const labeled = Object.fromEntries(Object.entries(rawCase).map(([k, v]) => [k, String(v)]))
-        return evaluateFilterSpec(table.filter, rawCase, labeled, runtime)
-      })
-    }
-
-    const colSpec = parseAxisSpec(table.colVar)
-    const rowSpec = parseAxisSpec(table.rowVar)
-    const colVars = flattenAxisSpec(colSpec)
-    const rowVars = flattenAxisSpec(rowSpec)
-
-    // Check if any variable is a grouped MA
-    const allVars = [...new Set([...colVars, ...rowVars])]
-    const hasGrouped = allVars.some(v => variableCatalog.groupedByName.has(v))
-
-    let result
-    if (hasGrouped) {
-      result = await computeGroupedCrosstabAsync(
-        filteredCases,
-        colSpec,
-        rowSpec,
-        variableCatalog,
-        variableOverrides,
-        settings,
-      )
-    } else {
-      result = await computeCrosstabAsync(filteredCases, colSpec, rowSpec, variableCatalog, variableOverrides, settings)
-    }
-
-    setTables(prev => prev.map(t => t.id === tableId ? { ...t, result } : t))
-  }, [dataset, variableCatalog, tables, variableOverrides, settings])
-
-  const runAllTables = useCallback(async () => {
-    if (!dataset || !variableCatalog || runningAll) return
-    setRunningAll(true)
-    try {
-      let count = 0
-      for (const table of tables) {
-        if (!table.rowVar && !table.colVar) continue
-        await runTable(table.id)
-        count++
-        if (count % BATCH_YIELD_EVERY === 0) await yieldToBrowser()
-      }
-    } finally {
-      setRunningAll(false)
-    }
-  }, [dataset, variableCatalog, tables, runningAll, runTable])
+  const { runTable, runAllTables } = useTableRunActions({
+    dataset,
+    variableCatalog,
+    tables,
+    variableOverrides,
+    settings,
+    runningAll,
+    setTables,
+    setRunningAll,
+  })
 
   const handleGenerate = useCallback(() => {
     if (activeTableId) runTable(activeTableId)
   }, [activeTableId, runTable])
 
-  useEffect(() => {
-    if (!dataset || !variableCatalog) {
-      ;(window as Record<string, unknown>).__cxGetFilteredCases = null
-      return
-    }
-    ;(window as Record<string, unknown>).__cxGetFilteredCases = (tableId: string) => {
-      const table = tables.find(t => t.id === tableId)
-      if (!table || !hasActiveFilter(table.filter)) return null
-      const runtime = {
-        getValueKeys: (varName: string, rawCase: Record<string, string | number>) => {
-          const grouped = variableCatalog.groupedByName.get(varName)
-          if (grouped) {
-            return grouped.options.map(opt => normalizeCode(rawCase[opt.memberName])).filter(Boolean)
-          }
-          const item = variableCatalog.byName.get(varName)
-          if (item && Object.keys(item.valueLabels).length > 0) {
-            const labelStr = rawCase[varName] == null ? '' : String(rawCase[varName])
-            const code = Object.entries(item.valueLabels).find(([, v]) => v === labelStr)?.[0]
-            return code ? [code] : [normalizeCode(rawCase[varName])].filter(Boolean)
-          }
-          return [normalizeCode(rawCase[varName])].filter(Boolean)
-        },
-        getTextValue: (varName: string, rawCase: Record<string, string | number>) => {
-          const val = rawCase[varName]
-          return val == null ? '' : String(val)
-        },
-        getNumericValue: (varName: string, rawCase: Record<string, string | number>) => {
-          const val = rawCase[varName]
-          const num = Number(val)
-          return Number.isFinite(num) ? num : null
-        },
-      }
-      return dataset.cases.filter(rawCase => {
-        const labeled = Object.fromEntries(Object.entries(rawCase).map(([k, v]) => [k, String(v)]))
-        return evaluateFilterSpec(table.filter, rawCase, labeled, runtime)
-      })
-    }
-  }, [dataset, variableCatalog, tables])
+  useFilteredCasesBridge({ dataset, variableCatalog, tables })
 
   const activeResult = activeTable?.result ?? null
 
   const activeHideTotal = useMemo(() => {
-    const checkName = (name: string | null | undefined) => {
-      if (!name) return false
-      if (gridHideTotalVars.has(name)) return true
-      if (!dataset) return false
-      const v = dataset.variables.find(vv => vv.name === name || (vv as Record<string, unknown>)['longName'] === name) as Record<string, unknown> | undefined
-      return !!(v && v['isGridUserCreated'] && v['hideTotal'])
-    }
-    if (activeResult) {
-      return checkName(activeResult.rowVar) || checkName(activeResult.colVar)
-    }
-    if (!activeTable) return false
-    return flattenAxisSpec(parseAxisSpec(activeTable.rowVar)).some(checkName) ||
-           flattenAxisSpec(parseAxisSpec(activeTable.colVar)).some(checkName)
+    return getActiveHideTotal(dataset, activeTable, activeResult, gridHideTotalVars)
   }, [dataset, activeTable, activeResult, gridHideTotalVars])
 
-  const activeConfig = useMemo(() => ({ ...settings, hideTotal: activeHideTotal }), [settings, activeHideTotal])
+  const activeConfig = useMemo(() => buildActiveConfig(settings, activeHideTotal), [settings, activeHideTotal])
 
-  const handleExportTable = useCallback(async () => {
-    if (!activeTable?.result || !dataset) return
-    setExporting(true)
-    try {
-      const { exportTableToExcel } = await loadExcelExportModule()
-      await exportTableToExcel(activeTable, dataset, variableOverrides, activeConfig)
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
-    } finally {
-      setExporting(false)
-    }
-  }, [activeTable, dataset, variableOverrides, activeConfig])
+  const { handleExportTable } = useExportActions({
+    activeTable,
+    dataset,
+    variableOverrides,
+    activeConfig,
+    setExporting,
+    setError,
+    setToast,
+    loadExcelExportModule,
+  })
 
   // โ”€โ”€ Settings โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€
 
-  const handleSaveSettings = useCallback(async () => {
-    try {
-      const { buildAllSettings, exportSettingsToExcel } = await loadSettingsIOModule()
-      const allSettings = buildAllSettings({
-        tables,
-        folders,
-        settings,
-        variableOverrides,
-        customMrsets,
-        currentSourceMappings,
-        dataset,
-        settingsReadonly,
-        settingsLockReleased,
-        currentSettingsHandle,
-        loadedSettingsName,
-      })
-      if (currentSettingsHandle && !settingsReadonly) {
-        await saveSettingsToFileHandle(currentSettingsHandle, allSettings)
-        setToast('Settings saved')
-      } else {
-        await exportSettingsToExcel(allSettings, loadedSettingsName ?? 'crossify-settings')
-      }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
-    }
-  }, [tables, folders, settings, variableOverrides, customMrsets, currentSourceMappings, dataset, settingsReadonly, settingsLockReleased, currentSettingsHandle, loadedSettingsName])
+  const { handleSaveSettings, handleLoadSettingsFile } = useSettingsActions({
+    tables,
+    folders,
+    settings,
+    variableOverrides,
+    customMrsets,
+    currentSourceMappings,
+    dataset,
+    settingsReadonly,
+    settingsLockReleased,
+    currentSettingsHandle,
+    loadedSettingsName,
+    pendingSettingsRestoreRef,
+    loadSettingsIOModule,
+    loadFile,
+    getSettingsSessionId,
+    setTables,
+    setFolders,
+    setSettings,
+    setVariableOverrides,
+    setCustomMrsets,
+    setCurrentSourceMappings,
+    setCurrentSettingsHandle,
+    setLoadedSettingsName,
+    setSettingsReadonly,
+    setSettingsReadonlyLock,
+    setPendingSourceDataset,
+    setPendingSourceIntent,
+    setActiveTableId,
+    setActiveTab,
+    setToast,
+    setError,
+  })
 
-  const handleLoadSettingsFile = useCallback(async (file: File, handle?: FileSystemFileHandle) => {
-    try {
-      const { parseSettingsFromExcel } = await loadSettingsIOModule()
-      const allSettings = await parseSettingsFromExcel(file)
+  const {
+    cloudConfigured,
+    cloudUserEmail,
+    cloudAutosave,
+    cloudSaving,
+    lastCloudSavedAt,
+    handleCloudSignIn,
+    handleCloudSignOut,
+    handleSaveCloudSettings,
+    handleLoadCloudSettings,
+    handleToggleCloudAutosave,
+  } = useCloudSettingsActions({
+    tables,
+    folders,
+    settings,
+    variableOverrides,
+    customMrsets,
+    currentSourceMappings,
+    dataset,
+    settingsReadonly,
+    settingsLockReleased,
+    currentSettingsHandle,
+    loadedSettingsName,
+    pendingSettingsRestoreRef,
+    loadSettingsIOModule,
+    setTables,
+    setFolders,
+    setSettings,
+    setVariableOverrides,
+    setCustomMrsets,
+    setCurrentSourceMappings,
+    setActiveTableId,
+    setActiveTab,
+    setToast,
+    setError,
+  })
 
-      if (allSettings.sourceDataset && !dataset) {
-        pendingSettingsRestoreRef.current = allSettings
-        if (handle) {
-          setCurrentSettingsHandle(handle)
-          setLoadedSettingsName(file.name.replace(/\.xlsx$/i, ''))
-        }
-        const restored = await restoreSavFileFromSource(allSettings.sourceDataset, allSettings.sourceMappings ?? [])
-        if (restored) {
-          setPendingSourceDataset(null)
-          await loadFile(restored.file, restored.handle)
-        } else {
-          setPendingSourceDataset(allSettings.sourceDataset)
-          setPendingSourceIntent('match')
-        }
-        return
-      }
+  const { handleBatchExportFiles } = useBatchExportActions({
+    dataset,
+    variableCatalog,
+    currentSourceMappings,
+    settings,
+    beginBatchExport,
+    finishBatchExport,
+    loadSettingsIOModule,
+    loadExcelExportModule,
+  })
 
-      const { restoreAllSettings } = await loadSettingsIOModule()
-      const restored = restoreAllSettings(allSettings, dataset, 'match', currentSourceMappings)
-      setTables(restored.tables.map((t, idx) => ({ ...newTable(idx + 1, t.folderId), ...t })))
-      setFolders(restored.folders ?? [])
-      setSettings(s => ({ ...s, ...restored.output }))
-      setVariableOverrides(restored.variableOverrides ?? {})
-      setCustomMrsets(restored.customMrsets ?? [])
-      setCurrentSourceMappings(restored.sourceMappings ?? [])
-      if (handle) {
-        setCurrentSettingsHandle(handle)
-        setLoadedSettingsName(file.name.replace(/\.xlsx$/i, ''))
-        setSettingsReadonly(allSettings.activeLock?.status === 'ACTIVE' && allSettings.activeLock.sessionId !== getSettingsSessionId())
-        setSettingsReadonlyLock(allSettings.activeLock ?? null)
-      }
-      setActiveTableId(restored.tables[0]?.id ?? '')
-      setActiveTab('design')
-      setToast('Settings loaded')
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
-    }
-  }, [dataset, currentSourceMappings, loadFile])
+  const {
+    rebuildVariableEditorRows,
+    openVariableEditor,
+    saveVariableEditor,
+    similarVarNames,
+    filteredSimilarVarNames,
+    saveAndApplyToVars,
+    toggleCodeSort,
+    handleVariableRowClick,
+    createVariableNetGroup,
+    removeVariableNetGroup,
+    removeSelectedCodesFromGroups,
+    confirmVariableNetGroup,
+    applyScaleSummaryPreset,
+  } = useVariableEditorActions({
+    variableCatalog,
+    dataset,
+    variableOverrides,
+    setVariableOverrides,
+    editingVariableName,
+    setEditingVariableName,
+    variableEditorRows,
+    setVariableEditorRows,
+    codeEditorRows,
+    selectedVariableRowKeys,
+    setSelectedVariableRowKeys,
+    lastSelectedVariableIndex,
+    setLastSelectedVariableIndex,
+    variableGroups,
+    setVariableGroups,
+    selectedNumericStats,
+    setSelectedNumericStats,
+    selectedScalePreset,
+    setSelectedScalePreset,
+    codeSortDirection,
+    setCodeSortDirection,
+    applyVarSearch,
+    setApplyVarSearch,
+    setApplyToVarNames,
+    pendingNetName,
+    setPendingNetName,
+    setVariableEditorTab,
+    setVariableContextMenu,
+    setShowNetNameDialog,
+    setShowScalePresetDialog,
+    setError,
+  })
 
-  const handleBatchExportFiles = useCallback(async (files: FileList) => {
-    if (!dataset) return
-    const startedAt = beginBatchExport()
-    let successCount = 0
-    let skippedCount = 0
-    try {
-      for (let i = 0; i < files.length; i++) {
-        const file = files[i]
-        try {
-          const { parseSettingsFromExcel, restoreAllSettings } = await loadSettingsIOModule()
-          const allSettings = await parseSettingsFromExcel(file)
-          const restored = restoreAllSettings(allSettings, dataset, 'match', currentSourceMappings)
-          if (restored.tables.length === 0) { skippedCount++; continue }
-          const restoredTables = restored.tables.map((t, idx) => ({ ...newTable(idx + 1, t.folderId), ...t }))
-          const ranTables = []
-          for (const table of restoredTables) {
-            if (!table.rowVar && !table.colVar) { ranTables.push(table); continue }
-            let filteredCases = dataset.cases
-            if (hasActiveFilter(table.filter)) {
-              filteredCases = dataset.cases.filter(rawCase => {
-                const labeled = Object.fromEntries(Object.entries(rawCase).map(([k, v]) => [k, String(v)]))
-                const runtime = {
-                  getValueKeys: (varName: string, rc: Record<string, string | number>) => {
-                    const grouped = variableCatalog.groupedByName.get(varName)
-                    if (grouped) return grouped.options.map(opt => normalizeCode(rc[opt.memberName])).filter(Boolean)
-                    const item = variableCatalog.byName.get(varName)
-                    if (item && Object.keys(item.valueLabels).length > 0) {
-                      const labelStr = rc[varName] == null ? '' : String(rc[varName])
-                      const code = Object.entries(item.valueLabels).find(([, v]) => v === labelStr)?.[0]
-                      return code ? [code] : [normalizeCode(rc[varName])].filter(Boolean)
-                    }
-                    return [normalizeCode(rc[varName])].filter(Boolean)
-                  },
-                  getTextValue: (varName: string, rc: Record<string, string | number>) => String(rc[varName] ?? ''),
-                  getNumericValue: (varName: string, rc: Record<string, string | number>) => { const n = Number(rc[varName]); return Number.isFinite(n) ? n : null },
-                }
-                return evaluateFilterSpec(table.filter, rawCase, labeled, runtime)
-              })
-            }
-            const colSpec = parseAxisSpec(table.colVar)
-            const rowSpec = parseAxisSpec(table.rowVar)
-            const result = await computeCrosstabAsync(filteredCases, colSpec, rowSpec, variableCatalog, restored.variableOverrides ?? {}, { ...settings, ...restored.output })
-            ranTables.push({ ...table, result })
-            await yieldToBrowser()
-          }
-          const { exportAllTablesToExcel } = await loadExcelExportModule()
-          const settingsName = file.name.replace(/\.xlsx$/i, '')
-          await exportAllTablesToExcel(ranTables, dataset, restored.variableOverrides ?? {}, { ...settings, ...restored.output }, settingsName)
-          successCount++
-        } catch {
-          skippedCount++
-        }
-      }
-    } finally {
-      const elapsedMs = Date.now() - startedAt
-      finishBatchExport({ successCount, skippedCount, elapsedMs })
-    }
-  }, [dataset, currentSourceMappings, variableCatalog, settings, beginBatchExport, finishBatchExport])
-
-  // โ”€โ”€ Variable editor โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€
-
-  const openVariableEditor = useCallback((name: string) => {
-    if (!variableCatalog || !dataset) return
-    const item = variableCatalog.byName.get(name)
-    if (!item) return
-    const override = variableOverrides[name]
-    const grouped = variableCatalog.groupedByName.get(name)
-    let baseRows: VariableEditorRow[]
-    if (grouped) {
-      const selections = getGroupedSelections(grouped, override)
-      baseRows = grouped.options.map((opt, idx) => ({
-        key: opt.memberName,
-        code: String(idx + 1),
-        label: opt.label,
-        count: dataset.cases.filter(c => {
-          const raw = c[opt.memberName]
-          const code = normalizeCode(raw)
-          return opt.selectedCodes ? [...opt.selectedCodes].includes(code) : code === '1'
-        }).length,
-        percent: 0,
-        factor: override?.weights?.[opt.memberName] ?? '',
-        rowKind: 'code' as const,
-      }))
-    } else {
-      const rawCodes = [...new Set(dataset.cases.map(c => normalizeCode(c[name])).filter(Boolean))]
-      const labelMap = item.valueLabels
-      const existingOrder = override?.order ?? []
-      // ตัวแปร numeric (#) = ไม่ใช่ string และไม่มี value labels → บังคับเรียง code น้อย→มากเสมอ
-      const isNumeric = !item.isString && Object.keys(labelMap).length === 0
-      const allCodes = isNumeric
-        ? [...rawCodes].sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }))
-        : existingOrder.length > 0
-          ? [...existingOrder, ...rawCodes.filter(c => !existingOrder.includes(c))]
-          : rawCodes.sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }))
-      const total = dataset.cases.filter(c => normalizeCode(c[name])).length
-      baseRows = allCodes.map(code => {
-        const count = dataset.cases.filter(c => normalizeCode(c[name]) === code).length
-        return {
-          key: code,
-          code,
-          label: override?.labels?.[code] ?? (labelMap[code] ? `${code}. ${labelMap[code]}` : code),
-          count,
-          percent: total > 0 ? (count / total) * 100 : 0,
-          factor: override?.weights?.[code] ?? '',
-          rowKind: 'code' as const,
-        }
-      })
-    }
-    const groups = override?.groups ?? []
-    const summaries = override?.summaries ?? []
-    const editorRows = buildVariableEditorRowsWithSummaries(baseRows, groups, summaries)
-    setVariableEditorRows(editorRows)
-    setVariableGroups(groups)
-    setSelectedNumericStats(override?.numericStats ?? ['mean'])
-    setSelectedScalePreset(override?.summaryPreset ?? null)
-    setSelectedVariableRowKeys([])
-    setLastSelectedVariableIndex(null)
-    setEditingVariableName(name)
-    setVariableEditorTab('edit')
-    setApplyVarSearch('')
-    setApplyToVarNames([])
-  }, [variableCatalog, dataset, variableOverrides])
-
-  const saveVariableEditor = useCallback((name: string, rows: VariableEditorRow[]) => {
-    const codeRows = rows.filter(r => r.rowKind === 'code' || r.rowKind == null)
-    const weights: Record<string, string> = {}
-    const labels: Record<string, string> = {}
-    codeRows.forEach(r => {
-      if (r.factor) weights[r.key] = r.factor
-      labels[r.key] = r.label
-    })
-    const summaryRows = rows.filter(r => r.rowKind === 'summary').map(r => ({
-      code: r.code,
-      label: r.label,
-      members: r.members ?? [],
-    }))
-    setVariableOverrides(prev => ({
-      ...prev,
-      [name]: {
-        order: codeRows.map(r => r.key),
-        weights,
-        labels,
-        numericStats: selectedNumericStats,
-        groups: variableGroups,
-        summaries: summaryRows,
-        summaryPreset: selectedScalePreset ?? undefined,
-      },
-    }))
-    setApplyToVarNames([])
-    setEditingVariableName(null)
-  }, [selectedNumericStats, variableGroups, selectedScalePreset])
-
-  const similarVarNames = useMemo(() => {
-    if (!editingVariableName || !variableCatalog) return []
-    return variableCatalog.list
-      .filter(item => {
-        if (item.name === editingVariableName) return false
-        return !item.isString || Object.keys(item.valueLabels ?? {}).length > 0
-      })
-      .map(item => item.name)
-  }, [editingVariableName, variableCatalog])
-
-  const filteredSimilarVarNames = useMemo(() => {
-    if (!applyVarSearch.trim()) return similarVarNames
-    const q = applyVarSearch.trim().toLowerCase()
-    return similarVarNames.filter(vn => {
-      if (vn.toLowerCase().includes(q)) return true
-      const item = variableCatalog?.byName.get(vn)
-      return !!(item?.label?.toLowerCase().includes(q) || item?.longName?.toLowerCase().includes(q))
-    })
-  }, [similarVarNames, applyVarSearch, variableCatalog])
-
-  const saveAndApplyToVars = useCallback((targetNames: string[]) => {
-    const summaryRows = variableEditorRows
-      .filter(r => r.rowKind === 'summary')
-      .map(r => ({ code: r.code, label: r.label, members: r.members ?? [] }))
-    setVariableOverrides(prev => {
-      const next = { ...prev }
-      for (const tName of targetNames) {
-        const existing = prev[tName] ?? {}
-        next[tName] = {
-          ...existing,
-          groups: variableGroups,
-          summaries: summaryRows,
-          numericStats: selectedNumericStats,
-          summaryPreset: selectedScalePreset ?? undefined,
-        }
-      }
-      return next
-    })
-  }, [variableEditorRows, variableGroups, selectedNumericStats, selectedScalePreset])
-
-  const toggleCodeSort = useCallback(() => {
-    setCodeSortDirection(prev => prev === 'asc' ? 'desc' : 'asc')
-    setVariableEditorRows(prev => {
-      const codeRows = prev.filter(r => r.rowKind === 'code' || r.rowKind == null)
-      const sorted = [...codeRows].sort((a, b) => {
-        const cmp = a.code.localeCompare(b.code, undefined, { numeric: true, sensitivity: 'base' })
-        return codeSortDirection === 'asc' ? cmp : -cmp
-      })
-      return rebuildVariableEditorRows(sorted, variableGroups)
-    })
-  }, [codeSortDirection, variableGroups])
-
-  const handleVariableRowClick = useCallback((key: string, shiftKey: boolean) => {
-    const idx = codeEditorRows.findIndex(r => r.key === key)
-    if (shiftKey && lastSelectedVariableIndex !== null) {
-      const from = lastSelectedVariableIndex
-      const to = idx
-      const range = codeEditorRows.slice(Math.min(from, to), Math.max(from, to) + 1).map(r => r.key)
-      setSelectedVariableRowKeys(prev => [...new Set([...prev, ...range])])
-    } else {
-      setSelectedVariableRowKeys(prev => {
-        if (prev.includes(key)) return prev.filter(k => k !== key)
-        return [...prev, key]
-      })
-      setLastSelectedVariableIndex(idx)
-    }
-  }, [codeEditorRows, lastSelectedVariableIndex])
-
-  const createVariableNetGroup = useCallback(() => {
-    setVariableContextMenu(null)
-    if (selectedVariableRowKeys.length === 0) return
-    setPendingNetName('UPC')
-    setShowNetNameDialog(true)
-  }, [selectedVariableRowKeys])
-
-  const removeVariableNetGroup = useCallback((groupId: string) => {
-    setVariableGroups(prev => prev.filter(g => g.id !== groupId))
-    setVariableEditorRows(prev => rebuildVariableEditorRows(prev.filter(r => r.rowKind === 'code' || r.rowKind == null), variableGroups.filter(g => g.id !== groupId)))
-  }, [variableGroups])
-
-  const removeSelectedCodesFromGroups = useCallback(() => {
-    setVariableContextMenu(null)
-    const keys = new Set(selectedVariableRowKeys)
-    setVariableGroups(prev => prev.map(g => ({
-      ...g,
-      members: g.members.filter(m => !keys.has(m)),
-    })).filter(g => g.members.length > 0))
-    setVariableEditorRows(prev => {
-      const nextGroups = variableGroups.map(g => ({
-        ...g,
-        members: g.members.filter(m => !keys.has(m)),
-      })).filter(g => g.members.length > 0)
-      return rebuildVariableEditorRows(prev.filter(r => r.rowKind === 'code' || r.rowKind == null), nextGroups)
-    })
-  }, [selectedVariableRowKeys, variableGroups])
-
-  const confirmVariableNetGroup = useCallback(() => {
-    const name = pendingNetName.trim()
-    if (!name) return
-    const group: VariableNetGroup = {
-      id: crypto.randomUUID(),
-      name,
-      members: [...selectedVariableRowKeys],
-    }
-    const nextGroups = [...variableGroups, group]
-    setVariableGroups(nextGroups)
-    setVariableEditorRows(prev => rebuildVariableEditorRows(prev.filter(r => r.rowKind === 'code' || r.rowKind == null), nextGroups))
-    setShowNetNameDialog(false)
-    setPendingNetName('UPC')
-  }, [pendingNetName, selectedVariableRowKeys, variableGroups])
-
-  const applyScaleSummaryPreset = useCallback((preset: ScaleSummaryPresetType) => {
-    try {
-      const codeRows = variableEditorRows.filter(r => r.rowKind === 'code' || r.rowKind == null)
-      const { factors, summaries } = buildScaleSummaryPreset(codeRows, preset)
-      const updatedRows = codeRows.map(r => ({
-        ...r,
-        factor: factors[r.key] ?? r.factor,
-        autoFactor: !!factors[r.key],
-      }))
-      const nextGroups = variableGroups
-      const fullRows = buildVariableEditorRowsWithSummaries(updatedRows, nextGroups, summaries)
-      setVariableEditorRows(fullRows)
-      setSelectedScalePreset(preset)
-      setShowScalePresetDialog(false)
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
-    }
-  }, [variableEditorRows, variableGroups])
-
-  // โ”€โ”€ Variable list interactions โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€
-
-  const handleVarDragStart = useCallback(
-    (name: string) => {
-      const list = variableCatalog?.list ?? []
-      const ordered = list.map(v => v.name).filter(n => selectedVariableNames.has(n))
-      dragVarsRef.current =
-        selectedVariableNames.size > 1 && selectedVariableNames.has(name) ? ordered : [name]
-    },
-    [variableCatalog, selectedVariableNames],
-  )
-
-  const handleVarSelect = useCallback((name: string, options?: { shiftKey?: boolean; metaKey?: boolean; ctrlKey?: boolean }) => {
-    if (options?.shiftKey && lastSelectedVariableName) {
-      const list = variableCatalog?.list ?? []
-      const from = list.findIndex(v => v.name === lastSelectedVariableName)
-      const to = list.findIndex(v => v.name === name)
-      const range = list.slice(Math.min(from, to), Math.max(from, to) + 1).map(v => v.name)
-      setSelectedVariableNames(prev => new Set([...prev, ...range]))
-    } else if (options?.metaKey || options?.ctrlKey) {
-      setSelectedVariableNames(prev => {
-        const next = new Set(prev)
-        if (next.has(name)) next.delete(name)
-        else next.add(name)
-        return next
-      })
-      setLastSelectedVariableName(name)
-    } else {
-      setSelectedVariableNames(new Set([name]))
-      setLastSelectedVariableName(name)
-    }
-  }, [lastSelectedVariableName, variableCatalog])
-
-  const handleVarClearSelection = useCallback(() => {
-    setSelectedVariableNames(new Set())
-    setLastSelectedVariableName(null)
-  }, [])
-
-  const handleVarQuickAction = useCallback((name: string, target: 'top' | 'side' | 'filter' | 'table') => {
-    if (target === 'table') {
-      const sourceNames = selectedVariableNames.size > 1 && selectedVariableNames.has(name)
-        ? selectedVariableNames
-        : [name]
-      createTablesFromVariables(sourceNames)
-      return
-    }
-    const list = variableCatalog?.list ?? []
-    const orderedForMulti =
-      selectedVariableNames.size > 1 && selectedVariableNames.has(name)
-        ? list.map(v => v.name).filter(n => selectedVariableNames.has(n))
-        : [name]
-
-    if (target === 'top') {
-      setTables(prev => prev.map(t => {
-        if (t.id !== activeTableId) return t
-        let spec = parseAxisSpec(t.colVar)
-        for (const n of orderedForMulti) {
-          spec = insertVarByMode(spec, n, 'add', null)
-        }
-        return { ...t, colVar: joinAxisSpec(spec) }
-      }))
-    } else if (target === 'side') {
-      setTables(prev => prev.map(t => {
-        if (t.id !== activeTableId) return t
-        let spec = parseAxisSpec(t.rowVar)
-        for (const n of orderedForMulti) {
-          spec = insertVarByMode(spec, n, 'add', null)
-        }
-        return { ...t, rowVar: joinAxisSpec(spec) }
-      }))
-    } else if (target === 'filter') {
-      const conditions: TableFilterCondition[] = orderedForMulti.map(variableName => ({
-        id: crypto.randomUUID(),
-        variableName,
-        operator: 'in',
-        values: [],
-        value: '',
-        secondaryValue: '',
-      }))
-      const newGroup: TableFilterGroup = {
-        id: crypto.randomUUID(),
-        join: 'all',
-        conditions,
-      }
-      applyFilterToEditingTables(filter => ({
-        ...filter,
-        groups: [...filter.groups, newGroup],
-      }))
-    }
-  }, [activeTableId, applyFilterToEditingTables, createTablesFromVariables, selectedVariableNames, variableCatalog])
+  const {
+    handleVarDragStart,
+    handleVarSelect,
+    handleVarClearSelection,
+    handleVarQuickAction,
+  } = useVariableListActions({
+    variableCatalog,
+    selectedVariableNames,
+    setSelectedVariableNames,
+    lastSelectedVariableName,
+    setLastSelectedVariableName,
+    dragVarsRef,
+    activeTableId,
+    setTables,
+    createTablesFromVariables,
+    applyFilterToEditingTables,
+  })
 
   // โ”€โ”€ Return JSX โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€โ”€
-
-  const getFilterSummary = (table: TableDef): string | null => {
-    if (!hasActiveFilter(table.filter)) return null
-    if (table.filter.description) return table.filter.description
-    const totalConditions = table.filter.groups.reduce((sum, g) => sum + g.conditions.length, 0)
-    if (totalConditions === 0) return null
-    return `${totalConditions} condition${totalConditions !== 1 ? 's' : ''}`
-  }
 
   const batchEditCount = selectedIds.size > 1 ? selectedIds.size : undefined
   const filterBatchEditCount = editingTableIds.length > 1 ? editingTableIds.length : undefined
@@ -2181,11 +1137,29 @@ export default function App() {
                       Open SPSS File
                     </button>
                     <button
-                      onClick={() => { setOpenHeaderMenu(null); handleSaveSettings() }}
+                      onClick={() => {
+                        setOpenHeaderMenu(null)
+                        if (cloudConfigured && cloudUserEmail) {
+                          handleSaveCloudSettings('manual')
+                        } else if (cloudConfigured) {
+                          handleCloudSignIn()
+                        } else {
+                          setError('Cloud Save is not configured yet. Add VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY, then restart the app.')
+                        }
+                      }}
+                      disabled={cloudSaving}
                       className="flex w-full items-center gap-2 px-3 py-2 text-xs text-gray-700 hover:bg-gray-50"
                     >
+                      <Cloud className="h-3.5 w-3.5" />
+                      {cloudSaving ? 'Saving Cloud...' : 'Save Settings'}
+                      <span className="ml-auto text-[10px] text-gray-400">Cloud</span>
+                    </button>
+                    <button
+                      onClick={() => { setOpenHeaderMenu(null); handleSaveSettings() }}
+                      className="flex w-full items-center gap-2 px-3 py-2 text-xs text-gray-500 hover:bg-gray-50"
+                    >
                       <Save className="h-3.5 w-3.5" />
-                      {currentSettingsHandle ? 'Save Settings' : 'Export Settings'}
+                      Export Settings File
                       {loadedSettingsName && <span className="ml-auto text-[10px] text-gray-400 truncate max-w-[90px]">{loadedSettingsName}</span>}
                     </button>
                     <button
@@ -2195,6 +1169,66 @@ export default function App() {
                       <FolderOpen className="h-3.5 w-3.5" />
                       Load Settings
                     </button>
+                    <div className="my-1 border-t border-gray-100" />
+                    <div className="px-3 pb-1 pt-1 text-[10px] font-bold uppercase tracking-wide text-gray-400">
+                      Cloud Settings
+                    </div>
+                    {!cloudConfigured && (
+                      <div className="mx-2 mb-1 rounded-lg border border-amber-200 bg-amber-50 px-2 py-1.5 text-[10px] text-amber-700">
+                        Add Supabase env vars to enable cloud save.
+                      </div>
+                    )}
+                    {cloudConfigured && !cloudUserEmail && (
+                      <button
+                        onClick={() => { setOpenHeaderMenu(null); handleCloudSignIn() }}
+                        className="flex w-full items-center gap-2 px-3 py-2 text-xs text-gray-700 hover:bg-gray-50"
+                      >
+                        <LogIn className="h-3.5 w-3.5" />
+                        Sign in to Cloud
+                      </button>
+                    )}
+                    {cloudConfigured && cloudUserEmail && (
+                      <>
+                        <div className="mx-2 mb-1 truncate rounded-lg bg-blue-50 px-2 py-1.5 text-[10px] font-semibold text-blue-700">
+                          {cloudUserEmail}
+                        </div>
+                        <button
+                          onClick={() => { setOpenHeaderMenu(null); handleSaveCloudSettings('manual') }}
+                          disabled={cloudSaving}
+                          className="flex w-full items-center gap-2 px-3 py-2 text-xs text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+                        >
+                          <Cloud className="h-3.5 w-3.5" />
+                          {cloudSaving ? 'Saving Cloud...' : 'Save to Cloud'}
+                        </button>
+                        <button
+                          onClick={() => { setOpenHeaderMenu(null); handleLoadCloudSettings() }}
+                          className="flex w-full items-center gap-2 px-3 py-2 text-xs text-gray-700 hover:bg-gray-50"
+                        >
+                          <Cloud className="h-3.5 w-3.5" />
+                          Load Latest Cloud
+                        </button>
+                        <button
+                          onClick={handleToggleCloudAutosave}
+                          className="flex w-full items-center gap-2 px-3 py-2 text-xs text-gray-700 hover:bg-gray-50"
+                        >
+                          <span className={`h-3 w-3 rounded-full border ${cloudAutosave ? 'border-emerald-500 bg-emerald-500' : 'border-gray-300 bg-white'}`} />
+                          AutoSave Cloud
+                          <span className="ml-auto text-[10px] text-gray-400">{cloudAutosave ? 'On' : 'Off'}</span>
+                        </button>
+                        <button
+                          onClick={() => { setOpenHeaderMenu(null); handleCloudSignOut() }}
+                          className="flex w-full items-center gap-2 px-3 py-2 text-xs text-gray-500 hover:bg-gray-50"
+                        >
+                          <LogOut className="h-3.5 w-3.5" />
+                          Sign out
+                        </button>
+                        {lastCloudSavedAt && (
+                          <div className="mx-2 mb-1 rounded-lg bg-gray-50 px-2 py-1.5 text-[10px] text-gray-500">
+                            Last cloud save {new Date(lastCloudSavedAt).toLocaleTimeString()}
+                          </div>
+                        )}
+                      </>
+                    )}
                     {settingsReadonly && settingsReadonlyLock && (
                       <div className="mx-2 mt-1 rounded-lg border border-amber-200 bg-amber-50 px-2 py-1.5 text-[10px] text-amber-700">
                         Readonly: locked by {settingsReadonlyLock.ownerLabel}
@@ -2236,11 +1270,7 @@ export default function App() {
                       <button
                         onClick={() => {
                           setOpenHeaderMenu(null)
-                          const copies = tables
-                            .filter(t => selectedIds.has(t.id))
-                            .map(t => ({ ...t, id: crypto.randomUUID(), result: null, name: `${t.name} Copy` }))
-                          setTables(prev => [...prev, ...copies])
-                          setCopiedTablesBuffer(copies)
+                          duplicateSelectedTables()
                         }}
                         className="flex w-full items-center gap-2 px-3 py-2 text-xs text-gray-700 hover:bg-gray-50"
                       >
@@ -2265,8 +1295,7 @@ export default function App() {
                       <button
                         onClick={() => {
                           setOpenHeaderMenu(null)
-                          const pastes = copiedTablesBuffer.map(t => ({ ...t, id: crypto.randomUUID(), result: null }))
-                          setTables(prev => [...prev, ...pastes])
+                          pasteTables()
                         }}
                         className="flex w-full items-center gap-2 px-3 py-2 text-xs text-gray-700 hover:bg-gray-50"
                       >
@@ -2346,11 +1375,6 @@ export default function App() {
               {exporting ? 'Exporting...' : 'Export'}
             </button>
 
-            {toast && (
-              <div className="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white">
-                {toast}
-              </div>
-            )}
           </header>
 
           {/* Content */}
@@ -2532,7 +1556,14 @@ export default function App() {
                 </div>
               )}
               {activeTab === 'results' && activeResult && (
-                <PreviewTable result={activeResult} config={activeConfig} />
+                <PreviewTable
+                  result={activeResult}
+                  config={{
+                    ...activeConfig,
+                    rowVar: activeResult.rowVar,
+                    colVar: activeResult.colVar,
+                  }}
+                />
               )}
               {activeTab === 'results' && !activeResult && (
                 <div className="flex h-full items-center justify-center text-sm text-gray-400">
@@ -2760,7 +1791,7 @@ export default function App() {
                           className="px-2 py-2 text-left w-[72px] cursor-pointer select-none"
                           title="Click to sort code"
                         >
-                          Code {codeSortDirection === 'asc' ? 'โ‘' : 'โ“'}
+                          Code {codeSortDirection === 'asc' ? '↑' : '↓'}
                         </th>
                         <th className="px-2 py-2 text-left">Label</th>
                         <th className="px-2 py-2 text-right w-[90px]">Count</th>
@@ -3214,6 +2245,31 @@ export default function App() {
       )}
 
       {/* Batch exporting modal */}
+      <SweetAlert
+        open={exporting}
+        variant="loading"
+        title="Exporting table"
+        message="Preparing the Excel workbook. Please keep this window open for a moment."
+      />
+
+      <SweetAlert
+        open={Boolean(error)}
+        variant="error"
+        title="Something went wrong"
+        message={error ?? ''}
+        confirmText="Close"
+        onClose={() => setError(null)}
+      />
+
+      <SweetAlert
+        open={Boolean(toast && !exporting)}
+        variant="success"
+        title="Done"
+        message={toast ?? ''}
+        confirmText="OK"
+        onClose={() => setToast(null)}
+      />
+
       {batchExporting && (
         <div className="fixed inset-0 z-[90] flex items-center justify-center bg-slate-950/45 backdrop-blur-sm p-4">
           <div className="w-full max-w-md rounded-3xl border border-blue-100 bg-white shadow-2xl">

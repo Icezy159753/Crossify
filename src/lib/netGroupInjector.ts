@@ -9,6 +9,7 @@
  */
 
 import type { CrosstabResult, CrosstabRowType } from './crosstabEngine'
+import { buildNetLabel } from './netLabels'
 
 // ─── types ───────────────────────────────────────────────────────────────────
 
@@ -129,8 +130,7 @@ export function injectNetGroups(
     idxs.sort((a, b) => a - b)
 
     const d = depthOf(g, groups)
-    const indent = '   '.repeat(d + 1)
-    const label = indent + (g.name || 'Net')
+    const label = buildNetLabel(d, g.name)
 
     const counts: number[] = []
     for (let ci = 0; ci < colCount; ci++) {
@@ -186,5 +186,20 @@ export function injectNetGroups(
     ni++
   }
 
-  return { ...result, rowValues: rv, rowTypes: rt, rowPaths: rp, counts: ct, rowTotalsN: rtn }
+  const rowSectionBases = result.rowSectionBases?.map(section => ({
+    ...section,
+    startIndex: section.startIndex + netRows.filter(net => net.insertBefore < section.startIndex).length,
+    colTotalsN: section.colTotalsN.slice(),
+    unweightedColTotalsN: section.unweightedColTotalsN?.slice(),
+  }))
+
+  return {
+    ...result,
+    rowValues: rv,
+    rowTypes: rt,
+    rowPaths: rp,
+    counts: ct,
+    rowTotalsN: rtn,
+    ...(rowSectionBases ? { rowSectionBases } : {}),
+  }
 }

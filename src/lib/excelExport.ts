@@ -1,7 +1,15 @@
 import type * as ExcelJS from 'exceljs'
 import { saveAs } from 'file-saver'
 import type { CrosstabResult, CrosstabConfig } from './crosstabEngine'
-import { getPct, filterZeroRows } from './crosstabEngine'
+import { getPct } from './crosstabEngine'
+import { buildResultViewModel } from './resultViewModel'
+export {
+  buildHeaderGroups,
+  buildRowDisplayPaths,
+  buildRowSectionMeta,
+  normalizeRowSectionBases,
+  normalizeRowStructure,
+} from './tableLayout'
 
 const C = {
   headerBg:   '1F4E78',
@@ -29,6 +37,58 @@ async function loadExcelJs() {
   // Cache on window for inline scripts (Sig/TB_Setting interceptors)
   (window as unknown as Record<string, unknown>).__cxExcelJSModule = EJS
   return EJS
+}
+
+async function downloadWorkbookBuffer(buf: ExcelJS.Buffer, filename: string) {
+  const blob = new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
+  const savePicker = typeof window !== 'undefined'
+    ? (window as unknown as {
+        showSaveFilePicker?: (options?: unknown) => Promise<{
+          createWritable: () => Promise<{
+            write: (data: Blob) => Promise<void>
+            close: () => Promise<void>
+          }>
+        }>
+      }).showSaveFilePicker
+    : undefined
+
+  if (savePicker) {
+    const handle = await savePicker({
+      suggestedName: filename,
+      types: [{
+        description: 'Excel Workbook',
+        accept: { 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': ['.xlsx'] },
+      }],
+    })
+    const writable = await handle.createWritable()
+    await writable.write(blob)
+    await writable.close()
+    return
+  }
+
+  if (typeof navigator !== 'undefined' && /jsdom/i.test(navigator.userAgent)) {
+    saveAs(blob, filename)
+    return
+  }
+
+  if (typeof window !== 'undefined' && typeof document !== 'undefined') {
+    const url = window.URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = filename
+    link.target = '_blank'
+    link.rel = 'noopener'
+    link.style.cssText = 'position:fixed;left:-9999px;top:-9999px;opacity:0;pointer-events:none'
+    document.body.appendChild(link)
+    link.click()
+    window.setTimeout(() => {
+      link.remove()
+      window.URL.revokeObjectURL(url)
+    }, 60000)
+    return
+  }
+
+  saveAs(blob, filename)
 }
 
 function mkBorder(s: ExcelJS.BorderStyle = 'thin'): Partial<ExcelJS.Borders> {
@@ -181,72 +241,6 @@ export function computeSheetNames(varNames: string[]): string[] {
   })
 }
 
-export function buildHeaderGroups(paths: string[][], levels: number) {
-  return Array.from({ length: levels }, (_, level) => {
-    const groups: Array<{ label: string; span: number }> = []
-    let currentKey = ''
-
-    paths.forEach(path => {
-      const key = path.slice(0, level + 1).join('\u0001')
-      const label = path[level] ?? ''
-      if (groups.length === 0 || key !== currentKey) {
-        groups.push({ label, span: 1 })
-        currentKey = key
-      } else {
-        groups[groups.length - 1].span += 1
-      }
-    })
-
-    return groups
-  })
-}
-
-export function buildRowDisplayPaths(paths: string[][]) {
-  return paths.map((path, rowIndex) =>
-    path.map((segment, level) => {
-      if (rowIndex === 0) return segment
-      const previous = paths[rowIndex - 1] ?? []
-      const samePrefix = path.slice(0, level + 1).every((value, idx) => value === previous[idx])
-      return samePrefix ? '' : segment
-    })
-  )
-}
-
-export function buildRowSectionMeta(sectionBases: Array<{ startIndex: number; label: string }>, totalRows: number) {
-  const byStart = new Map<number, { label: string; span: number }>()
-  const covered = new Set<number>()
-
-  sectionBases.forEach((section, index) => {
-    const end = (sectionBases[index + 1]?.startIndex ?? totalRows) - 1
-    byStart.set(section.startIndex, { label: section.label, span: end - section.startIndex + 1 })
-    for (let row = section.startIndex + 1; row <= end; row++) covered.add(row)
-  })
-
-  return { byStart, covered }
-}
-
-export function normalizeRowStructure(
-  result: CrosstabResult,
-  rowPaths: string[][],
-  rowLevelLabels: string[],
-  rowSectionBases: Array<{ startIndex: number; label: string; totalN: number; colTotalsN: number[] }>,
-) {
-  if (rowSectionBases.length === 0 && rowLevelLabels.length === 1) {
-    return {
-      rowPaths: rowPaths.map(path => [result.rowLabel, path[0] ?? '']),
-      rowLevelLabels: ['Variable', 'Category'],
-      rowSectionBases: [{
-        startIndex: 0,
-        label: result.rowLabel,
-        totalN: result.grandTotal,
-        colTotalsN: result.colTotalsN,
-      }],
-    }
-  }
-
-  return { rowPaths, rowLevelLabels, rowSectionBases }
-}
-
 const INDEX_SHEET = 'Index'
 
 function buildIndexSheet(
@@ -292,7 +286,7 @@ function buildIndexSheet(
     rowLabelCell.border = mkBorder()
 
     const nCell = row.getCell(3)
-    nCell.value = result.grandTotal
+    nCell.value = Math.round(result.grandTotal)
     nCell.font = { size: 10, name: 'Calibri' }
     nCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: fillArgb } }
     nCell.alignment = { horizontal: 'center', vertical: 'middle' }
@@ -309,24 +303,28 @@ function addCrosstabSheet(
   tableName: string | undefined,
   filterSummary?: string
 ) {
-  const displayResult = filterZeroRows(result, config.hideZeroRows ?? false)
-  const { rowValues, colValues, counts, rowTotalsN, colTotalsN, grandTotal } = displayResult
-  const { showCount, showPercent, percentType } = config
-  const hideTotal = config.hideTotal ?? false
+  const view = buildResultViewModel(result, config)
+  const {
+    displayResult,
+    rowValues,
+    colValues,
+    counts,
+    rowTotalsN,
+    colTotalsN,
+    grandTotal,
+    showCount,
+    showPercent,
+    percentType,
+    hideTotal,
+    rowLevelLabels,
+    rowDisplayPaths,
+    rowTypes,
+    colHeaderGroups,
+    rowSectionBases,
+    rowSectionMeta,
+  } = view
   const showBoth = showCount && showPercent
-  const rawRowPaths = displayResult.rowPaths ?? rowValues.map(value => [value])
-  const colPaths = displayResult.colPaths ?? colValues.map(value => [value])
-  const rawRowLevelLabels = displayResult.rowLevelLabels ?? [displayResult.rowLabel]
-  const colLevelLabels = displayResult.colLevelLabels ?? [displayResult.colLabel]
-  const normalizedRows = normalizeRowStructure(displayResult, rawRowPaths, rawRowLevelLabels, displayResult.rowSectionBases ?? [])
-  const rowPaths = normalizedRows.rowPaths
-  const rowLevelLabels = normalizedRows.rowLevelLabels
-  const rowDisplayPaths = buildRowDisplayPaths(rowPaths)
-  const rowTypes = displayResult.rowTypes ?? rowValues.map(() => 'data')
-  const colHeaderGroups = buildHeaderGroups(colPaths, colLevelLabels.length)
   const rowLabelCols = Math.max(1, rowLevelLabels.length)
-  const rowSectionBases = normalizedRows.rowSectionBases
-  const rowSectionMeta = buildRowSectionMeta(rowSectionBases, rowValues.length)
   const subCols = showBoth ? 2 : 1
   const totalNCol = hideTotal ? -1 : rowLabelCols + 1
   const totalPCol = hideTotal ? -1 : (showBoth ? (rowLabelCols + 2) : -1)
@@ -386,7 +384,7 @@ function addCrosstabSheet(
       })
       if (!hideTotal) {
         const totalCell = headerRow.getCell(totalNCol)
-        totalCell.value = `N=${grandTotal.toLocaleString()}`
+        totalCell.value = `N=${Math.round(grandTotal).toLocaleString()}`
         styleSubHeader(totalCell)
         if (showBoth) safeMergeCells(ws, headerRow.number, totalNCol, headerRow.number, totalNCol + 1)
       }
@@ -456,7 +454,8 @@ function addCrosstabSheet(
     }
   }
 
-  const addBaseRow = (totalN: number, baseColTotalsN: number[], blankVariableCol = false) => {
+  const roundedN = (value: number | undefined) => Math.round(value ?? 0)
+  const addBaseRow = (totalN: number, baseColTotalsN: number[], blankVariableCol = false, label = 'Base') => {
     const baseRow = ws.addRow([])
     baseRow.height = 20
     if (blankVariableCol && rowLabelCols > 1) {
@@ -464,13 +463,13 @@ function addCrosstabSheet(
       blankCell.value = ''
       styleBlankLabel(blankCell)
       const baseCell = baseRow.getCell(2)
-      baseCell.value = 'Base'
+      baseCell.value = label
       styleBaseLabel(baseCell)
       for (let col = 3; col <= rowLabelCols; col++) styleBase(baseRow.getCell(col))
       if (rowLabelCols > 2) safeMergeCells(ws, baseRow.number, 2, baseRow.number, rowLabelCols)
     } else {
       const baseCell = baseRow.getCell(1)
-      baseCell.value = 'Base'
+      baseCell.value = label
       styleBaseLabel(baseCell)
       for (let col = 2; col <= rowLabelCols; col++) styleBase(baseRow.getCell(col))
       if (rowLabelCols > 1) safeMergeCells(ws, baseRow.number, 1, baseRow.number, rowLabelCols)
@@ -479,7 +478,7 @@ function addCrosstabSheet(
     if (!hideTotal) {
       if (showBoth) {
         const totalNCell = baseRow.getCell(totalNCol)
-        totalNCell.value = totalN
+        totalNCell.value = roundedN(totalN)
         styleBase(totalNCell)
 
         const totalPctCell = baseRow.getCell(totalPCol)
@@ -487,7 +486,7 @@ function addCrosstabSheet(
         styleBase(totalPctCell)
       } else if (showCount) {
         const totalNCell = baseRow.getCell(totalNCol)
-        totalNCell.value = totalN
+        totalNCell.value = roundedN(totalN)
         styleBase(totalNCell)
       } else {
         const totalPctCell = baseRow.getCell(totalNCol)
@@ -510,13 +509,13 @@ function addCrosstabSheet(
           nCell.value = '-'
           pctCell.value = '-'
         } else {
-          nCell.value = n
+          nCell.value = roundedN(n)
           setPctValue(pctCell, pct)
         }
       } else if (showCount) {
         const nCell = baseRow.getCell(startCol)
         styleBase(nCell)
-        nCell.value = n === 0 ? '-' : n
+        nCell.value = n === 0 ? '-' : roundedN(n)
       } else {
         const pctCell = baseRow.getCell(startCol)
         styleBase(pctCell)
@@ -529,11 +528,17 @@ function addCrosstabSheet(
   }
 
   if (rowSectionBases.length === 0) {
+    if (displayResult.unweightedGrandTotal != null) {
+      addBaseRow(displayResult.unweightedGrandTotal, displayResult.unweightedColTotalsN ?? colTotalsN, false, 'Unweighted Base')
+    }
     addBaseRow(grandTotal, colTotalsN)
   }
 
   for (let ri = 0; ri < rowValues.length; ri++) {
     const sectionBase = rowSectionBases.find(section => section.startIndex === ri)
+    const unweightedBaseRowNumber = sectionBase?.unweightedTotalN != null
+      ? addBaseRow(sectionBase.unweightedTotalN, sectionBase.unweightedColTotalsN ?? sectionBase.colTotalsN, true, 'Unweighted Base')
+      : null
     const baseRowNumber = sectionBase ? addBaseRow(sectionBase.totalN, sectionBase.colTotalsN, true) : null
     const row = ws.addRow([])
     row.height = 18
@@ -544,7 +549,7 @@ function addCrosstabSheet(
     if (rowSectionBases.length > 0) {
       const section = rowSectionMeta.byStart.get(ri)
       if (section) {
-        const variableRowNumber = baseRowNumber ?? row.number
+        const variableRowNumber = unweightedBaseRowNumber ?? baseRowNumber ?? row.number
         const variableCell = ws.getCell(variableRowNumber, 1)
         if (isNetRow) styleNetLabel(variableCell)
         else styleBlankLabel(variableCell)
@@ -552,7 +557,7 @@ function addCrosstabSheet(
         if (section.span > 1) {
           pendingRowMerges.push({
             startRow: variableRowNumber,
-            endRow: variableRowNumber + section.span,
+            endRow: variableRowNumber + section.span + (unweightedBaseRowNumber ? 1 : 0),
             col: 1,
           })
         }
@@ -594,12 +599,12 @@ function addCrosstabSheet(
         }
         if (isMeanRow) {
           setMeanValue(nCell, rowTotal)
-          pctCell.value = ''
+          setMeanValue(pctCell, rowTotal)
         } else if (rowTotal === 0) {
           nCell.value = '-'
           pctCell.value = '-'
         } else {
-          nCell.value = rowTotal
+          nCell.value = roundedN(rowTotal)
           setPctValue(pctCell, rowPct)
         }
       } else if (showCount) {
@@ -608,7 +613,7 @@ function addCrosstabSheet(
         else if (isNetRow) styleNet(nCell)
         else styleTotal(nCell)
         if (isMeanRow) setMeanValue(nCell, rowTotal)
-        else nCell.value = rowTotal === 0 ? '-' : rowTotal
+        else nCell.value = rowTotal === 0 ? '-' : roundedN(rowTotal)
       } else {
         const pctCell = row.getCell(totalNCol)
         if (isMeanRow) styleMean(pctCell)
@@ -641,12 +646,13 @@ function addCrosstabSheet(
         if (isMeanRow) {
           if (n === 0) nCell.value = '-'
           else setMeanValue(nCell, n)
-          pctCell.value = ''
+          if (n === 0) pctCell.value = '-'
+          else setMeanValue(pctCell, n)
         } else if (n === 0) {
           nCell.value = '-'
           pctCell.value = '-'
         } else {
-          nCell.value = n
+          nCell.value = roundedN(n)
           setPctValue(pctCell, pct)
         }
       } else if (showCount) {
@@ -658,7 +664,7 @@ function addCrosstabSheet(
           if (n === 0) nCell.value = '-'
           else setMeanValue(nCell, n)
         } else {
-          nCell.value = n === 0 ? '-' : n
+          nCell.value = n === 0 ? '-' : roundedN(n)
         }
       } else {
         const pctCell = row.getCell(startCol)
@@ -728,7 +734,7 @@ export async function exportCrosstabToExcel(
 ) {
   const wb = await buildCrosstabWorkbook([{ result, config, tableName, filterSummary }])
   const buf = await wb.xlsx.writeBuffer()
-  saveAs(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), filename)
+  await downloadWorkbookBuffer(buf, filename)
 }
 
 export async function exportMultipleCrosstabsToExcel(
@@ -737,7 +743,7 @@ export async function exportMultipleCrosstabsToExcel(
 ) {
   const wb = await buildCrosstabWorkbook(items)
   const buf = await wb.xlsx.writeBuffer()
-  saveAs(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), filename)
+  await downloadWorkbookBuffer(buf, filename)
 }
 
 /**

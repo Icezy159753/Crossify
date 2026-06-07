@@ -7,6 +7,7 @@
  */
 
 import type { CrosstabResult } from './crosstabEngine'
+import { normalizeColumnPaths } from './columnPaths'
 
 // ─── types ───────────────────────────────────────────────────────────────────
 
@@ -61,14 +62,21 @@ export function materializeColumnAugment(
   }
 
   const origColValues = result.colValues.slice()
-  const origColPaths = (result.colPaths ?? result.colValues.map(v => [v])).map(p => p.slice())
+  const origColPaths = normalizeColumnPaths(result.colValues, result.colPaths)
   const origColTotalsN = result.colTotalsN.slice()
+  const origUnweightedColTotalsN = result.unweightedColTotalsN?.slice()
   const origCounts = result.counts.map(row => row.slice())
 
   const nextColValues = origColValues.slice()
   const nextColPaths = origColPaths.map(p => p.slice())
   const nextColTotalsN = origColTotalsN.slice()
+  const nextUnweightedColTotalsN = origUnweightedColTotalsN?.slice()
   const nextCounts = origCounts.map(row => row.slice())
+  const nextRowSectionBases = result.rowSectionBases?.map(section => ({
+    ...section,
+    colTotalsN: section.colTotalsN.slice(),
+    unweightedColTotalsN: section.unweightedColTotalsN?.slice(),
+  }))
 
   // Sort specs by (insertBoundary, insertOrder) so earlier columns are inserted first
   const sorted = [...colAug.specs].sort((a, b) => {
@@ -87,10 +95,28 @@ export function materializeColumnAugment(
     const path = [...(spec.groupPath ?? []), String(spec.label)]
 
     const total = spec.memberIndexes.reduce((sum, idx) => sum + (origColTotalsN[idx] ?? 0), 0)
+    const unweightedTotal = origUnweightedColTotalsN
+      ? spec.memberIndexes.reduce((sum, idx) => sum + (origUnweightedColTotalsN[idx] ?? 0), 0)
+      : null
 
     nextColValues.splice(insertAt, 0, String(spec.label))
     nextColPaths.splice(insertAt, 0, path)
     nextColTotalsN.splice(insertAt, 0, total)
+    if (nextUnweightedColTotalsN && unweightedTotal != null) {
+      nextUnweightedColTotalsN.splice(insertAt, 0, unweightedTotal)
+    }
+    nextRowSectionBases?.forEach((section, sectionIndex) => {
+      const originalSection = result.rowSectionBases?.[sectionIndex]
+      const sectionTotal = spec.memberIndexes.reduce((sum, idx) => sum + (originalSection?.colTotalsN[idx] ?? 0), 0)
+      section.colTotalsN.splice(insertAt, 0, sectionTotal)
+      if (section.unweightedColTotalsN && originalSection?.unweightedColTotalsN) {
+        const sectionUnweightedTotal = spec.memberIndexes.reduce(
+          (sum, idx) => sum + (originalSection.unweightedColTotalsN?.[idx] ?? 0),
+          0,
+        )
+        section.unweightedColTotalsN.splice(insertAt, 0, sectionUnweightedTotal)
+      }
+    })
     nextCounts.forEach((row, ri) => {
       const value = spec.memberIndexes.reduce((sum, idx) => sum + ((origCounts[ri]?.[idx]) ?? 0), 0)
       row.splice(insertAt, 0, value)
@@ -99,5 +125,13 @@ export function materializeColumnAugment(
     inserted += 1
   }
 
-  return { ...result, colValues: nextColValues, colPaths: nextColPaths, colTotalsN: nextColTotalsN, counts: nextCounts }
+  return {
+    ...result,
+    colValues: nextColValues,
+    colPaths: nextColPaths,
+    colTotalsN: nextColTotalsN,
+    ...(nextUnweightedColTotalsN ? { unweightedColTotalsN: nextUnweightedColTotalsN } : {}),
+    ...(nextRowSectionBases ? { rowSectionBases: nextRowSectionBases } : {}),
+    counts: nextCounts,
+  }
 }

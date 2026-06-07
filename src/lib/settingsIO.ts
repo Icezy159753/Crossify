@@ -1,13 +1,24 @@
 import type * as ExcelJS from 'exceljs'
 import { saveAs } from 'file-saver'
+import type { SavDataset } from './savParser'
+import { buildActiveSettingsLock, getEditorIdentity } from './settingsSession'
 import type { MrsetDefinition } from './variableGrouping'
 import type {
+  FolderDef,
   FilterJoin,
   FilterOperator,
+  GlobalSettings,
+  TableDef,
   TableFilterCondition,
   TableFilterGroup,
   TableFilterSpec,
 } from '../types/workspace'
+import {
+  SETTINGS_VERSION,
+  isSupportedSettingsVersion,
+  normalizeOutputSettings,
+  type SettingsVersion,
+} from './settingsSchema'
 
 export interface TableSetting {
   name: string
@@ -65,7 +76,7 @@ export interface SettingsWorkbookPayload {
 }
 
 export interface AllSettings {
-  version: '1.0' | '1.1' | '1.2' | '1.3' | '1.4' | '1.5' | '1.6' | '1.7' | '1.8' | '1.9'
+  version: SettingsVersion
   savedAt: string
   output: OutputSettings
   folders: FolderSetting[]
@@ -75,6 +86,29 @@ export interface AllSettings {
   sourceDataset?: SourceDatasetSetting
   sourceMappings?: SourceMappingEntry[]
   activeLock?: SettingsLockInfo | null
+}
+
+export interface BuildAllSettingsInput {
+  tables: TableDef[]
+  folders: FolderDef[]
+  settings: GlobalSettings
+  variableOverrides: Record<string, unknown>
+  customMrsets: MrsetDefinition[]
+  currentSourceMappings: SourceMappingEntry[]
+  dataset: SavDataset | null
+  settingsReadonly: boolean
+  settingsLockReleased: boolean
+  currentSettingsHandle: FileSystemFileHandle | null
+  loadedSettingsName: string | null
+}
+
+export interface RestoredAllSettings {
+  tables: TableSetting[]
+  folders: FolderDef[]
+  output: OutputSettings
+  variableOverrides: Record<string, unknown>
+  customMrsets: MrsetDefinition[]
+  sourceMappings: SourceMappingEntry[]
 }
 
 export interface VariableOverrideSheetRow {
@@ -395,6 +429,138 @@ export function summarizeFilter(filter?: TableFilterSpec) {
   return summary.length > 180 ? `${summary.slice(0, 177)}...` : summary
 }
 
+function mergeCurrentSourceMapping(
+  mappings: SourceMappingEntry[],
+  sourceDataset?: SourceDatasetSetting,
+): SourceMappingEntry[] {
+  if (!sourceDataset?.fileName?.trim()) return mappings
+  const identity = getEditorIdentity()
+  const id = `current:${sourceDataset.filePath?.trim().toLowerCase() || sourceDataset.fileName.trim().toLowerCase()}`
+  const existingIndex = mappings.findIndex(mapping => mapping.id === id)
+  const entry: SourceMappingEntry = {
+    id,
+    fileName: sourceDataset.fileName,
+    filePath: sourceDataset.filePath,
+    ownerLabel: identity.ownerLabel,
+    machineLabel: identity.machineLabel,
+    lastBoundAt: new Date().toISOString(),
+    lastBoundBy: identity.ownerLabel,
+  }
+  if (existingIndex < 0) return [...mappings, entry]
+  const next = [...mappings]
+  next[existingIndex] = { ...next[existingIndex], ...entry }
+  return next
+}
+
+export function buildAllSettings({
+  tables,
+  folders,
+  settings,
+  variableOverrides,
+  customMrsets,
+  currentSourceMappings,
+  dataset,
+  settingsReadonly,
+  settingsLockReleased,
+  currentSettingsHandle,
+}: BuildAllSettingsInput): SettingsWorkbookPayload {
+  const sourceDataset = dataset
+    ? {
+        fileName: dataset.fileName,
+        filePath: dataset.sourcePath ?? undefined,
+      }
+    : undefined
+  const sourceMappings = mergeCurrentSourceMapping(currentSourceMappings, sourceDataset)
+  const activeLock = currentSettingsHandle && !settingsReadonly && !settingsLockReleased
+    ? buildActiveSettingsLock()
+    : null
+
+  return {
+    tables: tables.map(table => ({
+      name: table.name,
+      rowVar: table.rowVar,
+      colVar: table.colVar,
+      folderId: table.folderId,
+      filter: table.filter,
+    })),
+    folders: folders.map(folder => ({
+      id: folder.id,
+      name: folder.name,
+    })),
+    output: normalizeOutputSettings(settings),
+    variableOverrides,
+    detectedMrsets: customMrsets,
+    sourceDataset,
+    sourceMappings,
+    activeLock,
+  }
+}
+
+export function buildAllSettingsSnapshot(payload: SettingsWorkbookPayload): AllSettings {
+  return {
+    version: SETTINGS_VERSION,
+    savedAt: new Date().toISOString(),
+    output: payload.output,
+    folders: payload.folders,
+    tables: payload.tables,
+    variableOverrides: payload.variableOverrides,
+    customMrsets: payload.detectedMrsets,
+    sourceDataset: payload.sourceDataset,
+    sourceMappings: payload.sourceMappings,
+    activeLock: payload.activeLock,
+  }
+}
+
+export async function exportSettingsToExcel(
+  payload: SettingsWorkbookPayload,
+  filename = 'crossify-settings',
+): Promise<void> {
+  await saveSettings(
+    payload.tables,
+    payload.folders,
+    payload.output,
+    payload.variableOverrides,
+    filename.toLowerCase().endsWith('.xlsx') ? filename : `${filename}.xlsx`,
+    payload.detectedMrsets,
+    payload.sourceDataset,
+    payload.sourceMappings,
+    payload.activeLock ?? null,
+  )
+}
+
+export async function parseSettingsFromExcel(file: File): Promise<AllSettings> {
+  return loadSettings(file)
+}
+
+export function restoreAllSettings(
+  allSettings: AllSettings,
+  dataset: SavDataset | null,
+  sourceIntent: 'match' | 'rebind' = 'match',
+  currentSourceMappings: SourceMappingEntry[] = [],
+): RestoredAllSettings {
+  const sourceDataset = dataset
+    ? {
+        fileName: dataset.fileName,
+        filePath: dataset.sourcePath ?? undefined,
+      }
+    : allSettings.sourceDataset
+  const sourceMappings = sourceIntent === 'rebind'
+    ? mergeCurrentSourceMapping(currentSourceMappings, sourceDataset)
+    : (allSettings.sourceMappings ?? currentSourceMappings)
+
+  return {
+    tables: allSettings.tables ?? [],
+    folders: (allSettings.folders ?? []).map(folder => ({
+      ...folder,
+      expanded: true,
+    })),
+    output: normalizeOutputSettings(allSettings.output),
+    variableOverrides: allSettings.variableOverrides ?? {},
+    customMrsets: allSettings.customMrsets ?? [],
+    sourceMappings,
+  }
+}
+
 export async function buildSettingsWorkbookBuffer({
   tables,
   folders,
@@ -584,18 +750,16 @@ export async function buildSettingsWorkbookBuffer({
     styleDataRow(wsMrset.addRow([mrset.groupName, mrset.label, mrset.members.join(',')]), idx % 2 === 1)
   })
 
-  const allSettings: AllSettings = {
-    version: '1.9',
-    savedAt: new Date().toISOString(),
-    output,
-    folders,
+  const allSettings = buildAllSettingsSnapshot({
     tables,
+    folders,
+    output,
     variableOverrides,
-    customMrsets: detectedMrsets,
+    detectedMrsets,
     sourceDataset,
     sourceMappings,
     activeLock,
-  }
+  })
   const wsHidden = wb.addWorksheet('_settings', { state: 'hidden' })
   writeHiddenSettings(wsHidden, allSettings)
 
@@ -635,7 +799,7 @@ export async function loadSettings(file: File): Promise<AllSettings> {
   const wb = new ExcelJS.Workbook()
   await wb.xlsx.load(buf)
 
-  let outputSettings: OutputSettings = { showCount: true, showPercent: true, percentType: 'column', hideZeroRows: false }
+  let outputSettings: OutputSettings = normalizeOutputSettings(null)
   let savedFolders: FolderSetting[] = []
   let variableOverrides: Record<string, unknown> = {}
   let customMrsets: MrsetDefinition[] = []
@@ -654,12 +818,8 @@ export async function loadSettings(file: File): Promise<AllSettings> {
     if (rawStr?.trim().startsWith('{')) {
       try {
         const parsed = JSON.parse(rawStr) as AllSettings
-        if (
-          parsed.version === '1.0' || parsed.version === '1.1' || parsed.version === '1.2' ||
-          parsed.version === '1.3' || parsed.version === '1.4' || parsed.version === '1.5' || parsed.version === '1.6' ||
-          parsed.version === '1.7' || parsed.version === '1.8' || parsed.version === '1.9'
-        ) {
-          outputSettings = parsed.output ?? outputSettings
+        if (isSupportedSettingsVersion(parsed.version)) {
+          outputSettings = normalizeOutputSettings(parsed.output)
           savedFolders = parsed.folders ?? []
           hiddenTables = parsed.tables ?? []
           variableOverrides = parsed.variableOverrides ?? {}
@@ -992,7 +1152,7 @@ export async function loadSettings(file: File): Promise<AllSettings> {
   }
 
   return {
-    version: '1.9',
+    version: SETTINGS_VERSION,
     savedAt: new Date().toISOString(),
     output: outputSettings,
     folders,

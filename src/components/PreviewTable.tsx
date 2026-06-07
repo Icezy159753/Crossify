@@ -1,7 +1,12 @@
 import { Fragment, useState, useEffect, useRef } from 'react'
 import { ClipboardCopy, Check } from 'lucide-react'
 import type { CrosstabResult, CrosstabConfig } from '../lib/crosstabEngine'
-import { getPct, filterZeroRows } from '../lib/crosstabEngine'
+import { getPct } from '../lib/crosstabEngine'
+import {
+  buildResultViewModel,
+  buildStableResultRowKey,
+  normalizeMetricValues,
+} from '../lib/resultViewModel'
 
 interface Props {
   result: CrosstabResult
@@ -23,90 +28,30 @@ function fmtMean(value: number) {
   return <span>{value.toFixed(2)}</span>
 }
 
-function buildHeaderGroups(paths: string[][], levels: number) {
-  return Array.from({ length: levels }, (_, level) => {
-    const groups: Array<{ label: string; span: number }> = []
-    let currentKey = ''
-
-    paths.forEach(path => {
-      const key = path.slice(0, level + 1).join('\u0001')
-      const label = path[level] ?? ''
-      if (groups.length === 0 || key !== currentKey) {
-        groups.push({ label, span: 1 })
-        currentKey = key
-      } else {
-        groups[groups.length - 1].span += 1
-      }
-    })
-
-    return groups
-  })
-}
-
-function buildRowDisplayPaths(paths: string[][]) {
-  return paths.map((path, rowIndex) =>
-    path.map((segment, level) => {
-      if (rowIndex === 0) return segment
-      const previous = paths[rowIndex - 1] ?? []
-      const samePrefix = path.slice(0, level + 1).every((value, idx) => value === previous[idx])
-      return samePrefix ? '' : segment
-    })
-  )
-}
-
-function buildRowSectionMeta(sectionBases: Array<{ startIndex: number; label: string }>, totalRows: number) {
-  const byStart = new Map<number, { label: string; span: number }>()
-  const covered = new Set<number>()
-
-  sectionBases.forEach((section, index) => {
-    const end = (sectionBases[index + 1]?.startIndex ?? totalRows) - 1
-    byStart.set(section.startIndex, { label: section.label, span: end - section.startIndex + 1 })
-    for (let row = section.startIndex + 1; row <= end; row++) covered.add(row)
-  })
-
-  return { byStart, covered }
-}
-
-function normalizeRowStructure(
-  result: CrosstabResult,
-  rowPaths: string[][],
-  rowLevelLabels: string[],
-  rowSectionBases: Array<{ startIndex: number; label: string; totalN: number; colTotalsN: number[] }>,
-) {
-  if (rowSectionBases.length === 0 && rowLevelLabels.length === 1) {
-    return {
-      rowPaths: rowPaths.map(path => [result.rowLabel, path[0] ?? '']),
-      rowLevelLabels: ['Variable', 'Category'],
-      rowSectionBases: [{
-        startIndex: 0,
-        label: result.rowLabel,
-        totalN: result.grandTotal,
-        colTotalsN: result.colTotalsN,
-      }],
-    }
-  }
-
-  return { rowPaths, rowLevelLabels, rowSectionBases }
-}
-
 export function PreviewTable({ result, config }: Props) {
-  const displayResult = filterZeroRows(result, config.hideZeroRows ?? false)
-  const { rowValues, colValues, counts, rowTotalsN, colTotalsN, grandTotal } = displayResult
-  const { showCount, showPercent, percentType } = config
-  const hideTotal = config.hideTotal ?? false
-
-  const rawRowPaths = displayResult.rowPaths ?? rowValues.map(value => [value])
-  const colPaths = displayResult.colPaths ?? colValues.map(value => [value])
-  const rawRowLevelLabels = displayResult.rowLevelLabels ?? [displayResult.rowLabel]
-  const colLevelLabels = displayResult.colLevelLabels ?? [displayResult.colLabel]
-  const normalizedRows = normalizeRowStructure(displayResult, rawRowPaths, rawRowLevelLabels, displayResult.rowSectionBases ?? [])
-  const rowPaths = normalizedRows.rowPaths
-  const rowLevelLabels = normalizedRows.rowLevelLabels
-  const rowTypes = displayResult.rowTypes ?? rowValues.map(() => 'data')
-  const rowDisplayPaths = buildRowDisplayPaths(rowPaths)
-  const colHeaderGroups = buildHeaderGroups(colPaths, colLevelLabels.length)
-  const rowSectionBases = normalizedRows.rowSectionBases
-  const rowSectionMeta = buildRowSectionMeta(rowSectionBases, rowValues.length)
+  const view = buildResultViewModel(result, config)
+  const {
+    displayResult,
+    rowValues,
+    colValues,
+    counts,
+    rowTotalsN,
+    colTotalsN,
+    grandTotal,
+    showCount,
+    showPercent,
+    percentType,
+    hideTotal,
+    rowPaths,
+    colPaths,
+    rowLevelLabels,
+    colLevelLabels,
+    rowTypes,
+    rowDisplayPaths,
+    colHeaderGroups,
+    rowSectionBases,
+    rowSectionMeta,
+  } = view
   const rowLabelWidthClass = rowLevelLabels.length > 1 ? 'w-[136px] min-w-[136px] max-w-[136px]' : 'w-[176px] min-w-[176px] max-w-[176px]'
   const categoryWidthClass = 'w-[188px] min-w-[188px] max-w-[188px]'
   const metricWidthClass = 'w-[82px] min-w-[82px] max-w-[82px]'
@@ -117,23 +62,25 @@ export function PreviewTable({ result, config }: Props) {
 
   const totalPct = (n: number) => grandTotal > 0 ? n / grandTotal : 0
 
-  function renderBaseRow(totalN: number, baseColTotalsN: number[], key: string) {
+  function renderBaseRow(totalN: number, baseColTotalsN: number[], key: string, label = 'Base') {
+    const normalizedBaseColTotalsN = normalizeMetricValues(baseColTotalsN, colValues.length)
+
     return (
       <tr key={key} className="bg-[#D9E1F2] font-bold">
         <td
           colSpan={Math.max(1, rowLevelLabels.length)}
           className="px-2 py-1.5 text-gray-800 border border-[#BDD7EE]"
         >
-          Base
+          {label}
         </td>
         {!hideTotal && (
           <td className="px-2 py-1.5 text-center text-gray-800 border border-[#BDD7EE] tabular-nums">
-            {totalN === 0 ? <span className="text-gray-300">-</span> : totalN}
+            {totalN === 0 ? <span className="text-gray-300">-</span> : Math.round(totalN)}
           </td>
         )}
-        {baseColTotalsN.map((cn, ci) => (
+        {normalizedBaseColTotalsN.map((cn, ci) => (
           <td key={ci} className="px-2 py-1.5 text-center text-gray-800 border border-[#BDD7EE] tabular-nums">
-            {cn === 0 ? <span className="text-gray-300">-</span> : cn}
+            {cn === 0 ? <span className="text-gray-300">-</span> : Math.round(cn)}
           </td>
         ))}
       </tr>
@@ -141,12 +88,13 @@ export function PreviewTable({ result, config }: Props) {
   }
 
   function buildTSV(): string {
+    const normalizedColTotalsN = normalizeMetricValues(colTotalsN, colValues.length)
     const header = [...rowLevelLabels, ...(hideTotal ? [] : ['Total']), ...colPaths.map(path => path.join(' / '))].join('\t')
     const baseRow = [
       'Base',
       ...Array.from({ length: Math.max(0, rowLevelLabels.length - 1) }, () => ''),
       ...(hideTotal ? [] : [String(grandTotal)]),
-      ...colTotalsN.map(cn => cn === 0 ? '-' : String(cn)),
+      ...normalizedColTotalsN.map(cn => cn === 0 ? '-' : String(cn)),
     ].join('\t')
     const dataRows = rowValues.map((_, ri) => [
       ...rowPaths[ri],
@@ -158,6 +106,10 @@ export function PreviewTable({ result, config }: Props) {
         : counts[ri][ci] === 0 ? '-' : String(counts[ri][ci])),
     ].join('\t'))
     return [header, baseRow, ...dataRows].join('\n')
+  }
+
+  function rowKey(ri: number) {
+    return buildStableResultRowKey(ri, rowValues, rowPaths, rowTypes)
   }
 
   async function doCopy() {
@@ -257,15 +209,18 @@ export function PreviewTable({ result, config }: Props) {
             ))}
           </thead>
           <tbody>
+            {rowSectionBases.length === 0 && displayResult.unweightedGrandTotal != null && renderBaseRow(displayResult.unweightedGrandTotal, displayResult.unweightedColTotalsN ?? colTotalsN, 'base-unweighted-global', 'Unweighted Base')}
             {rowSectionBases.length === 0 && renderBaseRow(grandTotal, colTotalsN, 'base-global')}
 
-            {rowValues.map((rv, ri) => {
+            {rowValues.map((_, ri) => {
               const sectionBase = rowSectionBases.find(section => section.startIndex === ri)
               const isMeanRow = rowTypes[ri] === 'stat'
               const isNetRow = rowTypes[ri] === 'net'
               const isSummaryRow = rowTypes[ri] === 'summary'
+              const stableRowKey = rowKey(ri)
               return (
-                <Fragment key={rv}>
+                <Fragment key={stableRowKey}>
+                  {sectionBase?.unweightedTotalN != null && renderBaseRow(sectionBase.unweightedTotalN, sectionBase.unweightedColTotalsN ?? sectionBase.colTotalsN, `base-unweighted-${ri}`, 'Unweighted Base')}
                   {sectionBase && renderBaseRow(sectionBase.totalN, sectionBase.colTotalsN, `base-${ri}`)}
                   <tr className={isMeanRow ? 'bg-red-50' : isSummaryRow ? 'bg-amber-50' : isNetRow ? 'bg-emerald-50' : ri % 2 === 0 ? 'bg-white' : 'bg-[#EBF3FB]'}>
                   {rowSectionBases.length > 0 ? (
@@ -280,7 +235,7 @@ export function PreviewTable({ result, config }: Props) {
                       )}
                       {!rowSectionMeta.covered.has(ri) && rowDisplayPaths[ri].slice(1).map((segment, level) => (
                         <td
-                          key={`${rv}-${level + 1}`}
+                          key={`${stableRowKey}-${level + 1}`}
                           className={`px-2 py-1.5 border border-[#BDD7EE] break-words whitespace-normal ${level === rowDisplayPaths[ri].slice(1).length - 1 ? 'font-medium text-gray-800' : 'text-gray-600'} ${isNetRow ? 'text-emerald-800 font-semibold' : isSummaryRow ? 'text-amber-900 font-semibold' : ''}`}
                         >
                           {segment || <span className="text-transparent">.</span>}
@@ -288,7 +243,7 @@ export function PreviewTable({ result, config }: Props) {
                       ))}
                       {rowSectionMeta.covered.has(ri) && rowDisplayPaths[ri].slice(1).map((segment, level) => (
                         <td
-                          key={`${rv}-${level + 1}`}
+                          key={`${stableRowKey}-${level + 1}`}
                           className={`px-2 py-1.5 border border-[#BDD7EE] break-words whitespace-normal ${level === rowDisplayPaths[ri].slice(1).length - 1 ? 'font-medium text-gray-800' : 'text-gray-600'} ${isNetRow ? 'text-emerald-800 font-semibold' : isSummaryRow ? 'text-amber-900 font-semibold' : ''}`}
                         >
                           {segment || <span className="text-transparent">.</span>}
@@ -297,7 +252,7 @@ export function PreviewTable({ result, config }: Props) {
                     </>
                   ) : rowDisplayPaths[ri].map((segment, level) => (
                     <td
-                      key={`${rv}-${level}`}
+                      key={`${stableRowKey}-${level}`}
                       className={`px-2 py-1.5 border border-[#BDD7EE] break-words whitespace-normal ${level === rowDisplayPaths[ri].length - 1 ? 'font-medium text-gray-800' : 'text-gray-600'} ${isNetRow ? 'text-emerald-800 font-semibold' : isSummaryRow ? 'text-amber-900 font-semibold' : ''}`}
                     >
                       {segment || <span className="text-transparent">.</span>}

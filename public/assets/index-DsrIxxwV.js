@@ -7781,7 +7781,7 @@ function Fh(a) {
     let p = 0;
     for (let m = u + 1; m < a.length && p < d - 1; m++) s.has(m) || (a[u].slotCount += a[m].slotCount, s.add(m), p += 1);
   }
-  return s.size === 0 ? a : a.filter((u, d) => !s.has(d));
+  return s.size === 0 ? a.slice() : a.filter((u, d) => !s.has(d));
 }
 async function Mh(a, s) {
   const u = a.u64(),
@@ -8154,9 +8154,11 @@ function Ah(a, s, u, d, p, m) {
     E = new Set(),
     R = new Set();
   for (const B of D) {
+    const _cxw = window.__cxWeightOf ? window.__cxWeightOf(B) : 1;
+    if (!_cxw) continue;
     const $ = String(B[x]),
       ie = String(B[b]);
-    E.add($), R.add(ie), j.set($ + "\0" + ie, (j.get($ + "\0" + ie) ?? 0) + 1);
+    E.add($), R.add(ie), j.set($ + "\0" + ie, (j.get($ + "\0" + ie) ?? 0) + _cxw);
   }
   function C(B, $) {
     if (B && B.length > 0) {
@@ -8167,7 +8169,9 @@ function Ah(a, s, u, d, p, m) {
   }
   const J = C(p, E),
     pe = C(m, R),
-    oe = D.length,
+    _cxuGrand = D.length,
+    _cxuColTotals = pe.map(B => D.reduce(($, ie) => String(ie[b]) === B ? $ + 1 : $, 0)),
+    oe = [...j.values()].reduce((B, $) => B + $, 0),
     K = J.map(B => pe.reduce(($, ie) => $ + (j.get(B + "\0" + ie) ?? 0), 0)),
     z = pe.map(B => J.reduce(($, ie) => $ + (j.get(ie + "\0" + B) ?? 0), 0)),
     Q = J.map(B => pe.map($ => j.get(B + "\0" + $) ?? 0));
@@ -8184,6 +8188,8 @@ function Ah(a, s, u, d, p, m) {
     rowPaths: J.map(B => [B]),
     colPaths: pe.map(B => [B]),
     counts: Q,
+    unweightedGrandTotal: _cxuGrand,
+    unweightedColTotalsN: _cxuColTotals,
     rowTotalsN: K,
     colTotalsN: z,
     grandTotal: oe
@@ -8204,11 +8210,13 @@ async function Bh(a, s, u, d, p, m) {
       $ = B[x],
       ie = B[b];
     if ($ == null || $ === "" || ie == null || ie === "") continue;
+    const _cxw = window.__cxWeightOf ? window.__cxWeightOf(B) : 1;
+    if (!_cxw) continue;
     const Y = String($),
       ne = String(ie);
-    j.add(Y), E.add(ne), D.set(Y + "\0" + ne, (D.get(Y + "\0" + ne) ?? 0) + 1), R += 1;
+    j.add(Y), E.add(ne), D.set(Y + "\0" + ne, (D.get(Y + "\0" + ne) ?? 0) + _cxw), R += _cxw;
   }
-  if (R === 0) throw new Error(`เนเธกเนเธกเธตเธเนเธญเธกเธนเธฅเธชเธณเธซเธฃเธฑเธเธ•เธฑเธงเนเธเธฃ "${x}" ร— "${b}"`);
+  if (R === 0) throw new Error(`ไม่มีข้อมูลสำหรับตัวแปร "${x}" x "${b}"`);
   function C(Q, B) {
     if (Q && Q.length > 0) {
       const $ = [...B].filter(ie => !Q.includes(ie));
@@ -8218,6 +8226,11 @@ async function Bh(a, s, u, d, p, m) {
   }
   const J = C(p, j),
     pe = C(m, E),
+    _cxuGrand = a.filter(Q => {
+      const B = Q[x], $ = Q[b];
+      return B != null && B !== "" && $ != null && $ !== "";
+    }).length,
+    _cxuColTotals = pe.map(Q => a.reduce((B, $) => String($[b]) === Q && $[x] != null && $[x] !== "" ? B + 1 : B, 0)),
     oe = J.map(Q => pe.reduce((B, $) => B + (D.get(Q + "\0" + $) ?? 0), 0)),
     K = pe.map(Q => J.reduce((B, $) => B + (D.get($ + "\0" + Q) ?? 0), 0)),
     z = J.map(Q => pe.map(B => D.get(Q + "\0" + B) ?? 0));
@@ -8234,6 +8247,8 @@ async function Bh(a, s, u, d, p, m) {
     rowPaths: J.map(Q => [Q]),
     colPaths: pe.map(Q => [Q]),
     counts: z,
+    unweightedGrandTotal: _cxuGrand,
+    unweightedColTotalsN: _cxuColTotals,
     rowTotalsN: oe,
     colTotalsN: K,
     grandTotal: R
@@ -9587,9 +9602,11 @@ function $p(a, s, u, d, p, m, x) {
     R = p === "row" ? E.map(() => j.map(() => 0)) : j.map(() => E.map(() => 0)),
     C = p === "row" ? E.map(() => 0) : j.map(() => 0),
     J = p === "row" ? j.map(() => 0) : E.map(() => 0),
+    _cxuC = p === "row" ? E.map(() => 0) : j.map(() => 0),
+    _cxuJ = p === "row" ? j.map(() => 0) : E.map(() => 0),
     pe = new Map(j.map((z, Q) => [z, Q])),
     oe = new Map(E.map((z, Q) => [z, Q]));
-  let K = 0;
+  let K = 0, _cxuK = 0;
   for (let z = 0; z < s.length; z++) {
     const Q = s[z]?.[b];
     if (Q == null || Q === "") continue;
@@ -9597,19 +9614,24 @@ function $p(a, s, u, d, p, m, x) {
     if (B == null) continue;
     const $ = a[z] ?? {};
     if (!au(d, $)) continue;
-    K += 1;
+    const _cxw = window.__cxWeightOf ? window.__cxWeightOf($) : 1;
+    if (!_cxw) continue;
+    K += _cxw;
+    _cxuK += 1;
     const ie = d.aggregateByCode ? ru(d, $) : nu(d, $);
     if (p === "row") {
-      J[B] += 1;
+      J[B] += _cxw;
+      _cxuJ[B] += 1;
       for (const Y of ie) {
         const ne = oe.get(Y);
-        ne != null && (R[ne][B] += 1, C[ne] += 1);
+        ne != null && (R[ne][B] += _cxw, C[ne] += _cxw, _cxuC[ne] += 1);
       }
     } else {
-      C[B] += 1;
+      C[B] += _cxw;
+      _cxuC[B] += 1;
       for (const Y of ie) {
         const ne = oe.get(Y);
-        ne != null && (R[B][ne] += 1, J[ne] += 1);
+        ne != null && (R[B][ne] += _cxw, J[ne] += _cxw, _cxuJ[ne] += 1);
       }
     }
   }
@@ -9627,7 +9649,9 @@ function $p(a, s, u, d, p, m, x) {
     counts: R,
     rowTotalsN: C,
     colTotalsN: J,
-    grandTotal: K
+        grandTotal: K,
+        unweightedGrandTotal: _cxuK,
+        unweightedColTotalsN: _cxuJ
   } : {
     rowVar: b,
     colVar: d.name,
@@ -9642,7 +9666,9 @@ function $p(a, s, u, d, p, m, x) {
     counts: R,
     rowTotalsN: C,
     colTotalsN: J,
-    grandTotal: K
+        grandTotal: K,
+        unweightedGrandTotal: _cxuK,
+        unweightedColTotalsN: _cxuJ
   };
 }
 async function Up(a, s, u, d, p, m, x) {
@@ -9659,9 +9685,11 @@ async function Up(a, s, u, d, p, m, x) {
     R = p === "row" ? E.map(() => j.map(() => 0)) : j.map(() => E.map(() => 0)),
     C = p === "row" ? E.map(() => 0) : j.map(() => 0),
     J = p === "row" ? j.map(() => 0) : E.map(() => 0),
+    _cxuC = p === "row" ? E.map(() => 0) : j.map(() => 0),
+    _cxuJ = p === "row" ? j.map(() => 0) : E.map(() => 0),
     pe = new Map(j.map((z, Q) => [z, Q])),
     oe = new Map(E.map((z, Q) => [z, Q]));
-  let K = 0;
+  let K = 0, _cxuK = 0;
   for (let z = 0; z < s.length; z++) {
     z > 0 && z % Mp === 0 && (await Ip());
     const Q = s[z]?.[b];
@@ -9670,19 +9698,24 @@ async function Up(a, s, u, d, p, m, x) {
     if (B == null) continue;
     const $ = a[z] ?? {};
     if (!au(d, $)) continue;
-    K += 1;
+    const _cxw = window.__cxWeightOf ? window.__cxWeightOf($) : 1;
+    if (!_cxw) continue;
+    K += _cxw;
+    _cxuK += 1;
     const ie = d.aggregateByCode ? ru(d, $) : nu(d, $);
     if (p === "row") {
-      J[B] += 1;
+      J[B] += _cxw;
+      _cxuJ[B] += 1;
       for (const Y of ie) {
         const ne = oe.get(Y);
-        ne != null && (R[ne][B] += 1, C[ne] += 1);
+        ne != null && (R[ne][B] += _cxw, C[ne] += _cxw, _cxuC[ne] += 1);
       }
     } else {
-      C[B] += 1;
+      C[B] += _cxw;
+      _cxuC[B] += 1;
       for (const Y of ie) {
         const ne = oe.get(Y);
-        ne != null && (R[B][ne] += 1, J[ne] += 1);
+        ne != null && (R[B][ne] += _cxw, J[ne] += _cxw, _cxuJ[ne] += 1);
       }
     }
   }
@@ -9700,7 +9733,9 @@ async function Up(a, s, u, d, p, m, x) {
     counts: R,
     rowTotalsN: C,
     colTotalsN: J,
-    grandTotal: K
+        grandTotal: K,
+        unweightedGrandTotal: _cxuK,
+        unweightedColTotalsN: _cxuJ
   } : {
     rowVar: b,
     colVar: d.name,
@@ -9715,7 +9750,9 @@ async function Up(a, s, u, d, p, m, x) {
     counts: R,
     rowTotalsN: C,
     colTotalsN: J,
-    grandTotal: K
+        grandTotal: K,
+        unweightedGrandTotal: _cxuK,
+        unweightedColTotalsN: _cxuJ
   };
 }
 function qc(a) {
@@ -10952,7 +10989,7 @@ function Jp(a, s, u, d) {
     className: "text-gray-300",
     children: "-"
   });
-  const p = u ? a : null,
+  const p = u ? Math.round(a).toLocaleString() : null,
     m = d ? `${(s * 100).toFixed(1)}` : null;
   return p !== null && m !== null ? l.jsxs(l.Fragment, {
     children: [p, l.jsx("br", {}), l.jsxs("span", {
@@ -11014,19 +11051,28 @@ function Xg(a, s) {
   };
 }
 function Yg(a, s, u, d) {
-  return d.length === 0 && u.length === 1 ? {
+  const p = ((d ?? []).filter(m => Number.isFinite(m.startIndex)).map(m => ({
+    ...m,
+    startIndex: Math.max(0, Math.min(s.length - 1, Math.trunc(m.startIndex)))
+  })).sort((m, x) => m.startIndex - x.startIndex)), b = new Set(), D = p.filter(m => b.has(m.startIndex) ? !1 : (b.add(m.startIndex), !0));
+  return D[0] && D[0].startIndex > 0 && (D[0] = {
+    ...D[0],
+    startIndex: 0
+  }), D.length === 0 && u.length === 1 ? {
     rowPaths: s.map(p => [a.rowLabel, p[0] ?? ""]),
     rowLevelLabels: ["Variable", "Category"],
     rowSectionBases: [{
       startIndex: 0,
       label: a.rowLabel,
       totalN: a.grandTotal,
-      colTotalsN: a.colTotalsN
+      colTotalsN: a.colTotalsN,
+      unweightedTotalN: a.unweightedGrandTotal,
+      unweightedColTotalsN: a.unweightedColTotalsN
     }]
   } : {
     rowPaths: s,
     rowLevelLabels: u,
-    rowSectionBases: d
+    rowSectionBases: D
   };
 }
 function Zg({
@@ -11048,7 +11094,7 @@ function Zg({
       percentType: R
     } = s,
     C = u.rowPaths ?? d.map(y => [y]),
-    J = u.colPaths ?? p.map(y => [y]),
+    J = u.colPaths ? p.map((y, _) => u.colPaths[_] && u.colPaths[_].length ? u.colPaths[_] : [y]) : p.map(y => [y]),
     pe = u.rowLevelLabels ?? [u.rowLabel],
     oe = u.colLevelLabels ?? [u.colLabel],
     K = Yg(u, C, pe, u.rowSectionBases ?? []),
@@ -11066,26 +11112,29 @@ function Zg({
     [W, q] = M.useState(null),
     se = M.useRef(null),
     de = y => D > 0 ? y / D : 0;
-  function ge(y, _, Ne) {
+  function ge(y, _, Ne, ue = "Base") {
+    const ke = Array.from({
+      length: p.length
+    }, (Se, Ce) => _?.[Ce] ?? 0);
     return l.jsxs("tr", {
       className: "bg-[#D9E1F2] font-bold",
       children: [l.jsx("td", {
         colSpan: Math.max(1, Q.length),
         className: "px-2 py-1.5 text-gray-800 border border-[#BDD7EE]",
-        children: "Base"
+        children: ue
       }), l.jsx("td", {
         className: "px-2 py-1.5 text-center text-gray-800 border border-[#BDD7EE] tabular-nums",
         children: y === 0 ? l.jsx("span", {
           className: "text-gray-300",
           children: "-"
-        }) : y
-      }), _.map((ue, ke) => l.jsx("td", {
+        }) : Math.round(y).toLocaleString()
+      }), ke.map((ue, Se) => l.jsx("td", {
         className: "px-2 py-1.5 text-center text-gray-800 border border-[#BDD7EE] tabular-nums",
         children: ue === 0 ? l.jsx("span", {
           className: "text-gray-300",
           children: "-"
-        }) : ue
-      }, ke))]
+        }) : Math.round(ue).toLocaleString()
+      }, Se))]
     }, Ne);
   }
   function A() {
@@ -11168,7 +11217,7 @@ function Zg({
             children: [_ === ie.length - 1 ? l.jsx(l.Fragment, {
               children: l.jsxs("th", {
                 className: "bg-[#2E75B6] border border-[#BDD7EE] px-2 py-1.5 text-white text-center text-[10px] font-normal opacity-70",
-                children: ["n=", D.toLocaleString()]
+                children: ["n=", Math.round(D).toLocaleString()]
               })
             }) : l.jsx(l.Fragment, {
               children: l.jsx("th", {
@@ -11185,12 +11234,12 @@ function Zg({
             }, `${_}-${ue}-${Ne.label}`))]
           }, oe[_] ?? _))]
         }), l.jsxs("tbody", {
-          children: [Y.length === 0 && ge(D, b, "base-global"), d.map((y, _) => {
+          children: [Y.length === 0 && u.unweightedGrandTotal != null && ge(u.unweightedGrandTotal, u.unweightedColTotalsN ?? b, "base-unweighted-global", "Unweighted Base"), Y.length === 0 && ge(D, b, "base-global"), d.map((y, _) => {
             const Ne = Y.find(Se => Se.startIndex === _),
               ue = B[_] === "stat",
               ke = B[_] === "net";
             return l.jsxs(M.Fragment, {
-              children: [Ne && ge(Ne.totalN, Ne.colTotalsN, `base-${_}`), l.jsxs("tr", {
+              children: [Ne && Ne.unweightedTotalN != null && ge(Ne.unweightedTotalN, Ne.unweightedColTotalsN ?? Ne.colTotalsN, `base-unweighted-${_}`, "Unweighted Base"), Ne && ge(Ne.totalN, Ne.colTotalsN, `base-${_}`), l.jsxs("tr", {
                 className: ue ? "bg-red-50" : ke ? "bg-emerald-50" : _ % 2 === 0 ? "bg-white" : "bg-[#EBF3FB]",
                 children: [Y.length > 0 ? l.jsxs(l.Fragment, {
                   children: [ne.byStart.get(_) && l.jsx("td", {
@@ -11228,7 +11277,7 @@ function Zg({
                   }, Ce);
                 })]
               })]
-            }, y);
+            }, `${_}\u0001${B[_] ?? "data"}\u0001${(z[_] ?? [y]).join("\u0001")}`);
           })]
         })]
       })
@@ -11672,7 +11721,7 @@ function sx() {
 }
 const ef = 250;
 async function Il() {
-  return Yc(() => import("./excelExport-CFUKVLbe.js"), __vite__mapDeps([2, 1, 3]));
+  return Yc(() => import("./excelExport-CFUKVLbe.js?v=weight-unweighted-no-bounce-20260507-2"), __vite__mapDeps([2, 1, 3]));
 }
 async function Bc() {
   return Yc(() => Promise.resolve().then(() => fg), void 0);
@@ -11696,6 +11745,52 @@ function vo(a, s = null) {
     folderId: s,
     filter: bo()
   };
+}
+const CX_WORKSPACE_DB = "crossify-workspace-snapshot-v1",
+  CX_WORKSPACE_STORE = "snapshot",
+  CX_WORKSPACE_KEY = "latest";
+function cxWorkspaceDbOpen() {
+  return new Promise((a, s) => {
+    if (typeof indexedDB > "u") {
+      s(new Error("IndexedDB is not available"));
+      return;
+    }
+    const u = indexedDB.open(CX_WORKSPACE_DB, 1);
+    u.onupgradeneeded = () => {
+      const d = u.result;
+      d.objectStoreNames.contains(CX_WORKSPACE_STORE) || d.createObjectStore(CX_WORKSPACE_STORE, {
+        keyPath: "id"
+      });
+    }, u.onsuccess = () => a(u.result), u.onerror = () => s(u.error ?? new Error("Failed to open workspace snapshot"));
+  });
+}
+async function cxWorkspacePut(a) {
+  const s = await cxWorkspaceDbOpen();
+  try {
+    await new Promise((u, d) => {
+      const p = s.transaction(CX_WORKSPACE_STORE, "readwrite"),
+        m = p.objectStore(CX_WORKSPACE_STORE).put({
+          id: CX_WORKSPACE_KEY,
+          value: a,
+          updatedAt: Date.now()
+        });
+      m.onerror = () => d(m.error ?? new Error("Failed to save workspace snapshot")), p.oncomplete = () => u(), p.onerror = () => d(p.error ?? new Error("Failed to save workspace snapshot"));
+    });
+  } finally {
+    s.close();
+  }
+}
+async function cxWorkspaceGet() {
+  const a = await cxWorkspaceDbOpen();
+  try {
+    return await new Promise((s, u) => {
+      const d = a.transaction(CX_WORKSPACE_STORE, "readonly"),
+        p = d.objectStore(CX_WORKSPACE_STORE).get(CX_WORKSPACE_KEY);
+      p.onsuccess = () => s(p.result?.value ?? null), p.onerror = () => u(p.error ?? new Error("Failed to read workspace snapshot"));
+    });
+  } finally {
+    a.close();
+  }
 }
 function bo() {
   return {
@@ -11808,7 +11903,10 @@ function cx({
   });
 }
 function ux() {
-  const [a, s] = M.useState(!0),
+  const [a, _cxSetLanding] = M.useState(!0),
+    s = M.useCallback(ut => {
+      _cxSetLanding(ut);
+    }, []),
     [u, d] = M.useState("th"),
     [p, m] = M.useState(null),
     [x, b] = M.useState(!1),
@@ -11909,6 +12007,73 @@ function ux() {
       }), i;
     }, [Wn, Y]);
   M.useEffect(() => {
+    const i = () => {
+      void xf(), void Il();
+    };
+    if (typeof window.requestIdleCallback == "function") {
+      const f = window.requestIdleCallback(i, {
+        timeout: 1500
+      });
+      return () => window.cancelIdleCallback(f);
+    }
+    const f = window.setTimeout(i, 300);
+    return () => window.clearTimeout(f);
+  }, []);
+  const cxBuildWorkspaceSnapshot = M.useCallback(() => p ? {
+    dataset: p,
+    lightLoadMode: x,
+    customMrsets: D,
+    settings: $,
+    tables: Y,
+    activeTableId: Z,
+    activeTab: le,
+    variableOverrides: ue,
+    currentSourceMappings: Un,
+    loadedSettingsName: Ut,
+    folders: Wn
+  } : null, [p, x, D, $, Y, Z, le, ue, Un, Ut, Wn]);
+  const cxSaveWorkspaceSnapshot = M.useCallback(async () => {
+    const i = cxBuildWorkspaceSnapshot();
+    i && (await cxWorkspacePut(i));
+  }, [cxBuildWorkspaceSnapshot]);
+  typeof window < "u" && (window.__cxBuildWorkspaceSnapshot = cxBuildWorkspaceSnapshot, window.__cxBuildWorkspaceSettingsSnapshot = () => p ? {
+    version: "desktop-settings-only-v2",
+    savedAt: new Date().toISOString(),
+    dataset: {
+      fileName: p.fileName || "",
+      fileSize: p.fileSize || 0,
+      sourcePath: p.sourcePath ?? null,
+      encoding: p.encoding ?? "",
+      casesCount: Array.isArray(p.cases) ? p.cases.length : p.casesCount || 0,
+      variablesCount: Array.isArray(p.variables) ? p.variables.length : p.variablesCount || 0
+    },
+    lightLoadMode: x,
+    customMrsets: D,
+    settings: $,
+    tables: Y.map(i => ({
+      ...i,
+      result: null
+    })),
+    activeTableId: Z,
+    activeTab: le,
+    variableOverrides: ue,
+    currentSourceMappings: Un,
+    loadedSettingsName: Ut,
+    folders: Wn
+  } : null, window.__cxSaveWorkspaceSnapshot = cxSaveWorkspaceSnapshot, window.__cxApplyWorkspaceSettings = i => {
+    if (!i || !p)
+      return {
+        ok: !1,
+        reason: "Load the matching SPSS file before loading Cloud Settings."
+      };
+    return i.customMrsets && j(i.customMrsets), i.settings && ie(f => ({
+      ...f,
+      ...i.settings
+    })), Array.isArray(i.tables) && i.tables.length > 0 && (ne(i.tables), fe(i.activeTableId ?? i.tables[0]?.id ?? "")), H(i.activeTab ?? "design"), ke(i.variableOverrides ?? {}), Xt(i.currentSourceMappings ?? []), Yt(i.loadedSettingsName ?? "Cloud Settings"), Pr(i.folders ?? []), s(!1), {
+      ok: !0
+    };
+  });
+  M.useEffect(() => {
     if (!_) return;
     function i(g) {
       y(Math.min(420, Math.max(180, g.clientX)));
@@ -11939,7 +12104,31 @@ function ux() {
       at(null);
     }
     return window.addEventListener("click", i), () => window.removeEventListener("click", i);
-  }, [qe]);
+  }, [qe]), M.useEffect(() => {
+    if (typeof window < "u" && window.__CX_DESKTOP_APP !== !0) return;
+    if (a || p || Fr.current) return;
+    let i = !1;
+    Fr.current = "restore-workspace";
+    (async () => {
+      try {
+        const f = await cxWorkspaceGet();
+        if (!i && f?.dataset) {
+          m(f.dataset), window.__cxDataset = f.dataset, b(!!f.lightLoadMode || (f.dataset.fileSize ?? 0) >= ix), j(f.customMrsets ?? []), ie(g => ({
+            ...g,
+            ...(f.settings ?? {})
+          })), ne(Array.isArray(f.tables) && f.tables.length > 0 ? f.tables : [vo(1)]), fe(f.activeTableId ?? f.tables?.[0]?.id ?? ""), H(f.activeTab ?? "results"), ke(f.variableOverrides ?? {}), Xt(f.currentSourceMappings ?? []), Yt(f.loadedSettingsName ?? null), Pr(f.folders ?? []), s(!1);
+          return;
+        }
+        const g = JSON.parse(sessionStorage.getItem("__cxLastSavMeta") || "null");
+        if (!g?.fileName) return;
+        const w = await gg(g);
+        !i && w && (await dt(w.file, w.handle));
+      } catch {}
+    })();
+    return () => {
+      i = !0;
+    };
+  }, [a, p]);
   async function dt(i, f) {
     R(!0), J(null), oe(0), z(null), await new Promise(g => setTimeout(g, 0));
     try {
@@ -11948,7 +12137,11 @@ function ux() {
           J(F), O >= 0 && oe(Math.round(O * 100));
         }),
         w = g.fileSize >= ix;
-      m(g), b(w), w && kt("Large SPSS detected: Light load mode is on to reduce memory usage", 5e3);
+      try {
+        sessionStorage.setItem("__cxLastSavMeta", JSON.stringify(yi(i)));
+      } catch {}
+      m(g), window.__cxDataset = g, b(w), w && kt("Large SPSS detected: Light load mode is on to reduce memory usage", 5e3);
+      /* Workspace snapshot persistence disabled for faster SPSS load and refresh-to-home behavior. */
       const N = Hn.current;
       if (N) {
         const F = yi(i),
@@ -12673,13 +12866,22 @@ function ux() {
       const L = Ee[me];
       ve.push(L.label), Fe.push("net"), Le.push([L.label]), $e.push(L.counts), Be.push(L.totalN), me += 1;
     }
+    const Ve = i.rowSectionBases?.map(L => ({
+      ...L,
+      startIndex: L.startIndex + Ee.filter(we => we.insertBefore < L.startIndex).length,
+      colTotalsN: L.colTotalsN.slice(),
+      unweightedColTotalsN: L.unweightedColTotalsN?.slice()
+    }));
     return {
       ...i,
       rowValues: ve,
       rowTypes: Fe,
       rowPaths: Le,
       counts: $e,
-      rowTotalsN: Be
+      rowTotalsN: Be,
+      ...(Ve ? {
+        rowSectionBases: Ve
+      } : {})
     };
   }
   function kt(i, f = 3e3) {
@@ -12751,7 +12953,7 @@ function ux() {
       kt("ยัง takeover ไม่ได้ เพราะไฟล์ settings นี้ยังไม่ได้เปิดผ่าน editable handle", 4500);
       return;
     }
-    if (window.confirm("Force Take Over จะยึดสิทธิ์แก้ไฟล์ settings นี้จาก lock เดิม ต้องการดำเนินการต่อหรือไม่?")) try {
+    if (await window.__crossifyRuntime.confirm({ title: "Force Take Over", text: "Take editing control of this settings file from the previous lock?", confirmText: "Take Over", cancelText: "Cancel" })) try {
       const f = wn({
           activeLock: vn()
         }),
@@ -13112,19 +13314,28 @@ function ux() {
       ve = T.map(() => 0),
       Fe = rr(i).some(me => me.length > 1),
       Le = new Map();
-    let $e = 0;
+    let $e = 0, _cxuGrand = 0;
+    const _cxuColTotals = T.map(() => 0);
     for (let me = 0; me < F.length; me++) {
       const L = F[me],
         we = w[me],
         Ue = yr(i, L, we),
         Ge = yr(f, L, we);
       if (Ue.length === 0 || Ge.length === 0) continue;
-      $e += 1;
+      _cxuGrand += 1;
+      const _cxuIt = new Set();
+      Ge.forEach(nt => {
+        const Ve = xe.get(nt.key);
+        Ve !== void 0 && !_cxuIt.has(Ve) && (_cxuColTotals[Ve] += 1, _cxuIt.add(Ve));
+      });
+      const _cxw = window.__cxWeightOf ? window.__cxWeightOf(we) : 1;
+      if (!_cxw) continue;
+      $e += _cxw;
       const Qe = new Set(),
         Me = new Map();
       Ue.forEach(nt => {
         const Ve = X.get(nt.key);
-        if (Ve !== void 0 && !Qe.has(Ve) && (Ee[Ve] += 1, Qe.add(Ve)), Fe && nt.path[0]) {
+        if (Ve !== void 0 && !Qe.has(Ve) && (Ee[Ve] += _cxw, Qe.add(Ve)), Fe && nt.path[0]) {
           const Et = nt.path[0],
             Ft = Me.get(Et) ?? new Set();
           Me.set(Et, Ft);
@@ -13133,7 +13344,7 @@ function ux() {
       const it = new Set();
       Ge.forEach(nt => {
         const Ve = xe.get(nt.key);
-        Ve !== void 0 && !it.has(Ve) && (ve[Ve] += 1, it.add(Ve));
+        Ve !== void 0 && !it.has(Ve) && (ve[Ve] += _cxw, it.add(Ve));
       }), Fe && (() => {
         const _cxSecOnce = new Set();
         Ue.forEach(nt => {
@@ -13141,25 +13352,28 @@ function ux() {
           if (!Ve) return;
           const Et = Le.get(Ve) ?? {
             totalN: 0,
-            colTotalsN: T.map(() => 0)
+            colTotalsN: T.map(() => 0),
+            unweightedTotalN: 0,
+            unweightedColTotalsN: T.map(() => 0)
           };
           Le.set(Ve, Et);
           if (!_cxSecOnce.has(Ve)) {
             _cxSecOnce.add(Ve);
-            Et.totalN += 1;
+            Et.totalN += _cxw;
+            Et.unweightedTotalN += 1;
           }
           Ge.forEach(Ft => {
             const Ht = xe.get(Ft.key);
             if (Ht === void 0) return;
             const Xn = Me.get(Ve);
-            Xn && (Xn.has(Ht) || (Et.colTotalsN[Ht] += 1, Xn.add(Ht)));
+            Xn && (Xn.has(Ht) || (Et.colTotalsN[Ht] += _cxw, Et.unweightedColTotalsN[Ht] += 1, Xn.add(Ht)));
           });
         });
       })(), Ue.forEach(nt => {
         const Ve = X.get(nt.key);
         Ve !== void 0 && Ge.forEach(Et => {
           const Ft = xe.get(Et.key);
-          Ft !== void 0 && (ye[Ve][Ft] += 1);
+          Ft !== void 0 && (ye[Ve][Ft] += _cxw);
         });
       });
     }
@@ -13168,13 +13382,17 @@ function ux() {
       if (!Ue || me.length > 0 && me[me.length - 1].label === Ue) return me;
       const Ge = Le.get(Ue) ?? {
         totalN: 0,
-        colTotalsN: T.map(() => 0)
+        colTotalsN: T.map(() => 0),
+        unweightedTotalN: 0,
+        unweightedColTotalsN: T.map(() => 0)
       };
       return me.push({
         startIndex: we,
         label: Ue,
         totalN: Ge.totalN,
-        colTotalsN: Ge.colTotalsN
+        colTotalsN: Ge.colTotalsN,
+        unweightedTotalN: Ge.unweightedTotalN,
+        unweightedColTotalsN: Ge.unweightedColTotalsN
       }), me;
     }, []) : void 0;
     return {
@@ -13192,6 +13410,8 @@ function ux() {
       rowTotalsN: Ee,
       colTotalsN: ve,
       grandTotal: $e,
+      unweightedGrandTotal: _cxuGrand,
+      unweightedColTotalsN: _cxuColTotals,
       rowSectionBases: Be
     };
   }
@@ -13268,7 +13488,8 @@ function ux() {
       ve = T.map(() => 0),
       Fe = rr(i).some(me => me.length > 1),
       Le = new Map();
-    let $e = 0;
+    let $e = 0, _cxuGrand = 0;
+    const _cxuColTotals = T.map(() => 0);
     for (let me = 0; me < F.length; me++) {
       me > 0 && me % ef === 0 && (await xo());
       const L = F[me],
@@ -13276,12 +13497,20 @@ function ux() {
         Ue = yr(i, L, we),
         Ge = yr(f, L, we);
       if (Ue.length === 0 || Ge.length === 0) continue;
-      $e += 1;
+      _cxuGrand += 1;
+      const _cxuIt = new Set();
+      Ge.forEach(nt => {
+        const Ve = xe.get(nt.key);
+        Ve !== void 0 && !_cxuIt.has(Ve) && (_cxuColTotals[Ve] += 1, _cxuIt.add(Ve));
+      });
+      const _cxw = window.__cxWeightOf ? window.__cxWeightOf(we) : 1;
+      if (!_cxw) continue;
+      $e += _cxw;
       const Qe = new Set(),
         Me = new Map();
       Ue.forEach(nt => {
         const Ve = X.get(nt.key);
-        if (Ve !== void 0 && !Qe.has(Ve) && (Ee[Ve] += 1, Qe.add(Ve)), Fe && nt.path[0]) {
+        if (Ve !== void 0 && !Qe.has(Ve) && (Ee[Ve] += _cxw, Qe.add(Ve)), Fe && nt.path[0]) {
           const Et = nt.path[0],
             Ft = Me.get(Et) ?? new Set();
           Me.set(Et, Ft);
@@ -13290,7 +13519,7 @@ function ux() {
       const it = new Set();
       Ge.forEach(nt => {
         const Ve = xe.get(nt.key);
-        Ve !== void 0 && !it.has(Ve) && (ve[Ve] += 1, it.add(Ve));
+        Ve !== void 0 && !it.has(Ve) && (ve[Ve] += _cxw, it.add(Ve));
       }), Fe && (() => {
         const _cxSecOnce = new Set();
         Ue.forEach(nt => {
@@ -13298,25 +13527,28 @@ function ux() {
           if (!Ve) return;
           const Et = Le.get(Ve) ?? {
             totalN: 0,
-            colTotalsN: T.map(() => 0)
+            colTotalsN: T.map(() => 0),
+            unweightedTotalN: 0,
+            unweightedColTotalsN: T.map(() => 0)
           };
           Le.set(Ve, Et);
           if (!_cxSecOnce.has(Ve)) {
             _cxSecOnce.add(Ve);
-            Et.totalN += 1;
+            Et.totalN += _cxw;
+            Et.unweightedTotalN += 1;
           }
           Ge.forEach(Ft => {
             const Ht = xe.get(Ft.key);
             if (Ht === void 0) return;
             const Xn = Me.get(Ve);
-            Xn && (Xn.has(Ht) || (Et.colTotalsN[Ht] += 1, Xn.add(Ht)));
+            Xn && (Xn.has(Ht) || (Et.colTotalsN[Ht] += _cxw, Et.unweightedColTotalsN[Ht] += 1, Xn.add(Ht)));
           });
         });
       })(), Ue.forEach(nt => {
         const Ve = X.get(nt.key);
         Ve !== void 0 && Ge.forEach(Et => {
           const Ft = xe.get(Et.key);
-          Ft !== void 0 && (ye[Ve][Ft] += 1);
+          Ft !== void 0 && (ye[Ve][Ft] += _cxw);
         });
       });
     }
@@ -13325,13 +13557,17 @@ function ux() {
       if (!Ue || me.length > 0 && me[me.length - 1].label === Ue) return me;
       const Ge = Le.get(Ue) ?? {
         totalN: 0,
-        colTotalsN: T.map(() => 0)
+        colTotalsN: T.map(() => 0),
+        unweightedTotalN: 0,
+        unweightedColTotalsN: T.map(() => 0)
       };
       return me.push({
         startIndex: we,
         label: Ue,
         totalN: Ge.totalN,
-        colTotalsN: Ge.colTotalsN
+        colTotalsN: Ge.colTotalsN,
+        unweightedTotalN: Ge.unweightedTotalN,
+        unweightedColTotalsN: Ge.unweightedColTotalsN
       }), me;
     }, []) : void 0;
     return {
@@ -13349,6 +13585,8 @@ function ux() {
       rowTotalsN: Ee,
       colTotalsN: ve,
       grandTotal: $e,
+      unweightedGrandTotal: _cxuGrand,
+      unweightedColTotalsN: _cxuColTotals,
       rowSectionBases: Be
     };
   }
@@ -14734,7 +14972,7 @@ function ux() {
               })]
             }) : l.jsx("p", {
               className: "text-gray-400 text-sm mt-16",
-              children: "เน€เธฅเธทเธญเธ Table เธเธฒเธเธฃเธฒเธขเธเธฒเธฃเธเนเธฒเธข"
+              children: "เลือก Table จากรายการซ้าย"
             })
           }) : l.jsx("div", {
             className: "min-h-full flex items-start justify-center px-4 py-4",
@@ -14784,7 +15022,7 @@ function ux() {
                 }), $o && l.jsxs("p", {
                   children: ["Filter: ", l.jsx("b", {
                     children: De.filter.description.trim() || "Custom filter"
-                  }), " โ€” ", De.filter.groups.length, " group(s)"]
+                  }), " - ", De.filter.groups.length, " group(s)"]
                 })]
               })]
             }) : l.jsxs("div", {

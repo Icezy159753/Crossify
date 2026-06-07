@@ -5,6 +5,17 @@ node_modules/
 dist/
 .npm-cache/
 
+# Desktop (electron-builder) release artifacts — regenerable via npm run desktop:build
+release/
+release-*/
+public/downloads/
+
+# Large data / fixtures (keep out of git — too big, not source)
+*.sav
+*.xlsx
+tmp/
+*.bak-*
+
 # Local tooling (may contain secrets)
 .claude/
 
