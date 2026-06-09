@@ -281,6 +281,33 @@
 
           var writable = await _globalCW.apply(this, arguments);
 
+          /* Wrap write() — inject Sig letters into TABLE-export workbooks written via the File
+             System Access API (the bundle's excelExport chunk writes the .xlsx blob here, NOT
+             through window.saveAs, so _resizeTableColumns/_processBlob never see it). Tightly
+             guarded + falls back to the original write on any error so the file still saves. */
+          var _cxOrigWrite = writable.write.bind(writable);
+          writable.write = async function (data) {
+            try {
+              var _fn = (window.__cxSavedSettingsHandle && window.__cxSavedSettingsHandle.name) || '';
+              var _ss = (typeof window.__cxLoadSigSettings === 'function') ? window.__cxLoadSigSettings() : null;
+              if (!window.__cxTBInjecting && _ss && _ss.enabled && /\.xlsx$/i.test(_fn) && !/settings/i.test(_fn)
+                  && typeof window.__cxInjectSigIntoWorkbook === 'function' && typeof window.__cxGetExcelJS === 'function') {
+                var _ExcelJS = await window.__cxGetExcelJS();
+                var _ab = (data instanceof Blob) ? await data.arrayBuffer()
+                  : (data && data.buffer instanceof ArrayBuffer) ? data.buffer
+                  : (data instanceof ArrayBuffer) ? data : null;
+                if (_ExcelJS && _ab) {
+                  var _wb = new _ExcelJS.Workbook();
+                  await _wb.xlsx.load(_ab);
+                  window.__cxInjectSigIntoWorkbook(_wb, _ss);
+                  var _nb = await _wb.xlsx.writeBuffer();
+                  return _cxOrigWrite(_nb);
+                }
+              }
+            } catch (_cxWErr) { console.error('[Sig] FSA write inject failed:', _cxWErr); }
+            return _cxOrigWrite(data);
+          };
+
           /* Wrap close() — fires ONLY for non-injection writes */
           var _origClose = writable.close.bind(writable);
           writable.close = async function () {
@@ -547,6 +574,7 @@
         console.warn('[TB_Setting] ExcelJS not available from cache');
         return null;
       }
+      window.__cxGetExcelJS = _getExcelJS; /* expose so other script blocks (e.g. the FSA write hook) can load ExcelJS */
 
       /* ── Read overrides from _settings JSON in workbook ── */
       function _readOverrides(wb) {
@@ -815,6 +843,12 @@
             }
           } catch (_rcErr) { /* non-fatal */ }
         });
+        try {
+          var _sigSetR = (typeof window.__cxLoadSigSettings === 'function') ? window.__cxLoadSigSettings() : null;
+          if (_sigSetR && _sigSetR.enabled && typeof window.__cxInjectSigIntoWorkbook === 'function') {
+            window.__cxInjectSigIntoWorkbook(wb, _sigSetR);
+          }
+        } catch (_sigErrR) { console.error('[Sig] inject (table-export resize path) failed:', _sigErrR); }
         var newBuf = await wb.xlsx.writeBuffer();
         var newBlob = new Blob([newBuf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
         var _tempSave = window.__cxInterceptSaveAs;
