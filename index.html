@@ -7174,6 +7174,35 @@
           else if (sourceUnweighted.unweightedTotalN != null) nextSectionBase.unweightedTotalN = sourceUnweighted.unweightedTotalN;
           if (sectionBaseOverride && sectionBaseOverride.unweightedColTotalsN) nextSectionBase.unweightedColTotalsN = (sectionBaseOverride.unweightedColTotalsN || []).slice();
           else if (sourceUnweighted.unweightedColTotalsN) nextSectionBase.unweightedColTotalsN = (sourceUnweighted.unweightedColTotalsN || []).slice();
+          /* SA section Base fallback: when the engine left this section's Base empty (e.g. a
+             variable whose case values are keyed by its truncated 8-char SPSS name, so the engine's
+             base pass — looking it up by long name — found nothing), derive the base from the
+             category data rows. For a single-answer variable each respondent falls in exactly one
+             category, so the column-wise SUM of the category counts IS the section base. Skip MA
+             groups (summing would overcount; they have their own recompute path). */
+          (function () {
+            var _ctn = nextSectionBase.colTotalsN || [];
+            var _baseEmpty = !_ctn.length || _ctn.every(function (x) { return !(Number(x) > 0); });
+            var _isMa = /_O$/i.test(String(vName || ''));
+            if (!_baseEmpty || _isMa) return;
+            var _cc = (result.colValues || []).length;
+            var _sum = [];
+            for (var _ci = 0; _ci < _cc; _ci++) _sum[_ci] = 0;
+            var _any = false;
+            for (var _ri = lo; _ri < hi; _ri++) {
+              if (((result.rowTypes && result.rowTypes[_ri]) || 'data') !== 'data') continue;
+              var _row = result.counts[_ri] || [];
+              for (var _cj = 0; _cj < _cc; _cj++) {
+                var _v = Number(_row[_cj]) || 0;
+                _sum[_cj] += _v;
+                if (_v) _any = true;
+              }
+            }
+            if (_any) {
+              nextSectionBase.colTotalsN = _sum;
+              nextSectionBase.totalN = Math.max.apply(null, _sum.concat([0]));
+            }
+          })();
           newBases.push(nextSectionBase);
           var extras = cxSectionExtraRows(result, lo, hi, vName, overrides || {});
           var preExtras = [];
