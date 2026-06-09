@@ -7976,7 +7976,7 @@
       }
 
       /* ── Column proportion z-test ── */
-      function computeSigLetters(counts, colBases, sigLevel, letterMap, minBase) {
+      function computeSigLetters(counts, colBases, sigLevel, letterMap, minBase, groupOf) {
         var nRows = counts.length;
         var nCols = colBases.length;
         var zc = zCrit(sigLevel);
@@ -7995,6 +7995,7 @@
             var pi = countI / ni;
             for (var cj = 0; cj < nCols; cj++) {
               if (ci === cj) continue;
+              if (groupOf && groupOf[ci] !== groupOf[cj]) continue; /* only compare within the same letter group */
               var nj = colBases[cj];
               if (nj < minB) continue;
               var countJ = (counts[ri] && counts[ri][cj]) || 0;
@@ -8027,6 +8028,22 @@
         }
         while (idx < nCols) { map[idx] = String.fromCharCode(65 + (idx % 26)); idx++; }
         return map;
+      }
+
+      /* Comma-separated letter blocks define COMPARISON GROUPS (e.g. "A,BCD,EF" → A alone,
+         B/C/D compared among themselves, E/F among themselves). Returns groupOf[colIndex]. */
+      function parseLetterGroups(sigLettersStr, nCols) {
+        if (!sigLettersStr || !sigLettersStr.trim()) return null;
+        var groups = sigLettersStr.split(',').map(function (g) { return g.trim(); });
+        var groupOf = [];
+        var idx = 0;
+        for (var g = 0; g < groups.length; g++) {
+          for (var c = 0; c < groups[g].length; c++) {
+            if (idx < nCols) { groupOf[idx] = g; idx++; }
+          }
+        }
+        while (idx < nCols) { groupOf[idx] = 100000 + idx; idx++; } /* unmatched cols: own group (no comparison) */
+        return groupOf;
       }
 
       /* ── Fiber helper ── */
@@ -8158,6 +8175,7 @@
 
         var nCols = result.colValues.length;
         var letterMap = parseLetterMap(settings.sigLetters, nCols);
+        var letterGroups = parseLetterGroups(settings.sigLetters, nCols);
         if (!letterMap) return; /* user must provide sig letters first */
         var colBases = result.colTotalsN || [];
         if (!colBases.length) return;
@@ -8174,11 +8192,11 @@
             var hi = sec + 1 < sectionBases.length ? sectionBases[sec + 1].startIndex : result.rowValues.length;
             var secBases = sectionBases[sec].colTotalsN || colBases;
             var secCounts = result.counts.slice(lo, hi);
-            var secSig = computeSigLetters(secCounts, secBases, settings.level, letterMap, settings.minBase);
+            var secSig = computeSigLetters(secCounts, secBases, settings.level, letterMap, settings.minBase, letterGroups);
             for (var s = 0; s < secSig.length; s++) sigResults[lo + s] = secSig[s];
           }
         } else {
-          sigResults = computeSigLetters(result.counts, colBases, settings.level, letterMap, settings.minBase);
+          sigResults = computeSigLetters(result.counts, colBases, settings.level, letterMap, settings.minBase, letterGroups);
         }
 
         addSigHeaderLetters(table, nCols, letterMap);
@@ -8324,6 +8342,7 @@
           if (nCols < 2) return;
 
           letterMap = parseLetterMap(sigSettings.sigLetters, nCols);
+          var letterGroupsX = parseLetterGroups(sigSettings.sigLetters, nCols);
           if (!letterMap) return; /* user must provide sig letters first */
 
           /* ── 3. Add sig letter labels to the column sub-header row ── */
@@ -8398,7 +8417,7 @@
               counts.push(rowCounts);
             });
 
-            var sigResult = computeSigLetters(counts, baseCols, sigSettings.level, letterMap, sigSettings.minBase);
+            var sigResult = computeSigLetters(counts, baseCols, sigSettings.level, letterMap, sigSettings.minBase, letterGroupsX);
 
             /* ── 6. Append sig letters to the % column (keep N and % in separate columns) ── */
             for (var di = 0; di < sec.dataRows.length; di++) {
