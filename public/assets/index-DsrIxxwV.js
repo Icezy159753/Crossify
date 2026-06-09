@@ -11087,6 +11087,24 @@ function Yg(a, s, u, d) {
     rowSectionBases: D
   };
 }
+function cxRenderLabelCells(arr, y, ke) {
+  var S = "__CX_MERGE_PAD__", cells = [];
+  for (var i = 0; i < arr.length; i++) {
+    var span = 1, label = arr[i];
+    if (label === S) {
+      while (i + 1 < arr.length && arr[i + 1] === S) { span++; i++; }
+      if (i + 1 < arr.length) { span++; i++; label = arr[i]; } else { label = ""; }
+    }
+    cells.push({ span: span, label: label, last: i === arr.length - 1 });
+  }
+  return cells.map(function (c, idx) {
+    return l.jsx("td", {
+      colSpan: c.span > 1 ? c.span : void 0,
+      className: "px-2 py-1.5 border border-[#BDD7EE] break-words whitespace-normal " + (c.last ? "font-medium text-gray-800" : "text-gray-600") + " " + (ke ? "text-emerald-800 font-semibold" : ""),
+      children: c.label || l.jsx("span", { className: "text-transparent", children: "." })
+    }, y + "-" + (idx + 1));
+  });
+}
 function Zg({
   result: a,
   config: s
@@ -11113,7 +11131,7 @@ function Zg({
     z = K.rowPaths,
     Q = K.rowLevelLabels,
     B = u.rowTypes ?? d.map(() => "data"),
-    $ = (a => { const _mx = a.reduce((m, r) => Math.max(m, r.length), 0); return a.map(r => r.length < _mx ? [r[0]].concat(Array(_mx - r.length).fill(""), r.slice(1)) : r); })(Jg(z)),
+    $ = (a => { const _mx = a.reduce((m, r) => Math.max(m, r.length), 0); return a.map(r => r.length < _mx ? [r[0]].concat(Array(_mx - r.length).fill("__CX_MERGE_PAD__"), r.slice(1)) : r); })(Jg(z)),
     ie = Qg(J, oe.length),
     Y = K.rowSectionBases,
     ne = Xg(Y, d.length),
@@ -11258,19 +11276,7 @@ function Zg({
                     rowSpan: ne.byStart.get(_).span,
                     className: `px-2 py-1.5 border border-[#BDD7EE] text-gray-800 align-middle bg-white break-words whitespace-normal ${ke ? "text-emerald-800 font-semibold" : ""}`,
                     children: ne.byStart.get(_).label
-                  }), !ne.covered.has(_) && $[_].slice(1).map((Se, Ce) => l.jsx("td", {
-                    className: `px-2 py-1.5 border border-[#BDD7EE] break-words whitespace-normal ${Ce === $[_].slice(1).length - 1 ? "font-medium text-gray-800" : "text-gray-600"} ${ke ? "text-emerald-800 font-semibold" : ""}`,
-                    children: Se || l.jsx("span", {
-                      className: "text-transparent",
-                      children: "."
-                    })
-                  }, `${y}-${Ce + 1}`)), ne.covered.has(_) && $[_].slice(1).map((Se, Ce) => l.jsx("td", {
-                    className: `px-2 py-1.5 border border-[#BDD7EE] break-words whitespace-normal ${Ce === $[_].slice(1).length - 1 ? "font-medium text-gray-800" : "text-gray-600"} ${ke ? "text-emerald-800 font-semibold" : ""}`,
-                    children: Se || l.jsx("span", {
-                      className: "text-transparent",
-                      children: "."
-                    })
-                  }, `${y}-${Ce + 1}`))]
+                  }), cxRenderLabelCells($[_].slice(1), y, ke)]
                 }) : $[_].map((Se, Ce) => l.jsx("td", {
                   className: `px-2 py-1.5 border border-[#BDD7EE] break-words whitespace-normal ${Ce === $[_].length - 1 ? "font-medium text-gray-800" : "text-gray-600"} ${ke ? "text-emerald-800 font-semibold" : ""}`,
                   children: Se || l.jsx("span", {
