@@ -11122,7 +11122,7 @@ function Zg({
     [H, U] = M.useState(!1),
     [W, q] = M.useState(null),
     se = M.useRef(null),
-    de = y => D > 0 ? y / D : 0;
+    de = (y, _ri) => { let _dd = D; if (_ri != null && Array.isArray(u.rowSectionBases)) { for (let _di = u.rowSectionBases.length - 1; _di >= 0; _di--) { const _ds = u.rowSectionBases[_di]; if (_ds && _ri >= _ds.startIndex && _ds.totalN > 0) { _dd = _ds.totalN; break; } } } return _dd > 0 ? y / _dd : 0; };
   function ge(y, _, Ne, ue = "Base") {
     const ke = Array.from({
       length: p.length
@@ -11278,7 +11278,7 @@ function Zg({
                   })
                 }, `${y}-${Ce}`)), l.jsx("td", {
                   className: `px-2 py-1.5 text-center font-semibold border border-[#BDD7EE] tabular-nums ${ue ? "bg-red-100 text-red-700" : ke ? "bg-emerald-100 text-emerald-800" : "text-gray-800 bg-[#D6E4F0]"}`,
-                  children: ue ? Xp(x[_]) : Jp(x[_], de(x[_]), j, E)
+                  children: ue ? Xp(x[_]) : Jp(x[_], de(x[_], _), j, E)
                 }), p.map((Se, Ce) => {
                   const ze = m[_][Ce],
                     We = zh(ze, _, Ce, u, R);
