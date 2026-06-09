@@ -11113,7 +11113,7 @@ function Zg({
     z = K.rowPaths,
     Q = K.rowLevelLabels,
     B = u.rowTypes ?? d.map(() => "data"),
-    $ = Jg(z),
+    $ = (a => { const _mx = a.reduce((m, r) => Math.max(m, r.length), 0); return a.map(r => r.length < _mx ? r.concat(Array(_mx - r.length).fill("")) : r); })(Jg(z)),
     ie = Qg(J, oe.length),
     Y = K.rowSectionBases,
     ne = Xg(Y, d.length),
