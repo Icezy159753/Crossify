@@ -333,7 +333,27 @@
           var p;
           try { p = _origShowSSFP.apply(this, arguments); }
           catch (e) { _ssfpActive = false; throw e; }
-          return Promise.resolve(p).finally(function () { _ssfpActive = false; });
+          var _settled = Promise.resolve(p).finally(function () { _ssfpActive = false; });
+          return _settled.catch(function (err) {
+            /* User cancelled the native Save dialog → swallow the AbortError so the bundle's export
+               doesn't surface a red "AbortError ... The user aborted a request" banner. Return a
+               no-op file handle so the export path completes silently (no file written, no error). */
+            if (err && err.name === 'AbortError') {
+              return {
+                name: suggestedName || 'export.xlsx',
+                kind: 'file',
+                createWritable: function () {
+                  return Promise.resolve({
+                    write: function () { return Promise.resolve(); },
+                    close: function () { return Promise.resolve(); },
+                    truncate: function () { return Promise.resolve(); },
+                    seek: function () { return Promise.resolve(); }
+                  });
+                }
+              };
+            }
+            throw err;
+          });
         };
       }
       if (typeof window.showOpenFilePicker === 'function') {
