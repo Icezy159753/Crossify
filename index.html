@@ -14146,7 +14146,37 @@
            Access picker — otherwise each of N banners pops a native Save dialog. With saveAs each
            file streams straight to the Downloads folder, named per banner via __cxForcedExportName. */
         var _savedSSFP = window.showSaveFilePicker;
-        try { window.showSaveFilePicker = undefined; } catch (_ssfpErr) { }
+        /* Route the batch through a FAKE File System Access handle (no native dialog) whose write
+           is forwarded to window.saveAs — so each banner file passes through __cxInterceptSaveAs →
+           _resizeTableColumns (column resize + Sig-letter injection) before downloading, renamed per
+           banner via __cxForcedExportName. (Forcing the picker OFF would make the bundle use its own
+           anchor, which bypasses all that → no Sig in batch files.) The fake handle is a plain object
+           so it does NOT hit the global createWritable hook — Sig is injected once, in saveAs. */
+        try {
+          window.showSaveFilePicker = function (opts) {
+            var sName = (opts && opts.suggestedName) || window.__cxForcedExportName || 'export.xlsx';
+            return Promise.resolve({
+              name: sName, kind: 'file',
+              createWritable: function () {
+                var parts = [];
+                return Promise.resolve({
+                  write: function (d) { if (d != null) parts.push(d); return Promise.resolve(); },
+                  truncate: function () { return Promise.resolve(); },
+                  seek: function () { return Promise.resolve(); },
+                  close: function () {
+                    try {
+                      var blob = (parts.length === 1 && parts[0] instanceof Blob)
+                        ? parts[0]
+                        : new Blob(parts, { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+                      window.saveAs(blob, sName);
+                    } catch (_cwErr) { console.error('[batch] fake-handle close failed:', _cwErr); }
+                    return Promise.resolve();
+                  }
+                });
+              }
+            });
+          };
+        } catch (_ssfpErr) { }
         try {
         toast('Batch Export started', selected.length + ' banner file(s) will be exported.');
         cxBatchProgress(0, selected.length, 'Starting…');
