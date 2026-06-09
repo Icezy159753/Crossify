@@ -8136,7 +8136,18 @@ function Lr(a, s) {
   };
 }
 function zh(a, s, u, d, p) {
-  const m = p === "row" ? d.rowTotalsN[s] || 1 : p === "column" ? d.colTotalsN[u] || 1 : d.grandTotal || 1;
+  let m;
+  if (p === "row") m = d.rowTotalsN[s] || 1;
+  else if (p === "column") {
+    let _cb = d.colTotalsN[u];
+    if (Array.isArray(d.rowSectionBases)) {
+      for (let _si = d.rowSectionBases.length - 1; _si >= 0; _si--) {
+        const _sec = d.rowSectionBases[_si];
+        if (_sec && s >= _sec.startIndex && Array.isArray(_sec.colTotalsN) && _sec.colTotalsN.length === d.colTotalsN.length) { _cb = _sec.colTotalsN[u]; break; }
+      }
+    }
+    m = _cb || 1;
+  } else m = d.grandTotal || 1;
   return m > 0 ? a / m : 0;
 }
 function Ah(a, s, u, d, p, m) {
