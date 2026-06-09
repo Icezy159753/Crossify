@@ -10391,6 +10391,7 @@ const Wl = bt("X", [["path", {
                     q = D(H);
                   return l.jsxs("div", {
                     draggable: !0,
+                    style: !$ && U > 0 ? { marginLeft: U * 22 + "px", borderLeft: "3px solid #60a5fa" } : void 0,
                     onClick: () => pe(H),
                     title: b(H),
                     onDragStart: se => {
