@@ -11087,20 +11087,46 @@ function Yg(a, s, u, d) {
     rowSectionBases: D
   };
 }
-function cxRenderLabelCells(arr, y, ke) {
+function cxComputeRowspans($, Y, B) {
+  var S = "__CX_MERGE_PAD__";
+  var sl = $.map(function (r) { return r.slice(1); });
+  var rs = sl.map(function (r) { return r.map(function () { return 1; }); });
+  var starts = {};
+  (Y || []).forEach(function (x) { if (x && typeof x.startIndex === "number") starts[x.startIndex] = 1; });
+  var maxc = sl.reduce(function (m, r) { return Math.max(m, r.length); }, 0);
+  for (var c = 0; c < maxc; c++) {
+    for (var r = 0; r < sl.length; r++) {
+      if (rs[r][c] === 0) continue;
+      if (((B && B[r]) || "data") !== "data") continue;
+      var v = sl[r][c];
+      if (v == null || v === "" || v === S) continue;
+      var span = 1;
+      for (var r2 = r + 1; r2 < sl.length; r2++) {
+        if (starts[r2]) break;
+        if (((B && B[r2]) || "data") !== "data") break;
+        if (sl[r2][c] === "") span++; else break;
+      }
+      if (span > 1) { rs[r][c] = span; for (var k = 1; k < span; k++) rs[r + k][c] = 0; }
+    }
+  }
+  return rs;
+}
+function cxRenderLabelCells(arr, rs, y, ke) {
   var S = "__CX_MERGE_PAD__", cells = [];
   for (var i = 0; i < arr.length; i++) {
-    var span = 1, label = arr[i];
+    if (rs && rs[i] === 0) continue;
+    var span = 1, rspan = (rs && rs[i] > 1) ? rs[i] : 1, label = arr[i];
     if (label === S) {
       while (i + 1 < arr.length && arr[i + 1] === S) { span++; i++; }
-      if (i + 1 < arr.length) { span++; i++; label = arr[i]; } else { label = ""; }
+      if (i + 1 < arr.length) { span++; i++; label = arr[i]; rspan = (rs && rs[i] > 1) ? rs[i] : 1; } else { label = ""; }
     }
-    cells.push({ span: span, label: label, last: i === arr.length - 1 });
+    cells.push({ span: span, rspan: rspan, label: label, last: i === arr.length - 1 });
   }
   return cells.map(function (c, idx) {
     return l.jsx("td", {
       colSpan: c.span > 1 ? c.span : void 0,
-      className: "px-2 py-1.5 border border-[#BDD7EE] break-words whitespace-normal " + (c.last ? "font-medium text-gray-800" : "text-gray-600") + " " + (ke ? "text-emerald-800 font-semibold" : ""),
+      rowSpan: c.rspan > 1 ? c.rspan : void 0,
+      className: "px-2 py-1.5 border border-[#BDD7EE] " + (c.rspan > 1 ? "align-middle " : "") + "break-words whitespace-normal " + (c.last ? "font-medium text-gray-800" : "text-gray-600") + " " + (ke ? "text-emerald-800 font-semibold" : ""),
       children: c.label || l.jsx("span", { className: "text-transparent", children: "." })
     }, y + "-" + (idx + 1));
   });
@@ -11134,7 +11160,7 @@ function Zg({
     $ = (a => { const _mx = a.reduce((m, r) => Math.max(m, r.length), 0); return a.map(r => r.length < _mx ? [r[0]].concat(Array(_mx - r.length).fill("__CX_MERGE_PAD__"), r.slice(1)) : r); })(Jg(z)),
     ie = Qg(J, oe.length),
     Y = K.rowSectionBases,
-    ne = Xg(Y, d.length),
+    ne = Xg(Y, d.length), _cxRS = cxComputeRowspans($, Y, B),
     Z = Q.length > 1 ? "w-[150px] min-w-[150px] max-w-[150px]" : "w-[220px] min-w-[220px] max-w-[220px]",
     fe = "w-[230px] min-w-[230px] max-w-[230px]",
     le = "w-[72px] min-w-[72px] max-w-[72px]",
@@ -11276,7 +11302,7 @@ function Zg({
                     rowSpan: ne.byStart.get(_).span,
                     className: `px-2 py-1.5 border border-[#BDD7EE] text-gray-800 align-middle bg-white break-words whitespace-normal ${ke ? "text-emerald-800 font-semibold" : ""}`,
                     children: ne.byStart.get(_).label
-                  }), cxRenderLabelCells($[_].slice(1), y, ke)]
+                  }), cxRenderLabelCells($[_].slice(1), _cxRS[_], y, ke)]
                 }) : $[_].map((Se, Ce) => l.jsx("td", {
                   className: `px-2 py-1.5 border border-[#BDD7EE] break-words whitespace-normal ${Ce === $[_].length - 1 ? "font-medium text-gray-800" : "text-gray-600"} ${ke ? "text-emerald-800 font-semibold" : ""}`,
                   children: Se || l.jsx("span", {
