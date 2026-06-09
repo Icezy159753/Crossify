@@ -477,6 +477,7 @@
               if (kStr === 'Sig Enabled') sigSettings.enabled = (vStr.toLowerCase() === 'true' || vStr === '1' || vStr.toLowerCase() === 'yes');
               if (kStr === 'Sig Level') sigSettings.level = Number(vStr) || 95;
               if (kStr === 'Sig Letters') sigSettings.sigLetters = vStr;
+              if (kStr === 'Sig Min Base') sigSettings.minBase = Math.max(0, Math.floor(Number(vStr) || 0));
             }
           }
 
@@ -669,7 +670,7 @@
         var outSheet = wb.worksheets.find(function (w) { return w.name === 'Output'; });
         if (outSheet) {
           var sigSet = window.__cxGlobalSettingsState && window.__cxGlobalSettingsState.sigSettings || {};
-          var sigKeys = { 'Sig Enabled': sigSet.enabled ? 'Yes' : 'No', 'Sig Level': sigSet.level || 95, 'Sig Letters': sigSet.sigLetters || '' };
+          var sigKeys = { 'Sig Enabled': sigSet.enabled ? 'Yes' : 'No', 'Sig Level': sigSet.level || 95, 'Sig Letters': sigSet.sigLetters || '', 'Sig Min Base': sigSet.minBase || 0 };
           var existingRows = {};
           for (var ri = 1; ri <= outSheet.rowCount; ri++) {
             var cA = outSheet.getCell(ri, 1);
@@ -5102,7 +5103,8 @@
         return {
           enabled: typeof raw.enabled === 'boolean' ? raw.enabled : false,
           level: raw.level === 90 ? 90 : 95,
-          sigLetters: typeof raw.sigLetters === 'string' ? raw.sigLetters : ''
+          sigLetters: typeof raw.sigLetters === 'string' ? raw.sigLetters : '',
+          minBase: Math.max(0, Math.floor(Number(raw.minBase) || 0))
         };
       }
 
@@ -7974,10 +7976,11 @@
       }
 
       /* ── Column proportion z-test ── */
-      function computeSigLetters(counts, colBases, sigLevel, letterMap) {
+      function computeSigLetters(counts, colBases, sigLevel, letterMap, minBase) {
         var nRows = counts.length;
         var nCols = colBases.length;
         var zc = zCrit(sigLevel);
+        var minB = Math.max(2, Math.floor(Number(minBase) || 0));
         var result = [];
         for (var ri = 0; ri < nRows; ri++) {
           var row = [];
@@ -7987,13 +7990,13 @@
         for (var ri = 0; ri < nRows; ri++) {
           for (var ci = 0; ci < nCols; ci++) {
             var ni = colBases[ci];
-            if (ni < 2) continue;
+            if (ni < minB) continue;
             var countI = (counts[ri] && counts[ri][ci]) || 0;
             var pi = countI / ni;
             for (var cj = 0; cj < nCols; cj++) {
               if (ci === cj) continue;
               var nj = colBases[cj];
-              if (nj < 2) continue;
+              if (nj < minB) continue;
               var countJ = (counts[ri] && counts[ri][cj]) || 0;
               var pPooled = (countI + countJ) / (ni + nj);
               if (pPooled <= 0 || pPooled >= 1) continue;
@@ -8073,7 +8076,11 @@
           '<label style="font-size:11px;color:#6b7280;display:block;margin-bottom:3px;">Sig Letters (เช่น ABC,DEF,GHI)</label>' +
           '<input type="text" id="__cx_sig_letters" value="' + (settings.sigLetters || '') + '" placeholder="เช่น ABCD หรือ AB,CD,EF" style="width:100%;padding:4px 8px;font-size:12px;border:1px solid #d1d5db;border-radius:6px;outline:none;font-family:monospace;">' +
           '</div>' +
-          '<p style="font-size:9px;color:#9ca3af;margin-top:4px;">* ต้องใส่ตัวอักษรก่อนจึงจะคำนวณ Sig<br>ตัวอักษรจะกำหนดให้แต่ละคอลัมน์ตามลำดับ</p>' +
+          '<div style="margin-bottom:4px;">' +
+          '<label style="font-size:11px;color:#6b7280;display:block;margin-bottom:3px;">Min base (ฐานขั้นต่ำที่จะคิด Sig)</label>' +
+          '<input type="number" id="__cx_sig_minbase" min="0" step="1" value="' + (settings.minBase || 0) + '" placeholder="0 = ไม่จำกัด" style="width:100%;padding:4px 8px;font-size:12px;border:1px solid #d1d5db;border-radius:6px;outline:none;font-family:monospace;">' +
+          '</div>' +
+          '<p style="font-size:9px;color:#9ca3af;margin-top:4px;">* ต้องใส่ตัวอักษรก่อนจึงจะคำนวณ Sig<br>ตัวอักษรจะกำหนดให้แต่ละคอลัมน์ตามลำดับ<br>Min base: คอลัมน์ที่ฐานน้อยกว่านี้จะไม่ติด Sig (0 = ไม่จำกัด)</p>' +
           '</div>';
 
         var footer = panel.querySelector('.mt-3.pt-3.border-t');
@@ -8100,6 +8107,12 @@
         }
         letterInput.addEventListener('input', function () {
           settings.sigLetters = this.value;
+          saveSigSettings(settings);
+          applySigToAllTables();
+        });
+        var minBaseInput = container.querySelector('#__cx_sig_minbase');
+        if (minBaseInput) minBaseInput.addEventListener('input', function () {
+          settings.minBase = Math.max(0, Math.floor(Number(this.value) || 0));
           saveSigSettings(settings);
           applySigToAllTables();
         });
@@ -8161,11 +8174,11 @@
             var hi = sec + 1 < sectionBases.length ? sectionBases[sec + 1].startIndex : result.rowValues.length;
             var secBases = sectionBases[sec].colTotalsN || colBases;
             var secCounts = result.counts.slice(lo, hi);
-            var secSig = computeSigLetters(secCounts, secBases, settings.level, letterMap);
+            var secSig = computeSigLetters(secCounts, secBases, settings.level, letterMap, settings.minBase);
             for (var s = 0; s < secSig.length; s++) sigResults[lo + s] = secSig[s];
           }
         } else {
-          sigResults = computeSigLetters(result.counts, colBases, settings.level, letterMap);
+          sigResults = computeSigLetters(result.counts, colBases, settings.level, letterMap, settings.minBase);
         }
 
         addSigHeaderLetters(table, nCols, letterMap);
@@ -8385,7 +8398,7 @@
               counts.push(rowCounts);
             });
 
-            var sigResult = computeSigLetters(counts, baseCols, sigSettings.level, letterMap);
+            var sigResult = computeSigLetters(counts, baseCols, sigSettings.level, letterMap, sigSettings.minBase);
 
             /* ── 6. Append sig letters to the % column (keep N and % in separate columns) ── */
             for (var di = 0; di < sec.dataRows.length; di++) {
