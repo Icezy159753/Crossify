@@ -11298,13 +11298,22 @@
       }
 
       function augmentTablesArray(tables) {
-        /* Normalize: the Filter tab reads table.filter.description unconditionally, but
-           imported/legacy tables can carry filter:null — default it so the tab never crashes. */
+        /* Normalize: (1) the Filter tab reads table.filter.description unconditionally, but
+           imported/legacy tables can carry filter:null — default it so the tab never crashes.
+           (2) mtd-imported tables from the first import release carried only description —
+           the tables list displays NAME, so they all showed as "Table1"; backfill name from
+           description for cx-mtd tables only (never touches user-created tables). */
         if (Array.isArray(tables)) {
           tables = tables.map(function (t) {
-            return (t && typeof t === 'object' && t.filter == null)
-              ? Object.assign({}, t, { filter: { description: '', rootJoin: 'all', groups: [] } })
-              : t;
+            if (!t || typeof t !== 'object') return t;
+            var patch = null;
+            if (t.filter == null) patch = { filter: { description: '', rootJoin: 'all', groups: [] } };
+            var isMtd = typeof t.id === 'string' && t.id.indexOf('cx-mtd') >= 0;
+            if (isMtd && t.description && (!t.name || t.name === 'Table1') && t.name !== t.description) {
+              patch = patch || {};
+              patch.name = t.description;
+            }
+            return patch ? Object.assign({}, t, patch) : t;
           });
         }
         /* Override source: prefer the synchronously-maintained window mirror
@@ -14843,6 +14852,11 @@
           all.forEach(function (b) {
             if (b && b.table && b.table.filter == null) {
               b.table.filter = { description: '', rootJoin: 'all', groups: [] };
+              changed = true;
+            }
+            /* first-release mtd banners lacked table.name → tables list showed "Table1" */
+            if (b && b.table && typeof b.id === 'string' && b.id.indexOf('cx-mtd') === 0 && b.name && !b.table.name) {
+              b.table.name = b.name;
               changed = true;
             }
           });
