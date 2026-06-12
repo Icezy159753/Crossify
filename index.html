@@ -14330,6 +14330,477 @@
       window.__cxBannerExportSelectedForTest = exportSelected;
     })();
   </script>
+
+  <!-- S6 module: Reporter (.mtd) import — parses a UNICOM/SPSS Reporter table document and
+       recreates its tables (Side/Top axes, Nets/Combines, per-table filters, sig settings)
+       in Crossify. PURELY ADDITIVE: standalone script block, touches no existing functions.
+       Mirrors src/lib/mtdImport.ts (unit-tested in Node against the real files). -->
+  <script>
+    (function () {
+      'use strict';
+      if (window.__cxMtdImportLoaded) return;
+      window.__cxMtdImportLoaded = true;
+
+      var ENT = { quot: '"', amp: '&', lt: '<', gt: '>', apos: "'" };
+      function decodeEntities(s) {
+        return String(s).replace(/&(#x?[0-9a-fA-F]+|[a-z]+);/g, function (m, body) {
+          if (body.charAt(0) === '#') {
+            var code = (body.charAt(1) === 'x' || body.charAt(1) === 'X') ? parseInt(body.slice(2), 16) : parseInt(body.slice(1), 10);
+            return isFinite(code) ? String.fromCodePoint(code) : m;
+          }
+          return ENT[body] != null ? ENT[body] : m;
+        });
+      }
+      function innerText(xml, openEnd, closeTag) {
+        var close = xml.indexOf(closeTag, openEnd);
+        if (close < 0) return '';
+        var body = xml.slice(openEnd, close);
+        var cd = body.match(/^<!\[CDATA\[([\s\S]*)\]\]>$/);
+        return cd ? cd[1] : decodeEntities(body);
+      }
+
+      function cxMtdParse(xml) {
+        var TAG_RE = /<(\/?)([A-Za-z_][\w.]*)((?:\s+[\w.]+\s*=\s*"[^"]*")*)\s*(\/?)>/g;
+        var ATTR_RE = /([\w.]+)\s*=\s*"([^"]*)"/g;
+        var tables = [];
+        var table = null, axisSide = null, axisDepth = 0, curVar = null, curGroup = null;
+        var inSubElements = false, inStatistics = false, inColProp = false, pendingPropName = null, skipDepth = 0;
+        var m;
+        while ((m = TAG_RE.exec(xml))) {
+          var closing = m[1] === '/', n = m[2], selfClosed = m[4] === '/';
+          var attrs = {};
+          if (m[3]) { var a; ATTR_RE.lastIndex = 0; while ((a = ATTR_RE.exec(m[3]))) attrs[a[1]] = decodeEntities(a[2]); }
+          if (skipDepth > 0) { if (!closing && !selfClosed) skipDepth++; else if (closing) skipDepth--; continue; }
+          if (!closing && n === 'Table' && attrs.Name !== undefined) {
+            table = { name: attrs.Name || '', description: attrs.Description || '', side: [], top: [], filters: [] };
+            continue;
+          }
+          if (closing && n === 'Table') {
+            if (table) tables.push(table);
+            table = null; axisSide = null; axisDepth = 0; curVar = null; curGroup = null;
+            continue;
+          }
+          if (!table) continue;
+          if (n === 'Axis') {
+            if (!closing) {
+              axisDepth++;
+              var nm = attrs.Name || '';
+              if (axisDepth === 1) axisSide = nm === 'Side' ? 'side' : nm === 'Top' ? 'top' : null;
+              else if (axisSide && attrs.MdmName) {
+                curVar = { mdmName: attrs.MdmName, label: attrs.Label || attrs.MdmName, groups: [], categories: [] };
+                table[axisSide].push(curVar);
+              }
+              if (selfClosed) axisDepth--;
+            } else {
+              axisDepth--;
+              if (axisDepth <= 1) curVar = null;
+              if (axisDepth === 0) axisSide = null;
+            }
+            continue;
+          }
+          if (n === 'Element') {
+            if (!closing && curVar) {
+              var type = attrs.Type || '';
+              var label = attrs.Label || attrs.Name || '';
+              var mdm = attrs.MdmName || attrs.Name || '';
+              if (inSubElements && curGroup) {
+                if (type === 'Category') { curGroup.memberLabels.push(label); curGroup.memberNames.push(mdm); }
+              } else if (type === 'Net' || type === 'Combine') {
+                curGroup = { name: label, memberLabels: [], memberNames: [] };
+                curVar.groups.push(curGroup);
+              } else if (type === 'Category') {
+                curVar.categories.push({ name: mdm, label: label });
+              }
+            }
+            continue;
+          }
+          if (n === 'SubElements') { inSubElements = !closing; if (closing) curGroup = null; continue; }
+          if (n === 'Filter' && !closing && attrs.Expression) {
+            table.filters.push({ name: attrs.Name || '', expression: attrs.Expression });
+            continue;
+          }
+          if (n === 'Statistics' && !closing && !selfClosed) {
+            inStatistics = true;
+            if (attrs.TestColumns) table.testColumns = attrs.TestColumns;
+            if (attrs.ColumnIDs) table.columnIds = attrs.ColumnIDs;
+            continue;
+          }
+          if (n === 'Statistics' && closing) { inStatistics = false; inColProp = false; continue; }
+          if (inStatistics && n === 'Statistic') { inColProp = !closing && attrs.Name === 'ColumnProportions'; continue; }
+          if (inColProp && n === 'name' && !closing) { pendingPropName = innerText(xml, TAG_RE.lastIndex, '</name>'); continue; }
+          if (inColProp && n === 'value' && !closing) {
+            var v = innerText(xml, TAG_RE.lastIndex, '</value>').trim();
+            var num = Number(v);
+            if (pendingPropName === 'MinBase' && isFinite(num) && num > 0) table.sigMinBase = num;
+            else if (pendingPropName === 'SigLevel' && isFinite(num) && num > 0) table.sigAlpha = num;
+            pendingPropName = null;
+            continue;
+          }
+          if (!closing && !selfClosed && (n === 'CellContents' || n === 'Scripts' || n === 'DataSources')) { skipDepth = 1; continue; }
+        }
+        return { tables: tables };
+      }
+
+      function mtdNorm(s) { return String(s || '').replace(/\s+/g, ' ').trim().toLowerCase(); }
+      function sanitizeKey(s) { return mtdNorm(s).replace(/[^0-9a-z฀-๿]+/g, '_'); }
+
+      function buildVarIndex(vars) {
+        var map = new Map();
+        vars.forEach(function (v) {
+          if (!v || !v.name) return;
+          map.set(mtdNorm(v.name), v);
+          if (v.longName) map.set(mtdNorm(v.longName), v);
+        });
+        return map;
+      }
+      function resolveMtdVar(mdmName, index) {
+        function tryName(nm) {
+          var hit = index.get(mtdNorm(nm));
+          return hit ? ((hit.longName && hit.longName !== hit.name) ? hit.longName : hit.name) : null;
+        }
+        var direct = tryName(mdmName);
+        if (direct) return direct;
+        if (index.has(mtdNorm(mdmName + '$1'))) return mdmName;
+        var grid = String(mdmName).match(/\[\{([^}]+)\}\]/);
+        if (grid) {
+          var inner = grid[1];
+          var hit = tryName(inner);
+          if (hit) return hit;
+          if (index.has(mtdNorm(inner + '$1'))) return inner;
+        }
+        return null;
+      }
+      function labelCodeMap(v) {
+        var map = new Map();
+        if (v && v.valueLabels) {
+          Object.keys(v.valueLabels).forEach(function (code) {
+            var label = v.valueLabels[code];
+            map.set(mtdNorm(label), code);
+            map.set(sanitizeKey(label), code);
+          });
+        }
+        return map;
+      }
+      function mapGroupMembers(g, v) {
+        var ltc = labelCodeMap(v);
+        var out = [];
+        for (var i = 0; i < g.memberLabels.length; i++) {
+          var code = ltc.get(mtdNorm(g.memberLabels[i]));
+          if (code == null) code = ltc.get(mtdNorm(g.memberNames[i]));
+          if (code == null) code = ltc.get(sanitizeKey(g.memberNames[i]));
+          if (code != null && out.indexOf(code) < 0) out.push(code);
+        }
+        return out;
+      }
+      function mapMtdFilter(expression, index) {
+        var parts = String(expression).split(/\s+And\s+/i);
+        var conditions = [];
+        for (var pi = 0; pi < parts.length; pi++) {
+          var pm = parts[pi].trim().match(/^([\w.#$฀-๿]+)\.Contains(?:Any|All)?\(\{([^}]*)\}\)$/i);
+          if (!pm) return { spec: null, reason: 'unsupported expression: ' + String(expression).slice(0, 120) };
+          var varName = resolveMtdVar(pm[1], index);
+          if (!varName) return { spec: null, reason: 'filter variable not found: ' + pm[1] };
+          var v = index.get(mtdNorm(varName)) || index.get(mtdNorm(pm[1]));
+          var ltc = labelCodeMap(v);
+          var values = [];
+          var items = pm[2].split(',');
+          for (var ii = 0; ii < items.length; ii++) {
+            var item = items[ii].trim();
+            if (!item) continue;
+            var code = ltc.get(mtdNorm(item));
+            if (code == null) code = ltc.get(sanitizeKey(item));
+            if (code != null) { if (values.indexOf(code) < 0) values.push(code); }
+            else if (/^\d+$/.test(item)) { if (values.indexOf(item) < 0) values.push(item); }
+            else return { spec: null, reason: 'filter category not found: ' + item + ' in ' + pm[1] };
+          }
+          if (!values.length) return { spec: null, reason: 'filter has no resolvable categories' };
+          conditions.push({ id: 'mtd-' + conditions.length, variableName: varName, operator: 'in', values: values, value: '', secondaryValue: '' });
+        }
+        if (!conditions.length) return { spec: null, reason: 'empty filter' };
+        /* description is REQUIRED by the table-list renderer (filterSummary calls description.trim()) */
+        return { spec: { description: String(expression).slice(0, 160), rootJoin: 'all', groups: [{ id: 'mtd-g0', join: 'all', conditions: conditions }] }, reason: null };
+      }
+      function mapTestColumns(testColumns) {
+        var seen = {};
+        var groups = [];
+        String(testColumns).split(',').forEach(function (seg) {
+          var letters = seg.split('/').map(function (x) { return x.trim(); }).filter(function (x) { return x.length === 1; });
+          if (!letters.length) return;
+          for (var i = 0; i < letters.length; i++) if (seen[letters[i]]) return;
+          letters.forEach(function (l) { seen[l] = true; });
+          groups.push(letters.join(''));
+        });
+        return groups.join(',');
+      }
+
+      function cxMtdMap(parsed, vars) {
+        var index = buildVarIndex(vars);
+        var overrides = {};
+        var tables = [];
+        var varsMissing = {};
+        var skippedTables = [];
+        var netsApplied = 0, filtersApplied = 0, filtersSkipped = 0, fullyMapped = 0, partiallyMapped = 0;
+        var sig = null, groupSeq = 0;
+
+        parsed.tables.forEach(function (t) {
+          var skipped = [];
+          function resolveAxis(axis) {
+            var out = [];
+            axis.forEach(function (av) {
+              var resolved = resolveMtdVar(av.mdmName, index);
+              if (!resolved) { skipped.push(av.mdmName); varsMissing[av.mdmName] = true; return; }
+              out.push(resolved);
+              if (av.groups.length && !overrides[resolved]) {
+                var v = index.get(mtdNorm(av.mdmName)) || index.get(mtdNorm(resolved));
+                var mapped = [];
+                av.groups.forEach(function (g) {
+                  var members = mapGroupMembers(g, v);
+                  if (members.length) mapped.push({ id: 'mtdnet-' + (groupSeq++), name: g.name, members: members });
+                });
+                if (mapped.length) { overrides[resolved] = mapped; netsApplied += mapped.length; }
+              }
+            });
+            return out;
+          }
+          var sideVars = resolveAxis(t.side);
+          var topVars = resolveAxis(t.top);
+          if (!sideVars.length && !topVars.length) {
+            skippedTables.push({ name: t.name, description: t.description, reason: skipped.length ? 'variables not in SAV: ' + skipped.join(', ') : 'no mappable axis variables' });
+            return;
+          }
+          var filter = null, filterSkipped = null;
+          if (t.filters.length) {
+            var exprs = t.filters.map(function (f) { return f.expression; }).join(' And ');
+            var res = mapMtdFilter(exprs, index);
+            if (res.spec) { filter = res.spec; filtersApplied++; }
+            else { filterSkipped = res.reason; filtersSkipped++; }
+          }
+          if (!skipped.length && !filterSkipped) fullyMapped++; else partiallyMapped++;
+          tables.push({
+            description: (t.description || t.name) + (filterSkipped ? ' [NO FILTER]' : ''),
+            rowVar: sideVars.join(' || '),
+            colVar: topVars.join(' || '),
+            filter: filter,
+            filterSkipped: filterSkipped,
+            skippedVars: skipped
+          });
+          if (!sig && t.testColumns) {
+            var letters = mapTestColumns(t.testColumns);
+            if (letters) sig = { enabled: true, level: t.sigAlpha === 10 ? 90 : 95, sigLetters: letters, minBase: t.sigMinBase || 0 };
+          }
+        });
+
+        return {
+          tables: tables, overrides: overrides, sig: sig,
+          report: {
+            totalTables: parsed.tables.length,
+            fullyMapped: fullyMapped, partiallyMapped: partiallyMapped,
+            netsApplied: netsApplied, filtersApplied: filtersApplied, filtersSkipped: filtersSkipped,
+            varsMissing: Object.keys(varsMissing), skippedTables: skippedTables
+          }
+        };
+      }
+
+      /* ── Apply to the running app ── */
+      function tablesHook() {
+        try { return typeof window.__cxResolveLiveTablesHook === 'function' ? window.__cxResolveLiveTablesHook() : null; } catch (_e) { return null; }
+      }
+      function cxMtdApply(mapped, mode) {
+        /* 1) Nets/Combines → variable overrides (same write the Apply-Net feature uses) */
+        var ov = (window.__cxVariableOverrides && typeof window.__cxVariableOverrides === 'object') ? window.__cxVariableOverrides : {};
+        Object.keys(mapped.overrides).forEach(function (name) {
+          var base = (ov[name] && typeof ov[name] === 'object') ? ov[name] : {};
+          var groups = mapped.overrides[name].map(function (g) { return { id: g.id, name: g.name, members: g.members.slice() }; });
+          base.groups = groups;
+          base.netGroups = groups.map(function (g) { return { id: g.id, name: g.name, members: g.members.slice() }; });
+          ov[name] = base;
+        });
+        window.__cxVariableOverrides = ov;
+        /* 2) Sig settings */
+        if (mapped.sig && typeof window.__cxSaveSigSettings === 'function') {
+          window.__cxSaveSigSettings({ enabled: true, level: mapped.sig.level, sigLetters: mapped.sig.sigLetters, minBase: mapped.sig.minBase });
+        }
+        /* 3) Tables → SAVED BANNERS + auto "Load & Run Selected".
+           Rationale: importing through the banner pipeline reuses the existing,
+           production-proven Load & Run path (the same button the user already uses),
+           gives persistence for free (all imported tables stay in Saved Banners for
+           re-running/batch-export), and avoids dispatching React state from outside an
+           event (which can silently no-op). */
+        var runId = 'cx-mtd-' + Date.now().toString(36);
+        var getB = window.__cxGetBannerTemplates;
+        var setB = window.__cxSetBannerTemplates;
+        var loadSel = window.__cxBannerLoadSelectedForTest;
+        if (typeof getB !== 'function' || typeof setB !== 'function' || typeof loadSel !== 'function') {
+          return Promise.resolve(false);
+        }
+        var now = new Date().toISOString();
+        var existing = (mode === 'append') ? (getB() || []) : (getB() || []).filter(function (b) {
+          return !(b && typeof b.id === 'string' && b.id.indexOf('cx-mtd-') === 0);
+        });
+        var fresh = mapped.tables.map(function (t, i) {
+          return {
+            id: runId + '-' + i,
+            name: t.description,
+            createdAt: now,
+            updatedAt: now,
+            table: {
+              description: t.description,
+              rowVar: t.rowVar,
+              colVar: t.colVar,
+              filter: t.filter || null,
+              result: null
+            }
+          };
+        });
+        setB(existing.concat(fresh));
+        /* Load the imported banners as tables — same dispatch shape as the banner module's
+           loadSelected, but WITHOUT its immediate runAllSoon (which would click Run All
+           before the new tables commit and run the old empty table instead). Our gated
+           clicks below run only after the imported tables are visible. */
+        try {
+          var hook = tablesHook();
+          var dispatch = hook && hook.queue && (hook.queue.__cxOrigDispatch || hook.queue.dispatch);
+          if (typeof dispatch === 'function') {
+            dispatch(function (prev) {
+              var seed = (Array.isArray(prev) && prev[0]) ? prev[0] : {};
+              return fresh.map(function (b, index) {
+                return Object.assign({}, seed, JSON.parse(JSON.stringify(b.table)), {
+                  id: 'cx-banner-table-' + b.id + '-' + index,
+                  description: b.name,
+                  result: null
+                });
+              });
+            });
+          }
+        } catch (_lsErr) { }
+        /* loadSelected's own flush is a Run All click, which is DISABLED while the current
+           table is empty — guarantee a flush with a native click on an always-enabled tab
+           button so the dispatched tables state commits. */
+        setTimeout(function () {
+          try {
+            var tab = Array.from(document.querySelectorAll('button')).find(function (b) {
+              return (b.textContent || '').trim() === 'Design' && !b.disabled;
+            });
+            if (tab) tab.click();
+          } catch (_fErr) { }
+        }, 300);
+        setTimeout(function () {
+          try {
+            /* Only auto-run once the imported tables have actually committed to the UI
+               (clicking Run All against the old empty table throws in the run pipeline). */
+            var firstDesc = mapped.tables[0] && mapped.tables[0].description;
+            if (!firstDesc || !document.body || document.body.innerText.indexOf(firstDesc) < 0) return;
+            var runBtn = Array.from(document.querySelectorAll('button')).find(function (b) {
+              return (b.textContent || '').replace(/\s+/g, ' ').trim() === 'Run All' && !b.disabled;
+            });
+            if (runBtn) runBtn.click();
+          } catch (_rErr) { }
+        }, 900);
+        return Promise.resolve(true);
+      }
+
+      function fmtReport(report, applied) {
+        var lines = [];
+        lines.push((applied ? 'นำเข้าแล้ว ' : 'พร้อมนำเข้า ') + report.totalTables + ' ตารางจาก Reporter');
+        lines.push('• สร้างตาราง: ' + (report.totalTables - report.skippedTables.length) + ' (ครบสมบูรณ์ ' + report.fullyMapped + ', บางส่วน ' + report.partiallyMapped + ')');
+        lines.push('• Net/Combine ที่จับให้: ' + report.netsApplied + ' กลุ่ม');
+        lines.push('• Filter: ใส่ให้ ' + report.filtersApplied + ' ตาราง' + (report.filtersSkipped ? ', แปลงไม่ได้ ' + report.filtersSkipped + ' ตาราง (ติดป้าย [NO FILTER])' : ''));
+        if (report.skippedTables.length) {
+          lines.push('• ข้าม ' + report.skippedTables.length + ' ตาราง (ตัวแปรไม่อยู่ในไฟล์ SAV เช่น grid/banner เฉพาะของ Reporter):');
+          report.skippedTables.slice(0, 8).forEach(function (s) { lines.push('   - ' + (s.description || s.name)); });
+          if (report.skippedTables.length > 8) lines.push('   ... และอีก ' + (report.skippedTables.length - 8) + ' ตาราง');
+        }
+        return lines.join('\n');
+      }
+
+      function handleMtdFile(file) {
+        var reader = new FileReader();
+        reader.onload = function () {
+          try {
+            var ds = window.__cxDataset;
+            if (!ds || !Array.isArray(ds.variables) || !ds.variables.length) {
+              cxRuntimeAlert('กรุณาโหลดไฟล์ SPSS (.sav) ก่อน แล้วค่อยนำเข้า .mtd');
+              return;
+            }
+            var parsed = cxMtdParse(String(reader.result || ''));
+            if (!parsed.tables.length) { cxRuntimeAlert('ไม่พบตารางในไฟล์ .mtd นี้'); return; }
+            var mapped = cxMtdMap(parsed, ds.variables);
+            var msg = fmtReport(mapped.report, false) + '\n\nต้องการแทนที่รายการตารางปัจจุบัน หรือเพิ่มต่อท้าย?';
+            var doApply = function (mode) {
+              Promise.resolve(cxMtdApply(mapped, mode)).then(function (ok) {
+                if (ok) cxRuntimeAlert(fmtReport(mapped.report, true) + '\n\nกด Run All เพื่อรันทุกตาราง');
+                else cxRuntimeAlert('นำเข้าไม่สำเร็จ: สถานะตารางของแอปยังไม่พร้อม ลองอีกครั้ง');
+              });
+            };
+            if (window.__crossifyRuntime && typeof window.__crossifyRuntime.confirm === 'function') {
+              window.__crossifyRuntime.confirm({ title: 'Import Reporter (.mtd)', text: msg, confirmText: 'แทนที่ทั้งหมด', cancelText: 'เพิ่มต่อท้าย' })
+                .then(function (res) { doApply(res ? 'replace' : 'append'); });
+            } else {
+              doApply(window.confirm(msg + '\n\nOK = แทนที่, Cancel = เพิ่มต่อท้าย') ? 'replace' : 'append');
+            }
+          } catch (err) {
+            console.error('[MTD] import failed:', err);
+            try { cxRuntimeAlert('นำเข้า .mtd ไม่สำเร็จ: ' + (err && err.message ? err.message : String(err))); } catch (_a) { }
+          }
+        };
+        reader.readAsText(file, 'utf-8');
+      }
+
+      /* hidden file input */
+      var fileInput = null;
+      function ensureFileInput() {
+        if (fileInput) return fileInput;
+        fileInput = document.createElement('input');
+        fileInput.type = 'file';
+        fileInput.accept = '.mtd,.xml';
+        fileInput.style.display = 'none';
+        fileInput.addEventListener('change', function () {
+          if (fileInput.files && fileInput.files[0]) handleMtdFile(fileInput.files[0]);
+          fileInput.value = '';
+        });
+        (document.body || document.documentElement).appendChild(fileInput);
+        return fileInput;
+      }
+
+      /* menu injection — idempotent, mirrors the cloud-menu approach (only insert when absent) */
+      function injectMenuItem() {
+        var menus = Array.from(document.querySelectorAll('div.absolute, div[role="menu"]'));
+        menus.forEach(function (menu) {
+          if (menu.querySelector('#cx-mtd-import-item')) return;
+          var hasCloudItems = !!menu.querySelector('[data-cx-cloud], #cx-cloud-save-settings-item');
+          var text = (menu.textContent || '');
+          var looksWorkspace = hasCloudItems || (text.indexOf('Load SPSS') >= 0 || text.indexOf('Save Cloud Settings') >= 0);
+          if (!looksWorkspace) return;
+          var btn = document.createElement('button');
+          btn.id = 'cx-mtd-import-item';
+          btn.type = 'button';
+          btn.className = 'cx-cloud-item';
+          btn.textContent = 'Import Reporter (.mtd)';
+          btn.addEventListener('click', function (e) {
+            e.preventDefault(); e.stopPropagation();
+            ensureFileInput().click();
+          });
+          menu.appendChild(btn);
+        });
+      }
+      var _mtdObs = new MutationObserver(function () { try { injectMenuItem(); } catch (_e) { } });
+      function startObs() {
+        try { _mtdObs.observe(document.body, { childList: true, subtree: true }); injectMenuItem(); } catch (_e) { }
+      }
+      if (document.body) startObs(); else document.addEventListener('DOMContentLoaded', startObs);
+
+      /* test hooks */
+      window.__cxMtdParse = cxMtdParse;
+      window.__cxMtdImportForTest = function (xmlText, mode) {
+        var ds = window.__cxDataset;
+        var parsed = cxMtdParse(String(xmlText));
+        var mapped = cxMtdMap(parsed, ds && ds.variables ? ds.variables : []);
+        return Promise.resolve(cxMtdApply(mapped, mode || 'replace')).then(function (ok) {
+          return { ok: ok, report: mapped.report, overrides: mapped.overrides, sig: mapped.sig, tables: mapped.tables.length };
+        });
+      };
+    })();
+  </script>
   <!-- Desktop download button removed — full web app only. -->
 </body>
 

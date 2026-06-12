@@ -9,7 +9,8 @@ const lineBudgets = [
   // Raised to track the in-progress runtime features added to index.html
   // (Derive/Recode modal, banner templates, MA section, weight handling,
   // workspace snapshot). Long-term reduction path is the src/ migration.
-  { file: 'index.html', maxLines: 14400 },
+  // Raised for the Reporter (.mtd) import module (2026-06-12) — additive S6 script block.
+  { file: 'index.html', maxLines: 14900 },
   // Raised for the 2026-06-09 render fixes patched directly into the bundle:
   // section-aware % (zh/de), nested cell-merge (cxComputeRowspans/cxRenderLabelCells),
   // and Sig export injection.

@@ -12,6 +12,7 @@ public/downloads/
 
 # Large data / fixtures (keep out of git — too big, not source)
 *.sav
+*.mtd
 *.xlsx
 tmp/
 *.bak-*

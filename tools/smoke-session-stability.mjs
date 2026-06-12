@@ -28,6 +28,7 @@ function ignoredConsoleMessage(message) {
   // the no-login Cloud-settings table (crossify_settings) doesn't exist here, so the
   // auto-load/autosave fetch 404s once. This is a UI-stability test, not a network test.
   return message.includes('net::ERR_NETWORK_ACCESS_DENIED')
+    || message.includes('net::ERR_FAILED') // hermetic supabase route-abort
     || message.includes('Failed to load resource: the server responded with a status of 404')
 }
 
@@ -152,6 +153,7 @@ if (!existsSync(fixturePath)) {
 const { chromium } = await loadPlaywright()
 const browser = await chromium.launch({ headless: true })
 const page = await browser.newPage({ viewport: { width: 1365, height: 768 } })
+await page.route('**/supabase/**', r => r.abort()) // hermetic: no production cloud settings
 const messages = []
 let unexpectedReloads = 0
 let countUnexpectedReloads = false

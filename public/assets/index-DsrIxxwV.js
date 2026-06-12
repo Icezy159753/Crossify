@@ -12649,7 +12649,7 @@ function ux() {
   }
   function or(i) {
     if (!i || !fi(i)) return null;
-    const f = i.description.trim(),
+    const f = String(i.description || "").trim(),
       g = Si(i);
     return f && g ? `${f}: ${g}` : f || g;
   }

@@ -50,6 +50,7 @@ const { chromium } = await loadPlaywright()
 const browser = await chromium.launch({ headless: true })
 const ctx = await browser.newContext({ viewport: { width: 1365, height: 768 } })
 const page = await ctx.newPage()
+await page.route('**/supabase/**', r => r.abort()) // hermetic: no production cloud settings
 
 try {
   await page.addInitScript(() => {

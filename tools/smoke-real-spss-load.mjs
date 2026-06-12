@@ -137,6 +137,7 @@ if (!existsSync(fixturePath)) {
 const { chromium } = await loadPlaywright()
 const browser = await chromium.launch({ headless: true })
 const page = await browser.newPage({ viewport: { width: 1365, height: 768 } })
+await page.route('**/supabase/**', r => r.abort()) // hermetic: no production cloud settings
 const messages = []
 
 page.on('console', message => {
