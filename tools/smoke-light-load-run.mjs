@@ -45,7 +45,7 @@ if (!existsSync(fixturePath)) throw new Error('fixture missing')
 const { chromium } = await loadPlaywright()
 const browser = await chromium.launch({ headless: true })
 const page = await (await browser.newContext({ viewport: { width: 1365, height: 768 } })).newPage()
-await page.route('**/supabase/**', r => r.abort()) // hermetic: no production cloud settings
+await page.route('**/supabase/**', r => r.fulfill({ status: 404, contentType: 'application/json', body: '{}' })) // hermetic: no production cloud settings
 try {
   await page.addInitScript(() => {
     window.__CX_AUTH_BYPASS = true
