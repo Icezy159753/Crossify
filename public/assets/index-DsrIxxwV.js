@@ -7700,8 +7700,11 @@ function Ep(a) {
   }
   return mf;
 }
+const cxDecCache = new Map();
 function Ph(a, s) {
-  return new TextDecoder(s).decode(a).replace(/\0/g, "").trimEnd();
+  let d = cxDecCache.get(s);
+  d || (d = new TextDecoder(s), cxDecCache.set(s, d));
+  return d.decode(a).replace(/\0/g, "").trimEnd();
 }
 function eu(a, s) {
   const u = [s, ...Lh],
@@ -8005,41 +8008,62 @@ async function Ih(a, s) {
     }
     H.push(U), H.length % Np === 0 && (s?.("cases", Z === 1 / 0 ? -1 : H.length / Z), await Ol());
   } else {
-    const U = new Uint8Array(8).fill(32);
     let W = 0,
       q = {};
-    const se = {};
+    let se = {};
+    let cxLastV = null, cxLastAcc = null;
     let de = !1;
+    const cxFlush = acc => { if (acc.pendCount > 0) { acc.chunks.push(acc.pendType === 1 ? acc.pendCount : -acc.pendCount); acc.pendCount = 0; } };
+    const cxCombine = acc => {
+      let total = 0;
+      for (const c of acc.chunks) total += typeof c === "number" ? Math.abs(c) * 8 : c.length;
+      const out = new Uint8Array(total);
+      let pos = 0;
+      for (const c of acc.chunks) {
+        if (typeof c === "number") { const len = Math.abs(c) * 8; if (c > 0) out.fill(32, pos, pos + len); pos += len; }
+        else { out.set(c, pos); pos += c.length; }
+      }
+      return out;
+    };
     for (; !de && le.left >= 8 && H.length < Z;) {
-      const ge = le.rawBytes(8);
+      const cxOff = le.o;
+      le.skip(8);
       for (let A = 0; A < 8 && !(de || H.length >= Z); A++) {
-        const G = ge[A];
+        const G = le.v.getUint8(cxOff + A);
         if (G === 252) {
           de = !0;
           break;
         }
         const re = Y[W];
         if (re && re.isString) {
-          let y;
+          if (re !== cxLastV) {
+            let acc0 = se[re.name];
+            acc0 || (acc0 = { chunks: [], pendType: 0, pendCount: 0 }, se[re.name] = acc0);
+            cxLastV = re; cxLastAcc = acc0;
+          }
+          const acc = cxLastAcc;
           if (G === 253) {
             if (le.left < 8) {
               de = !0;
               break;
             }
-            y = le.rawBytes(8);
-          } else if (G === 254) y = U;else {
+            cxFlush(acc); acc.chunks.push(le.rawBytes(8));
+          } else if (G === 254) {
+            if (acc.pendType === 1) acc.pendCount++; else { cxFlush(acc); acc.pendType = 1; acc.pendCount = 1; }
+          } else if (G >= 1 && G <= 251) {
             const _ = new ArrayBuffer(8);
-            G >= 1 && G <= 251 && new DataView(_).setFloat64(0, G - R, le.le), y = new Uint8Array(_);
+            new DataView(_).setFloat64(0, G - R, le.le);
+            cxFlush(acc); acc.chunks.push(new Uint8Array(_));
+          } else {
+            if (acc.pendType === 2) acc.pendCount++; else { cxFlush(acc); acc.pendType = 2; acc.pendCount = 1; }
           }
-          se[re.name] || (se[re.name] = []), se[re.name].push(y);
         } else if (re) {
           if (!(re.name in q)) if (G === 255) q[re.name] = "";else if (G === 253) {
             if (le.left < 8) {
               de = !0;
               break;
             }
-            const y = le.rawBytes(8),
-              _ = new DataView(y.buffer, y.byteOffset).getFloat64(0, le.le);
+            const _ = le.f64();
             q[re.name] = jp(_) ? "" : _;
           } else G >= 1 && G <= 251 ? q[re.name] = G - R : q[re.name] = 0;
         } else if (G === 253) {
@@ -8050,13 +8074,16 @@ async function Ih(a, s) {
           le.skip(8);
         }
         if (W++, W >= ne) {
-          for (const [y, _] of Object.entries(se)) {
-            const Ne = Cp(_),
-              ue = fe.get(y);
-            q[y] = pi(Ne, ue?.stringLength ?? Ne.length, B);
+          for (const y in se) {
+            const acc1 = se[y];
+            if (acc1.chunks.length === 0) q[y] = "";
+            else {
+              const Ne = cxCombine(acc1),
+                ue = fe.get(y);
+              q[y] = pi(Ne, ue?.stringLength ?? Ne.length, B);
+            }
           }
-          H.push(q), q = {};
-          for (const y in se) delete se[y];
+          H.push(q), q = {}, se = {}, cxLastV = null, cxLastAcc = null;
           W = 0, H.length % Np === 0 && (s?.("cases", Z === 1 / 0 ? -1 : H.length / Z), await Ol());
         }
       }
@@ -8085,10 +8112,11 @@ function Oc(a, s) {
   for (const p of s) p.longName && p.longName !== p.name && d.set(p.name, p.longName);
   return a.map(p => {
     const m = {};
-    for (const [x, b] of Object.entries(p)) {
+    for (const x in p) {
+      const b = p[x];
       const D = u.get(x);
       if (D && b !== "" && b != null) {
-        const E = String(Math.round(Number(b) * 1e8) / 1e8);
+        const E = typeof b === "number" && Number.isInteger(b) ? String(b) : String(Math.round(Number(b) * 1e8) / 1e8);
         m[x] = D[E] ?? String(b);
       } else m[x] = b === "" || b == null ? "" : String(b);
       const j = d.get(x);

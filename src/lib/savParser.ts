@@ -115,11 +115,27 @@ export function resolveEncoding(raw: string): string {
   return DEFAULT_ENCODING
 }
 
+// TextDecoder construction is expensive; cache one instance per encoding —
+// decode is called once per string cell (millions of calls on large files).
+const decoderCache = new Map<string, TextDecoder>()
+function cachedDecoder(enc: string): TextDecoder {
+  let d = decoderCache.get(enc)
+  if (!d) { d = new TextDecoder(enc); decoderCache.set(enc, d) }
+  return d
+}
 function decodeWithEncoding(bytes: Uint8Array, enc: string): string {
-  return new TextDecoder(enc).decode(bytes).replace(/\0/g, '').trimEnd()
+  return cachedDecoder(enc).decode(bytes).replace(/\0/g, '').trimEnd()
 }
 
 export function decodeBytes(bytes: Uint8Array, enc: string): string {
+  // Fast path — the primary encoding succeeds for virtually every cell; skip the
+  // attempts array/Set allocations that otherwise run once per string cell.
+  const primary = enc && enc.trim().toLowerCase()
+  if (primary && isSupportedEncoding(primary)) {
+    try {
+      return decodeWithEncoding(bytes, primary)
+    } catch { /* fall through to the full fallback chain */ }
+  }
   const attempts = [enc, ...FALLBACK_ENCODINGS]
   const seen = new Set<string>()
 
@@ -572,39 +588,86 @@ export async function parseSav(
 
   } else {
     // ── Bytecode compressed (compression=1) or ZLIB-decompressed (compression=2) ─
-    // Process each slot directly into the current row as we decode bytecodes.
-    const SPACE8 = new Uint8Array(8).fill(0x20)  // reusable space fill
+    // Hot path: wide files run this loop hundreds of millions of times (slots/case ×
+    // cases), and survey strings are mostly blank (space/zero filled). So instead of
+    // materializing an 8-byte chunk per slot, blank slots are RUN-LENGTH COUNTED per
+    // string accumulator and only materialized when real data follows; a trailing
+    // blank run is dropped entirely (zeros are \0-stripped and spaces trimEnd'ed by
+    // the decoder anyway, so the decoded value is identical). Interior runs are
+    // materialized at their exact byte positions, preserving stringLength truncation.
+    interface StrAcc { chunks: (Uint8Array | number)[]; pendType: number; pendCount: number }
+    // chunks entry: Uint8Array = data; number > 0 = run of space slots; number < 0 = run of zero slots
     let slotInCase = 0
     let currentRow: Record<string, string | number> = {}
-    const strBufs: Record<string, Uint8Array[]> = {}
+    let strBufs: Record<string, StrAcc> = {}
+    let lastStrVar: SpssVariable | null = null
+    let lastAcc: StrAcc | null = null
     let eof = false
 
+    const flushPending = (acc: StrAcc) => {
+      if (acc.pendCount > 0) {
+        acc.chunks.push(acc.pendType === 1 ? acc.pendCount : -acc.pendCount)
+        acc.pendCount = 0
+      }
+    }
+    const combineChunks = (acc: StrAcc): Uint8Array => {
+      let total = 0
+      for (const c of acc.chunks) total += typeof c === 'number' ? Math.abs(c) * 8 : c.length
+      const out = new Uint8Array(total) // zero-initialized — zero runs need no fill
+      let pos = 0
+      for (const c of acc.chunks) {
+        if (typeof c === 'number') {
+          const len = Math.abs(c) * 8
+          if (c > 0) out.fill(0x20, pos, pos + len)
+          pos += len
+        } else {
+          out.set(c, pos)
+          pos += c.length
+        }
+      }
+      return out
+    }
+
     while (!eof && rb.left >= 8 && cases.length < maxCases) {
-      const codes = rb.rawBytes(8)
+      // Read the 8 code bytes in place (no copy)
+      const codesOff = rb.o
+      rb.skip(8)
 
       for (let ci = 0; ci < 8; ci++) {
         if (eof || cases.length >= maxCases) break
-        const code = codes[ci]
+        const code = rb.v.getUint8(codesOff + ci)
 
         if (code === 252) { eof = true; break }
 
         const v = slotVars[slotInCase]
 
         if (v && v.isString) {
-          // String slot — need raw 8 bytes
-          let bytes: Uint8Array
+          // Consecutive slots of one long string share the accumulator — cache it
+          if (v !== lastStrVar) {
+            let acc = strBufs[v.name]
+            if (!acc) { acc = { chunks: [], pendType: 0, pendCount: 0 }; strBufs[v.name] = acc }
+            lastStrVar = v
+            lastAcc = acc
+          }
+          const acc = lastAcc as StrAcc
           if (code === 253) {
             if (rb.left < 8) { eof = true; break }
-            bytes = rb.rawBytes(8)
+            flushPending(acc)
+            acc.chunks.push(rb.rawBytes(8))
           } else if (code === 254) {
-            bytes = SPACE8  // mergeChunks copies, so sharing is safe
-          } else {
+            if (acc.pendType === 1) acc.pendCount++
+            else { flushPending(acc); acc.pendType = 1; acc.pendCount = 1 }
+          } else if (code >= 1 && code <= 251) {
+            // Rare: numeric byte in a string slot — synthesize the float64 bytes
             const tbuf = new ArrayBuffer(8)
-            if (code >= 1 && code <= 251) new DataView(tbuf).setFloat64(0, code - bias, rb.le)
-            bytes = new Uint8Array(tbuf)
+            new DataView(tbuf).setFloat64(0, code - bias, rb.le)
+            flushPending(acc)
+            acc.chunks.push(new Uint8Array(tbuf))
+          } else {
+            // code 0 / 255 — zero-filled slot
+            if (acc.pendType === 2) acc.pendCount++
+            else { flushPending(acc); acc.pendType = 2; acc.pendCount = 1 }
           }
-          if (!strBufs[v.name]) strBufs[v.name] = []
-          strBufs[v.name].push(bytes)
 
         } else if (v) {
           // Numeric slot — compute value directly
@@ -613,8 +676,7 @@ export async function parseSav(
               currentRow[v.name] = ''
             } else if (code === 253) {
               if (rb.left < 8) { eof = true; break }
-              const bytes = rb.rawBytes(8)
-              const val = new DataView(bytes.buffer, bytes.byteOffset).getFloat64(0, rb.le)
+              const val = rb.f64()  // direct read — no per-cell allocations
               currentRow[v.name] = isSysMiss(val) ? '' : val
             } else if (code >= 1 && code <= 251) {
               currentRow[v.name] = code - bias
@@ -634,17 +696,24 @@ export async function parseSav(
 
         slotInCase++
         if (slotInCase >= slotsPerCase) {
-          // Finalize case
-          for (const [name, chunks] of Object.entries(strBufs)) {
-            const combined = mergeChunks(chunks)
-            const vDef = varByName.get(name)
-            currentRow[name] = decodeBytesLen(combined, vDef?.stringLength ?? combined.length, fileEncoding)
+          // Finalize case — a trailing pending blank run is intentionally dropped
+          for (const name in strBufs) {
+            const acc = strBufs[name]
+            if (acc.chunks.length === 0) {
+              currentRow[name] = ''  // fully blank string — skip combine+decode entirely
+            } else {
+              const combined = combineChunks(acc)
+              const vDef = varByName.get(name)
+              currentRow[name] = decodeBytesLen(combined, vDef?.stringLength ?? combined.length, fileEncoding)
+            }
           }
           cases.push(currentRow)
 
           // Reset for next case
           currentRow = {}
-          for (const k in strBufs) delete strBufs[k]
+          strBufs = {}
+          lastStrVar = null
+          lastAcc = null
           slotInCase = 0
 
           if (cases.length % PARSER_YIELD_EVERY === 0) {
@@ -693,10 +762,16 @@ export function applyValueLabels(
 
   return cases.map(c => {
     const row: Record<string, string> = {}
-    for (const [k, val] of Object.entries(c)) {
+    // for-in instead of Object.entries — avoids allocating a [k,v] pair array per
+    // row (thousands of keys × thousands of rows on wide files)
+    for (const k in c) {
+      const val = c[k]
       const lm = labelMap.get(k)
       if (lm && val !== '' && val != null) {
-        const key = String(Math.round(Number(val) * 1e8) / 1e8)
+        // Integer fast path: Math.round(n*1e8)/1e8 === n for integers, so String(n) is identical
+        const key = typeof val === 'number' && Number.isInteger(val)
+          ? String(val)
+          : String(Math.round(Number(val) * 1e8) / 1e8)
         row[k] = lm[key] ?? String(val)
       } else {
         row[k] = val === '' || val == null ? '' : String(val)
