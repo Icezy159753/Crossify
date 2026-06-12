@@ -14469,13 +14469,13 @@
         }
         var direct = tryName(mdmName);
         if (direct) return direct;
-        if (index.has(mtdNorm(mdmName + '$1'))) return mdmName;
+        if (index.has(mtdNorm(mdmName + '$1'))) return mdmName + '_O'; /* $-sets are grouped by the app as NAME_O */
         var grid = String(mdmName).match(/\[\{([^}]+)\}\]/);
         if (grid) {
           var inner = grid[1];
           var hit = tryName(inner);
           if (hit) return hit;
-          if (index.has(mtdNorm(inner + '$1'))) return inner;
+          if (index.has(mtdNorm(inner + '$1'))) return inner + '_O';
         }
         return null;
       }
