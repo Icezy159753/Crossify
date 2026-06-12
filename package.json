@@ -19,6 +19,7 @@
     "smoke:session-stability": "node tools/smoke-session-stability.mjs",
     "smoke:batch-export-names": "node tools/smoke-batch-export-names.mjs",
     "smoke:batch-sig-export": "node tools/smoke-batch-sig-export.mjs",
+    "smoke:light-load-run": "node tools/smoke-light-load-run.mjs",
     "smoke:t2b-no-leak": "node tools/smoke-t2b-no-leak-stacked.mjs",
     "smoke:export-cancel-silent": "node tools/smoke-export-cancel-silent.mjs",
     "smoke:cloud-save-guard": "node tools/smoke-cloud-save-guard.mjs",

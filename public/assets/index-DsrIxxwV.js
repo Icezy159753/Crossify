@@ -8125,6 +8125,23 @@ function Oc(a, s) {
     return m;
   });
 }
+/* Light-load-mode label caches: in light mode the labeled copy is not memoized in React
+   state (to keep load light), but re-running Oc over every cell on EVERY table run made big
+   files lag. Cache lazily per cases-array identity instead — pay Oc once on first run. */
+const cxLabeledCache = new WeakMap();
+function cxOcCached(a, s) {
+  let m = cxLabeledCache.get(a);
+  return m || (m = Oc(a, s), cxLabeledCache.set(a, m)), m;
+}
+const cxOvMapCache = new WeakMap();
+function cxOvCached(base, rawCases, ov, mapFn) {
+  let e = cxOvMapCache.get(rawCases);
+  if (!e || e.ov !== ov || e.base !== base) {
+    e = { ov, base, out: mapFn() };
+    cxOvMapCache.set(rawCases, e);
+  }
+  return e.out;
+}
 const Oh = 250;
 function Vh() {
   return new Promise(a => {
@@ -11751,7 +11768,7 @@ function rx({
 }
 const ax = 1e3 * 60 * 3,
   ox = 1e3 * 30,
-  ix = 150 * 1024 * 1024;
+  ix = (typeof window !== "undefined" && window.__CX_LIGHT_LOAD_THRESHOLD) || 150 * 1024 * 1024;
 function lx() {
   if (typeof window > "u") return crypto.randomUUID();
   const a = "crossify-settings-session-id";
@@ -12672,8 +12689,8 @@ function ux() {
   }
   function Kn(i) {
     if (!p) return [];
-    const f = x ? Oc(p.cases, p.variables) : Mr;
-    return Object.keys(i).length === 0 ? f : f.map((g, w) => {
+    const f = x ? cxOcCached(p.cases, p.variables) : Mr;
+    return Object.keys(i).length === 0 ? f : cxOvCached(f, p.cases, i, () => f.map((g, w) => {
       const N = p.cases[w] ?? {},
         F = {
           ...g
@@ -12683,14 +12700,14 @@ function ux() {
           xe = T.labels?.[X];
         xe && (F[O] = xe);
       }), F;
-    });
+    }));
   }
   function bn(i, f = p?.cases ?? [], g = ue) {
     if (i && i.length > 0) return i;
     if (!p || f.length === 0) return [];
     if (!x && f === p.cases) return Object.keys(g).length === 0 ? Mr : Kn(g);
-    const w = Oc(f, p.variables);
-    return Object.keys(g).length === 0 ? w : w.map((N, F) => {
+    const w = cxOcCached(f, p.variables);
+    return Object.keys(g).length === 0 ? w : cxOvCached(w, f, g, () => w.map((N, F) => {
       const O = f[F] ?? {},
         T = {
           ...N
@@ -12700,7 +12717,7 @@ function ux() {
           Ee = xe.labels?.[ye];
         Ee && (T[X] = Ee);
       }), T;
-    });
+    }));
   }
   function cn(i, f = ue) {
     return f[i];
