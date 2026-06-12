@@ -11298,6 +11298,15 @@
       }
 
       function augmentTablesArray(tables) {
+        /* Normalize: the Filter tab reads table.filter.description unconditionally, but
+           imported/legacy tables can carry filter:null — default it so the tab never crashes. */
+        if (Array.isArray(tables)) {
+          tables = tables.map(function (t) {
+            return (t && typeof t === 'object' && t.filter == null)
+              ? Object.assign({}, t, { filter: { description: '', rootJoin: 'all', groups: [] } })
+              : t;
+          });
+        }
         /* Override source: prefer the synchronously-maintained window mirror
            (window.__cxVariableOverrides) — it is the SAME authoritative source the
            column-T2B path (cxAddColumnSummary) already reads, kept current on both
@@ -14648,7 +14657,8 @@
               description: t.description,
               rowVar: t.rowVar,
               colVar: t.colVar,
-              filter: t.filter || null,
+              /* the Filter tab reads filter.description unconditionally — never null */
+              filter: t.filter || { description: '', rootJoin: 'all', groups: [] },
               result: null
             }
           };
@@ -14789,6 +14799,22 @@
         try { _mtdObs.observe(document.body, { childList: true, subtree: true }); injectMenuItem(); } catch (_e) { }
       }
       if (document.body) startObs(); else document.addEventListener('DOMContentLoaded', startObs);
+
+      /* heal banners saved by the first release (filter:null crashes the Filter tab) */
+      setTimeout(function () {
+        try {
+          if (typeof window.__cxGetBannerTemplates !== 'function' || typeof window.__cxSetBannerTemplates !== 'function') return;
+          var all = window.__cxGetBannerTemplates() || [];
+          var changed = false;
+          all.forEach(function (b) {
+            if (b && b.table && b.table.filter == null) {
+              b.table.filter = { description: '', rootJoin: 'all', groups: [] };
+              changed = true;
+            }
+          });
+          if (changed) window.__cxSetBannerTemplates(all);
+        } catch (_healErr) { }
+      }, 1200);
 
       /* test hooks */
       window.__cxMtdParse = cxMtdParse;
