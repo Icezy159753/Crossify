@@ -12774,7 +12774,7 @@ function ux() {
           label: w?.labels?.[Be.valueCode || Be.label] ?? Be.label,
           count: ve.get(Be.label) ?? 0,
           percent: Fe > 0 ? (ve.get(Be.label) ?? 0) / Fe * 100 : 0,
-          factor: w?.weights[Be.valueCode || Be.label] ?? "",
+          factor: w?.weights?.[Be.valueCode || Be.label] ?? "",
           rowKind: "code"
         })),
         $e = w?.order?.length ? (() => {
@@ -12802,7 +12802,7 @@ function ux() {
           label: w?.labels?.[Le] ?? Fe,
           count: $e,
           percent: O > 0 ? $e / O * 100 : 0,
-          factor: w?.weights[Le] ?? "",
+          factor: w?.weights?.[Le] ?? "",
           rowKind: "code"
         };
       }),
@@ -12812,13 +12812,13 @@ function ux() {
         label: w?.labels?.[ve] ?? ve,
         count: Fe,
         percent: O > 0 ? Fe / O * 100 : 0,
-        factor: w?.weights[ve] ?? (Pn(i) ? ve : ""),
+        factor: w?.weights?.[ve] ?? (Pn(i) ? ve : ""),
         autoFactor: Pn(i),
         rowKind: "code"
       })),
       ye = [...X.map(ve => ({
         ...ve,
-        autoFactor: Pn(i) && !w?.weights[ve.key]
+        autoFactor: Pn(i) && !w?.weights?.[ve.key]
       })), ...xe],
       Ee = Pn(i) ? [...ye].sort((Fe, Le) => Fe.code.localeCompare(Le.code, void 0, { numeric: !0, sensitivity: "base" })) : (w?.order?.length ? (() => {
         const ve = new Map(w.order.map((Fe, Le) => [Fe, Le]));

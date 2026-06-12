@@ -14623,6 +14623,10 @@
           var groups = mapped.overrides[name].map(function (g) { return { id: g.id, name: g.name, members: g.members.slice() }; });
           base.groups = groups;
           base.netGroups = groups.map(function (g) { return { id: g.id, name: g.name, members: g.members.slice() }; });
+          /* the option/run pipeline reads override.weights[code] UNGUARDED (and labels/order
+             elsewhere) — a partial override crashes every run of that variable */
+          if (!base.weights || typeof base.weights !== 'object') base.weights = {};
+          if (!base.labels || typeof base.labels !== 'object') base.labels = {};
           ov[name] = base;
         });
         window.__cxVariableOverrides = ov;
@@ -14654,6 +14658,7 @@
             createdAt: now,
             updatedAt: now,
             table: {
+              name: t.description,
               description: t.description,
               rowVar: t.rowVar,
               colVar: t.colVar,
@@ -14677,6 +14682,7 @@
               return fresh.map(function (b, index) {
                 return Object.assign({}, seed, JSON.parse(JSON.stringify(b.table)), {
                   id: 'cx-banner-table-' + b.id + '-' + index,
+                  name: b.name,
                   description: b.name,
                   result: null
                 });
@@ -14804,6 +14810,16 @@
       setTimeout(function () {
         try {
           if (typeof window.__cxGetBannerTemplates !== 'function' || typeof window.__cxSetBannerTemplates !== 'function') return;
+          var ovh = window.__cxVariableOverrides;
+          if (ovh && typeof ovh === 'object') {
+            Object.keys(ovh).forEach(function (k) {
+              var o = ovh[k];
+              if (o && typeof o === 'object' && (Array.isArray(o.groups) || Array.isArray(o.netGroups))) {
+                if (!o.weights || typeof o.weights !== 'object') o.weights = {};
+                if (!o.labels || typeof o.labels !== 'object') o.labels = {};
+              }
+            });
+          }
           var all = window.__cxGetBannerTemplates() || [];
           var changed = false;
           all.forEach(function (b) {
