@@ -234,7 +234,9 @@
           (document.body || document.documentElement).appendChild(a);
           a.click();
           if (/\.(xlsx|xlsm|xls)$/i.test(a.download || '')) {
-            window.__crossifyRuntime.notifyExportComplete(a.download || 'download.xlsx', false);
+            /* batch export: a blocking modal per file would stack N dialogs — progress bar already reports */
+            if (window.__cxForcedExportName) { window.__crossifyRuntime.toast({ title: 'Exported', text: a.download }); }
+            else { window.__crossifyRuntime.notifyExportComplete(a.download || 'download.xlsx', false); }
           } else {
             window.__crossifyRuntime.toast({ title: 'Download started', text: a.download || 'File is ready.' });
           }
@@ -5136,7 +5138,7 @@
         raw = raw && typeof raw === 'object' ? raw : {};
         return {
           enabled: typeof raw.enabled === 'boolean' ? raw.enabled : false,
-          level: raw.level === 90 ? 90 : 95,
+          level: raw.level === 90 ? 90 : raw.level === 99 ? 99 : 95,
           sigLetters: typeof raw.sigLetters === 'string' ? raw.sigLetters : '',
           minBase: Math.max(0, Math.floor(Number(raw.minBase) || 0))
         };
@@ -6753,7 +6755,9 @@
               rt: 'summary',
               rp: cxRowPathForInjected(result, lo, hi, sum.code),
               ct: sumCounts,
-              rtn: sumCounts.reduce(function (a, b) { return a + b; }, 0)
+              /* row total = respondents in the member rows — summing across banner COLUMNS
+                 double-counts when banner groups overlap (TOTAL + Quota + Age ...) */
+              rtn: memberIdxs.reduce(function (a, rix) { return a + (result.rowTotalsN[rix] || 0); }, 0)
             });
           });
         }
@@ -7355,7 +7359,9 @@
             memberIdxs.forEach(function (ri) { s += (result.counts[ri] || [])[ci] || 0; });
             sumCounts.push(s);
           }
-          var sumTotal = sumCounts.reduce(function (a, b) { return a + b; }, 0);
+          /* row total = respondents in the member rows — summing across banner COLUMNS
+             double-counts when banner groups overlap (TOTAL + Quota + Age ...) */
+          var sumTotal = memberIdxs.reduce(function (a, ri) { return a + (result.rowTotalsN[ri] || 0); }, 0);
 
           before.rv.push(sum.code);
           before.rt.push('summary');
@@ -8122,6 +8128,10 @@
           '<input type="radio" name="__cx_sig_level" value="95" style="width:14px;height:14px;accent-color:#1F4E78;" ' + (settings.level === 95 ? 'checked' : '') + '>' +
           '<span style="font-size:12px;color:#374151;">95%</span>' +
           '</label>' +
+          '<label style="display:flex;align-items:center;gap:4px;cursor:pointer;">' +
+          '<input type="radio" name="__cx_sig_level" value="99" style="width:14px;height:14px;accent-color:#1F4E78;" ' + (settings.level === 99 ? 'checked' : '') + '>' +
+          '<span style="font-size:12px;color:#374151;">99%</span>' +
+          '</label>' +
           '</div>' +
           '<div style="margin-bottom:4px;">' +
           '<label style="font-size:11px;color:#6b7280;display:block;margin-bottom:3px;">Sig Letters (เช่น ABC,DEF,GHI)</label>' +
@@ -8193,19 +8203,55 @@
         tables.forEach(function (table) { applySigToTable(table, settings); });
       }
 
+      /* Mirror of the bundle's Lr(): drop non-stat rows whose total is 0 when the
+         "Hide zero rows" option is on — the DOM is filtered this way, so sig-letter
+         row mapping must use the SAME filtered view or letters land on wrong rows. */
+      function cxSigFilterZeroRows(result) {
+        var types = result.rowTypes || result.rowValues.map(function () { return 'data'; });
+        var keep = [];
+        for (var i = 0; i < result.rowValues.length; i++) {
+          if (types[i] === 'stat' || (result.rowTotalsN && result.rowTotalsN[i] || 0) > 0) keep.push(i);
+        }
+        if (keep.length === result.rowValues.length) return result;
+        var newIdx = new Map();
+        keep.forEach(function (oldI, newI) { newIdx.set(oldI, newI); });
+        var bases = null;
+        if (Array.isArray(result.rowSectionBases)) {
+          bases = [];
+          for (var s = 0; s < result.rowSectionBases.length; s++) {
+            var b = result.rowSectionBases[s];
+            var hi = (result.rowSectionBases[s + 1] ? result.rowSectionBases[s + 1].startIndex : result.rowValues.length) - 1;
+            var first = keep.find(function (k) { return k >= b.startIndex && k <= hi; });
+            if (first === undefined) continue;
+            bases.push(Object.assign({}, b, { startIndex: newIdx.get(first) || 0 }));
+          }
+        }
+        return Object.assign({}, result, {
+          rowValues: keep.map(function (k) { return result.rowValues[k]; }),
+          rowTypes: keep.map(function (k) { return types[k]; }),
+          rowPaths: result.rowPaths ? keep.map(function (k) { return result.rowPaths[k]; }) : result.rowPaths,
+          counts: keep.map(function (k) { return result.counts[k]; }),
+          rowTotalsN: keep.map(function (k) { return (result.rowTotalsN && result.rowTotalsN[k]) || 0; }),
+          rowSectionBases: bases || result.rowSectionBases
+        });
+      }
+
       function applySigToTable(table, settings) {
         var fiber = fiberOf(table);
         if (!fiber) return;
 
         var result = null;
+        var cfg = null;
         var f = fiber;
         while (f) {
           var p = f.memoizedProps;
-          if (p && p.result && p.result.colValues && p.result.counts) { result = p.result; break; }
-          if (p && p.config && p.result) { result = p.result; break; }
+          if (p && p.config && !cfg) cfg = p.config;
+          if (p && p.result && p.result.colValues && p.result.counts) { result = p.result; if (p.config) cfg = p.config; break; }
+          if (p && p.config && p.result) { result = p.result; cfg = p.config; break; }
           f = f.return;
         }
         if (!result || !result.colValues || !result.counts) return;
+        if (cfg && cfg.hideZeroRows) result = cxSigFilterZeroRows(result);
 
         var nCols = result.colValues.length;
         var letterMap = parseLetterMap(settings.sigLetters, nCols);
@@ -8289,7 +8335,27 @@
       }
 
       var _sigTimer = null;
-      var _tableObs = new MutationObserver(function () {
+      function _isOwnSigNode(node) {
+        if (!node) return false;
+        if (node.nodeType === 3) return true; /* text nodes inside our spans */
+        if (node.nodeType !== 1) return false;
+        var cls = node.className || '';
+        return typeof cls === 'string' && (cls.indexOf('cx-sig-letter') >= 0 || cls.indexOf('cx-sig-header-letter') >= 0);
+      }
+      var _tableObs = new MutationObserver(function (mutations) {
+        /* applySigToAllTables removes + re-adds our own spans — without this filter the
+           observer re-triggers itself forever (~300ms loop) while Sig is enabled. */
+        var foreign = false;
+        for (var mi = 0; mi < mutations.length && !foreign; mi++) {
+          var m = mutations[mi];
+          var lists = [m.addedNodes, m.removedNodes];
+          for (var li = 0; li < 2 && !foreign; li++) {
+            for (var ni = 0; ni < lists[li].length; ni++) {
+              if (!_isOwnSigNode(lists[li][ni])) { foreign = true; break; }
+            }
+          }
+        }
+        if (!foreign) return;
         if (_sigTimer) clearTimeout(_sigTimer);
         _sigTimer = setTimeout(function () {
           var settings = loadSigSettings();
@@ -12055,7 +12121,8 @@
         }
         var anchors = Array.from(document.querySelectorAll('p,div,span')).filter(function (el) {
           var text = (el.textContent || '').replace(/\s+/g, ' ').trim();
-          return text.indexOf('rows x') !== -1 && text.indexOf('cols') !== -1 && text.indexOf('Column') !== -1;
+          /* the header renders 'rows × cols' (U+00D7), not ASCII 'x' — accept both */
+          return (text.indexOf('rows ×') !== -1 || text.indexOf('rows x') !== -1) && text.indexOf('cols') !== -1 && text.indexOf('Column') !== -1;
         });
         var anchor = anchors[0] || null;
         if (!anchor) return;
@@ -13395,7 +13462,7 @@
         if (!rows || !rows.length || !rows[0].settings) { cxCloudAlert('info', 'No Cloud Settings', 'ยังไม่มี Settings ของไฟล์ "' + name + '" บน Cloud'); return; }
         var settings = rows[0].settings;
         if (typeof window.__cxApplyWorkspaceSettings !== 'function') { cxCloudAlert('error', 'Cloud Settings Error', 'Runtime restore bridge not ready. Refresh the page.'); return; }
-        if (settings.banners && Array.isArray(settings.banners) && typeof window.__cxSetBannerTemplates === 'function') window.__cxSetBannerTemplates(settings.banners);
+        if (settings.banners && Array.isArray(settings.banners)) cxMergeBannerTemplates(settings.banners);
         cxRestoreDerivedDatasetState(settings);
         var result = window.__cxApplyWorkspaceSettings(settings);
         cxRestoreDerivedDatasetState(settings);
@@ -13489,7 +13556,7 @@
           return;
         }
         if (selectedVersion.settings && Array.isArray(selectedVersion.settings.banners) && typeof window.__cxSetBannerTemplates === 'function') {
-          window.__cxSetBannerTemplates(selectedVersion.settings.banners);
+          cxMergeBannerTemplates(selectedVersion.settings.banners);
         }
         cxRestoreDerivedDatasetState(selectedVersion.settings);
         var result = window.__cxApplyWorkspaceSettings(selectedVersion.settings);
@@ -13565,12 +13632,34 @@
         cxCloudAlert('success', title || 'Cloud', message || '');
       }
 
+      /* Restoring a per-dataset snapshot must not WIPE the global banner library —
+         merge: snapshot banners win on id, banners not in the snapshot are kept. */
+      function cxMergeBannerTemplates(snapshotBanners) {
+        try {
+          if (!Array.isArray(snapshotBanners) || typeof window.__cxGetBannerTemplates !== 'function' || typeof window.__cxSetBannerTemplates !== 'function') return;
+          var existing = window.__cxGetBannerTemplates() || [];
+          var byId = {};
+          snapshotBanners.forEach(function (b) { if (b && b.id) byId[b.id] = true; });
+          var kept = existing.filter(function (b) { return b && b.id && !byId[b.id]; });
+          window.__cxSetBannerTemplates(snapshotBanners.concat(kept));
+        } catch (_mbErr) { }
+      }
+
+      var cxCloudAutosaveFirstReq = 0;
       function cxCloudScheduleAutosave() {
         if (window.__CX_DESKTOP_APP === true) return;
         if (!cxCloudAutosaveEnabled()) return;
+        /* Anti-starvation: every call resets the 3s debounce, so sustained DOM churn
+           (observer storms during long runs) could postpone autosave forever. Once a save
+           has been pending > 15s, stop resetting and let the armed timer fire. */
+        var nowTs = Date.now();
+        if (!cxCloudAutosaveFirstReq) cxCloudAutosaveFirstReq = nowTs;
+        else if (cxCloudAutosaveTimer && nowTs - cxCloudAutosaveFirstReq > 15000) return;
         clearTimeout(cxCloudAutosaveTimer);
         cxCloudAutosaveTimer = setTimeout(async function () {
-          if (cxCloudAutosaveBusy || !cxCloudSnapshot()) return;
+          cxCloudAutosaveFirstReq = 0;
+          if (cxCloudAutosaveBusy) { cxCloudScheduleAutosave(); return; } /* don't drop the last edits */
+          if (!cxCloudSnapshot()) return;
           cxCloudAutosaveBusy = true;
           try {
             await cxCloudSave('autosave', true);
@@ -13780,9 +13869,10 @@
               confirmText: 'โหลดเลย', cancelText: 'ข้ามก่อน'
             });
             if (!proceed) { cxCloudToast('ข้ามการคืนค่า', 'กด Workspace > Load Cloud Settings เมื่อพร้อมใช้งาน'); return; }
+            if (name !== cxAnonDsName()) { cxAnonAuto.done = false; return; } /* file switched while the dialog was open */
             skipAutoRun = true; /* let the user press Run All themselves */
           }
-          if (settings.banners && Array.isArray(settings.banners) && typeof window.__cxSetBannerTemplates === 'function') window.__cxSetBannerTemplates(settings.banners);
+          if (settings.banners && Array.isArray(settings.banners)) cxMergeBannerTemplates(settings.banners);
           cxRestoreDerivedDatasetState(settings);
           var result = window.__cxApplyWorkspaceSettings(settings);
           cxRestoreDerivedDatasetState(settings);
@@ -14396,7 +14486,7 @@
         var ATTR_RE = /([\w.]+)\s*=\s*"([^"]*)"/g;
         var tables = [];
         var table = null, axisSide = null, axisDepth = 0, curVar = null, curGroup = null;
-        var inSubElements = false, inStatistics = false, inColProp = false, pendingPropName = null, skipDepth = 0;
+        var inSubElements = false, subElDepth = 0, inStatistics = false, inColProp = false, pendingPropName = null, skipDepth = 0;
         var m;
         while ((m = TAG_RE.exec(xml))) {
           var closing = m[1] === '/', n = m[2], selfClosed = m[4] === '/';
@@ -14446,7 +14536,14 @@
             }
             continue;
           }
-          if (n === 'SubElements') { inSubElements = !closing; if (closing) curGroup = null; continue; }
+          if (n === 'SubElements') {
+            /* depth counter — a boolean breaks on nested combine-of-combines and corrupts groups */
+            subElDepth += closing ? -1 : 1;
+            if (subElDepth < 0) subElDepth = 0;
+            inSubElements = subElDepth > 0;
+            if (!inSubElements) curGroup = null;
+            continue;
+          }
           if (n === 'Filter' && !closing && attrs.Expression) {
             table.filters.push({ name: attrs.Name || '', expression: attrs.Expression });
             continue;
@@ -14600,7 +14697,9 @@
           }
           var sideVars = resolveAxis(t.side);
           var topVars = resolveAxis(t.top);
-          if (!sideVars.length && !topVars.length) {
+          if (!sideVars.length) {
+            /* a table with no resolvable SIDE can never produce rows — skip + report
+               (TOP-only would silently render nothing) */
             skippedTables.push({ name: t.name, description: t.description, reason: skipped.length ? 'variables not in SAV: ' + skipped.join(', ') : 'no mappable axis variables' });
             return;
           }
@@ -14623,7 +14722,7 @@
           });
           if (!sig && t.testColumns) {
             var letters = mapTestColumns(t.testColumns);
-            if (letters) sig = { enabled: true, level: t.sigAlpha === 10 ? 90 : 95, sigLetters: letters, minBase: t.sigMinBase || 0 };
+            if (letters) sig = { enabled: true, level: t.sigAlpha === 10 ? 90 : t.sigAlpha === 1 ? 99 : 95, sigLetters: letters, minBase: t.sigMinBase || 0 };
           }
         });
 
@@ -14648,6 +14747,11 @@
         Object.keys(mapped.overrides).forEach(function (name) {
           var base = (ov[name] && typeof ov[name] === 'object') ? ov[name] : {};
           var groups = mapped.overrides[name].map(function (g) { return { id: g.id, name: g.name, members: g.members.slice() }; });
+          /* never clobber USER-created nets: only write when the variable has no groups yet
+             or its groups came from a previous mtd import (ids start with "mtdnet-") */
+          var existingGroups = Array.isArray(base.groups) ? base.groups : [];
+          var userMade = existingGroups.some(function (g) { return g && typeof g.id === 'string' && g.id.indexOf('mtdnet-') !== 0; });
+          if (userMade) return;
           base.groups = groups;
           base.netGroups = groups.map(function (g) { return { id: g.id, name: g.name, members: g.members.slice() }; });
           /* the option/run pipeline reads override.weights[code] UNGUARDED (and labels/order
@@ -14706,7 +14810,7 @@
           if (typeof dispatch === 'function') {
             dispatch(function (prev) {
               var seed = (Array.isArray(prev) && prev[0]) ? prev[0] : {};
-              return fresh.map(function (b, index) {
+              var made = fresh.map(function (b, index) {
                 return Object.assign({}, seed, JSON.parse(JSON.stringify(b.table)), {
                   id: 'cx-banner-table-' + b.id + '-' + index,
                   name: b.name,
@@ -14714,6 +14818,9 @@
                   result: null
                 });
               });
+              /* honor append mode — replacing here wiped the user's current tables */
+              if (mode === 'append' && Array.isArray(prev)) return prev.concat(made);
+              return made;
             });
           }
         } catch (_lsErr) { }
@@ -14778,7 +14885,10 @@
             };
             if (window.__crossifyRuntime && typeof window.__crossifyRuntime.confirm === 'function') {
               window.__crossifyRuntime.confirm({ title: 'Import Reporter (.mtd)', text: msg, confirmText: 'แทนที่ทั้งหมด', cancelText: 'เพิ่มต่อท้าย' })
-                .then(function (res) { doApply(res ? 'replace' : 'append'); });
+                .then(function (res) {
+                  if (res === null || res === undefined) return; /* X/dismiss = abort, not append */
+                  doApply(res ? 'replace' : 'append');
+                });
             } else {
               doApply(window.confirm(msg + '\n\nOK = แทนที่, Cancel = เพิ่มต่อท้าย') ? 'replace' : 'append');
             }

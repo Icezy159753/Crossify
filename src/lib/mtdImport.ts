@@ -100,6 +100,7 @@ export function parseMtd(xml: string): MtdParseResult {
   let curVar: MtdAxisVar | null = null
   let curGroup: MtdGroup | null = null
   let inSubElements = false
+  let subElDepth = 0
   let inStatistics = false
   let inColProp = false
   let pendingPropName: string | null = null
@@ -168,7 +169,14 @@ export function parseMtd(xml: string): MtdParseResult {
       }
       continue
     }
-    if (n === 'SubElements') { inSubElements = !tag.closing; if (tag.closing) curGroup = null; continue }
+    if (n === 'SubElements') {
+      // depth counter — a boolean breaks on nested combine-of-combines and corrupts groups
+      subElDepth += tag.closing ? -1 : 1
+      if (subElDepth < 0) subElDepth = 0
+      inSubElements = subElDepth > 0
+      if (!inSubElements) curGroup = null
+      continue
+    }
 
     if (n === 'Filter' && !tag.closing && tag.attrs.Expression) {
       table.filters.push({ name: tag.attrs.Name || '', expression: tag.attrs.Expression })
@@ -403,7 +411,7 @@ export function mapMtdToCrossify(parsed: MtdParseResult, vars: CatalogVarLite[])
 
     const sideVars = resolveAxis(t.side)
     const topVars = resolveAxis(t.top)
-    if (sideVars.length === 0 && topVars.length === 0) {
+    if (sideVars.length === 0) {
       /* nothing resolvable (grid [..] tables, MDM-only banner vars, future-wave vars) —
          don't create an empty table; surface it in the report instead */
       skippedTables.push({ name: t.name, description: t.description, reason: skipped.length ? 'variables not in SAV: ' + skipped.join(', ') : 'no mappable axis variables' })
@@ -438,7 +446,7 @@ export function mapMtdToCrossify(parsed: MtdParseResult, vars: CatalogVarLite[])
       if (letters) {
         sig = {
           enabled: true,
-          level: t.sigAlpha === 10 ? 90 : 95,
+          level: t.sigAlpha === 10 ? 90 : t.sigAlpha === 1 ? 99 : 95,
           sigLetters: letters,
           minBase: t.sigMinBase ?? 0,
         }

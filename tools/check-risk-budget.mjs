@@ -10,7 +10,8 @@ const lineBudgets = [
   // (Derive/Recode modal, banner templates, MA section, weight handling,
   // workspace snapshot). Long-term reduction path is the src/ migration.
   // Raised for the Reporter (.mtd) import module (2026-06-12) — additive S6 script block.
-  { file: 'index.html', maxLines: 14900 },
+  // Raised for the 2026-06-12 bug-audit fixes (sig zero-rows mirror, observer filter, healers).
+  { file: 'index.html', maxLines: 15100 },
   // Raised for the 2026-06-09 render fixes patched directly into the bundle:
   // section-aware % (zh/de), nested cell-merge (cxComputeRowspans/cxRenderLabelCells),
   // and Sig export injection.

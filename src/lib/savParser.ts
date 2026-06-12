@@ -38,7 +38,8 @@ interface RawLabelChunk {
 }
 
 function isSysMiss(v: number) {
-  return isNaN(v)
+  // SPSS system-missing is the lowest double (-DBL_MAX), not NaN — match the runtime bundle
+  return isNaN(v) || v <= -Number.MAX_VALUE + 1e200
 }
 
 // ── Encoding helpers ─────────────────────────────────────────────────────────

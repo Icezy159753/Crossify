@@ -45,9 +45,11 @@ describe.skipIf(!haveFiles)('mtd import against real Reporter file', () => {
     // unmappable tables (grid [..] funnels, MDM-only banner vars, future-wave vars) are
     // excluded and reported; everything else becomes a Crossify table with axes
     expect(mapped.tables.length + mapped.report.skippedTables.length).toBe(247)
-    expect(mapped.tables.length).toBeGreaterThanOrEqual(220)
-    expect(mapped.tables.every(t => t.rowVar || t.colVar)).toBe(true)
-    expect(mapped.report.skippedTables.length).toBeLessThanOrEqual(27)
+    // the OLD wave-3 SAV is missing many newer-wave SIDE variables; tables whose whole
+    // SIDE is unresolvable are skipped+reported (a no-side table can never produce rows)
+    expect(mapped.tables.length).toBeGreaterThanOrEqual(180)
+    expect(mapped.tables.every(t => !!t.rowVar)).toBe(true)
+    expect(mapped.report.skippedTables.length).toBeLessThanOrEqual(67)
     expect(mapped.report.netsApplied).toBeGreaterThan(50)
     expect(mapped.report.filtersApplied).toBeGreaterThan(0)
 
