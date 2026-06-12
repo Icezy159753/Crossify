@@ -420,8 +420,10 @@ export function mapMtdToCrossify(parsed: MtdParseResult, vars: CatalogVarLite[])
 
     tables.push({
       description: (t.description || t.name) + (filterSkipped ? ' [NO FILTER]' : ''),
-      rowVar: sideVars.join(' || '),
-      colVar: topVars.join(' || '),
+      /* live axis-string format (bundle ct()/wf()/kg()): ' ++ ' joins SAME-LEVEL (stacked)
+         variables; ' || ' separates NEST levels. Reporter side/top vars are stacked. */
+      rowVar: sideVars.join(' ++ '),
+      colVar: topVars.join(' ++ '),
       filter,
       filterSkipped,
       skippedVars: skipped,

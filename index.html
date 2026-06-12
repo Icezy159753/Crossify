@@ -14578,8 +14578,9 @@
           if (!skipped.length && !filterSkipped) fullyMapped++; else partiallyMapped++;
           tables.push({
             description: (t.description || t.name) + (filterSkipped ? ' [NO FILTER]' : ''),
-            rowVar: sideVars.join(' || '),
-            colVar: topVars.join(' || '),
+            /* ' ++ ' = stacked (same level); ' || ' would NEST (bundle ct()/wf()/kg() format) */
+            rowVar: sideVars.join(' ++ '),
+            colVar: topVars.join(' ++ '),
             filter: filter,
             filterSkipped: filterSkipped,
             skippedVars: skipped
