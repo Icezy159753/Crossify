@@ -13759,14 +13759,28 @@
           if (name !== cxAnonDsName()) { return; }                              /* file changed mid-flight */
           if (!rows || !rows.length || !rows[0].settings) { cxAnonAuto.done = true; return; }
           var settings = rows[0].settings;
+          /* Large saved workspaces (e.g. a 224-table Reporter import) make restore+auto-Run-All
+             freeze the app for minutes — ask first, and never auto-run-all for them. */
+          var nTables = (settings && Array.isArray(settings.tables)) ? settings.tables.length : 0;
+          var skipAutoRun = false;
+          if (nTables > 25) {
+            cxAnonAuto.done = true; /* don't re-prompt from the poller while the dialog is open */
+            var proceed = await window.__crossifyRuntime.confirm({
+              title: 'พบ Settings เดิมขนาดใหญ่',
+              text: 'ไฟล์นี้มีตารางที่บันทึกไว้ ' + nTables + ' ตาราง การโหลดอาจใช้เวลาสักครู่\nต้องการโหลดเลยไหม? (ข้ามได้ แล้วค่อยกด Workspace > Load Cloud Settings ภายหลัง)',
+              confirmText: 'โหลดเลย', cancelText: 'ข้ามก่อน'
+            });
+            if (!proceed) { cxCloudToast('ข้ามการคืนค่า', 'กด Workspace > Load Cloud Settings เมื่อพร้อมใช้งาน'); return; }
+            skipAutoRun = true; /* let the user press Run All themselves */
+          }
           if (settings.banners && Array.isArray(settings.banners) && typeof window.__cxSetBannerTemplates === 'function') window.__cxSetBannerTemplates(settings.banners);
           cxRestoreDerivedDatasetState(settings);
           var result = window.__cxApplyWorkspaceSettings(settings);
           cxRestoreDerivedDatasetState(settings);
-          if (!result || !result.ok) return;                                   /* workspace not ready yet — retry */
+          if (!result || !result.ok) { if (nTables > 25) cxAnonAuto.done = false; return; }  /* workspace not ready yet — retry */
           cxAnonAuto.done = true;
           cxCloudToast('คืน Settings จาก Cloud', 'โหลดการตั้งค่าของ "' + name + '" อัตโนมัติ');
-          setTimeout(function () { try { if (typeof window.__cxRunAllTablesNow === 'function') { window.__cxRunAllTablesNow(); return; } var b = Array.from(document.querySelectorAll('button')).find(function (x) { return /^Run All$/.test((x.textContent || '').replace(/\s+/g, ' ').trim()); }); if (b && !b.disabled) b.click(); } catch (e) { } }, 150);
+          if (!skipAutoRun) setTimeout(function () { try { if (typeof window.__cxRunAllTablesNow === 'function') { window.__cxRunAllTablesNow(); return; } var b = Array.from(document.querySelectorAll('button')).find(function (x) { return /^Run All$/.test((x.textContent || '').replace(/\s+/g, ' ').trim()); }); if (b && !b.disabled) b.click(); } catch (e) { } }, 150);
         } catch (e) { if (cxAnonIsTableMissing(e)) cxAnonTableMissing = true; cxAnonAuto.done = true; /* table missing / network — stop quietly (manual Save still surfaces the error) */ }
         finally { cxAnonAuto.busy = false; }
       }
