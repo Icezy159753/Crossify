@@ -14483,13 +14483,17 @@
         }
         var direct = tryName(mdmName);
         if (direct) return direct;
-        if (index.has(mtdNorm(mdmName + '$1'))) return mdmName + '_O'; /* $-sets are grouped by the app as NAME_O */
+        /* $-sets group under NAME_O — use the MEMBER'S OWN CASING (mtd may say A6a while
+           the SAV stores A6A$1; run-time group lookups are case-sensitive) */
+        var m1 = index.get(mtdNorm(mdmName + '$1'));
+        if (m1) return String(m1.name || m1.longName).replace(/\$1$/, '') + '_O';
         var grid = String(mdmName).match(/\[\{([^}]+)\}\]/);
         if (grid) {
           var inner = grid[1];
           var hit = tryName(inner);
           if (hit) return hit;
-          if (index.has(mtdNorm(inner + '$1'))) return inner + '_O';
+          var mi = index.get(mtdNorm(inner + '$1'));
+          if (mi) return String(mi.name || mi.longName).replace(/\$1$/, '') + '_O';
         }
         return null;
       }

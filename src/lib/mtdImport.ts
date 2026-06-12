@@ -263,14 +263,18 @@ export function resolveMtdVar(mdmName: string, vars: CatalogVarLite[], index?: M
   const direct = tryName(mdmName)
   if (direct) return direct
   /* MA set: SAV stores members as NAME$1..$n — the catalog groups them under NAME */
-  if (byKey.has(norm(mdmName + '$1'))) return mdmName + '_O' // $-sets are grouped by the app as NAME_O
+  // $-sets are grouped by the app as NAME_O — use the member's own casing (run-time
+  // lookups are case-sensitive; mtd may say A6a while the SAV stores A6A$1)
+  const m1 = byKey.get(norm(mdmName + '$1'))
+  if (m1) return String(m1.name || m1.longName).replace(/\$1$/, '') + '_O'
   /* Grid slice: Outer[{Inner}].Field → try Inner (e.g. NewGrid_C3[{C3#7}].Column → C3#7) */
   const grid = mdmName.match(/\[\{([^}]+)\}\]/)
   if (grid) {
     const inner = grid[1]
     const hit = tryName(inner)
     if (hit) return hit
-    if (byKey.has(norm(inner + '$1'))) return inner + '_O'
+    const mi = byKey.get(norm(inner + '$1'))
+    if (mi) return String(mi.name || mi.longName).replace(/\$1$/, '') + '_O'
   }
   return null
 }
